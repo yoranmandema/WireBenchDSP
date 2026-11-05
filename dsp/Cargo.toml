@@ -1,0 +1,15 @@
+[package]
+name = "pedal-dsp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "no_std audio DSP primitives for guitar pedals and embedded audio"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+libm = "0.2"
+
+[dev-dependencies]
