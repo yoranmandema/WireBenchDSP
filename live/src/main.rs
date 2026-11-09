@@ -389,11 +389,14 @@ fn build_input_stream<T: ToF32 + 'static>(
             let ch = channels.max(1);
             let mut mono = Vec::with_capacity(data.len() / ch);
             for frame in data.chunks(ch) {
+                // Only the first two channels are real inputs; any extra
+                // channels on the device are ignored (avoids loopback).
+                let n = frame.len().min(2);
                 let mut sum = 0.0f32;
-                for s in frame {
+                for s in frame.iter().take(n) {
                     sum += s.to_f32();
                 }
-                mono.push(sum / frame.len().max(1) as f32);
+                mono.push(sum / n.max(1) as f32);
             }
             ring.push(&mono);
             ring_level.store(ring.available().min(1_000_000), Ordering::Relaxed);
@@ -556,30 +559,7 @@ where
 fn main() -> eframe::Result<()> {
     let host = cpal::default_host();
 
-    // --- output devices ---
-    let mut out_devices: Vec<cpal::Device> = Vec::new();
-    if let Ok(iter) = host.output_devices() {
-        out_devices.extend(iter);
-    }
-    if out_devices.is_empty() {
-        panic!("no audio output devices found");
-    }
-    eprintln!("output devices:");
-    for (i, d) in out_devices.iter().enumerate() {
-        eprintln!("  [{i}] {}", device_name(d));
-    }
-    let out_idx = out_devices
-        .iter()
-        .position(|d| {
-            let n = device_name(d);
-            n.contains("MacBook") || n.contains("Built-in") || n.contains("Speakers")
-        })
-        .unwrap_or(0);
-    let output_device = out_devices[out_idx].clone();
-    let output_name = device_name(&output_device);
-    eprintln!("using output device: {output_name}");
-
-    // --- input devices ---
+    // --- pick the audio interface: one device for BOTH input and output ---
     let mut in_devices: Vec<cpal::Device> = Vec::new();
     if let Ok(iter) = host.input_devices() {
         in_devices.extend(iter);
@@ -591,15 +571,44 @@ fn main() -> eframe::Result<()> {
     for (i, d) in in_devices.iter().enumerate() {
         eprintln!("  [{i}] {}", device_name(d));
     }
-    let in_idx = in_devices
+    let iface_idx = in_devices
         .iter()
         .position(|d| device_name(d).contains("Scarlett"))
-        .or_else(|| in_devices.iter().position(|d| device_name(d).contains("MacBook")))
-        .or_else(|| in_devices.iter().position(|d| device_name(d).contains("Built-in")))
+        .or_else(|| in_devices.iter().position(|d| device_name(d).contains("USB")))
         .unwrap_or(0);
-    let input_device = in_devices[in_idx].clone();
-    let input_name = device_name(&input_device);
-    eprintln!("using input device: {input_name}");
+    let iface_name = device_name(&in_devices[iface_idx]);
+    eprintln!("audio interface: {iface_name}");
+
+    // --- the interface is also the output device ---
+    let mut out_devices: Vec<cpal::Device> = Vec::new();
+    if let Ok(iter) = host.output_devices() {
+        out_devices.extend(iter);
+    }
+    if out_devices.is_empty() {
+        panic!("no audio output devices found");
+    }
+    eprintln!("output devices:");
+    for (i, d) in out_devices.iter().enumerate() {
+        eprintln!("  [{i}] {}", device_name(d));
+    }
+    // Same device for output when possible; only fall back to the built-in
+    // speakers if the interface really has no outputs.
+    let out_idx = out_devices
+        .iter()
+        .position(|d| device_name(d) == iface_name)
+        .or_else(|| {
+            out_devices.iter().position(|d| {
+                let n = device_name(d);
+                n.contains("MacBook") || n.contains("Built-in") || n.contains("Speakers")
+            })
+        })
+        .unwrap_or(0);
+    let output_device = out_devices[out_idx].clone();
+    let output_name = device_name(&output_device);
+    let input_device = in_devices[iface_idx].clone();
+    let input_name = iface_name.clone();
+    eprintln!("using input:  {input_name}");
+    eprintln!("using output: {output_name}");
 
     // --- defaults + a common sample rate ---
     let out_default = output_device
