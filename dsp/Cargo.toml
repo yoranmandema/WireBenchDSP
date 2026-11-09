@@ -13,3 +13,4 @@ std = []
 libm = "0.2"
 
 [dev-dependencies]
+hound = "3.5"

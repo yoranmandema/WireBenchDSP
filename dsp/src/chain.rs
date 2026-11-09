@@ -6,11 +6,15 @@
 //!
 //! Everything is stereo.  Parameters are plain `f32` fields so the control
 //! loop can update them from pots/footswitch without allocating.
+//!
+//! This module lives in `pedal-dsp` (not in the firmware crate) so the host
+//! reference model in `examples/wav_process.rs` runs the *exact same* code
+//! as the MCU.  No `std`, no allocator.
 
-use pedal_dsp::{
+use crate::reverb::Reverb48k;
+use crate::{
     BiquadKind, DcBlocker, EnvelopeFollower, FeedbackDelay, Shaper, ShaperKind, StereoBiquad,
 };
-use pedal_dsp::reverb::Reverb48k;
 
 /// Maximum delay line length in samples (100 ms at 48 kHz).
 pub const MAX_DELAY_SAMPLES: usize = 4800;
@@ -114,8 +118,16 @@ impl EffectChain {
         self.reverb.set_dry(1.0 - self.reverb_mix);
     }
 
-    /// Call from the control loop after changing a parameter.
+    /// Call after changing any parameter.
     pub fn update_params(&mut self) {
+        self.apply_static_params();
+    }
+
+    /// Swap the distortion type.  The shapers are recreated (their internal
+    /// state resets), which is acceptable — the user is changing character.
+    pub fn set_shaper(&mut self, kind: ShaperKind) {
+        self.shaper_l = Shaper::new(kind);
+        self.shaper_r = Shaper::new(kind);
         self.apply_static_params();
     }
 
@@ -179,7 +191,6 @@ impl EffectChain {
 /// Gentle output limiter (keeps the 24-bit word conversion well behaved).
 #[inline]
 fn soft_limit(x: f32) -> f32 {
-    // Smooth saturation around +/-1
     if x > 1.0 {
         1.0
     } else if x < -1.0 {

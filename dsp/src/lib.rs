@@ -22,6 +22,7 @@
 #![forbid(unsafe_code)]
 
 pub mod biquad;
+pub mod chain;
 pub mod dc_blocker;
 pub mod delay;
 pub mod envelope;
@@ -34,6 +35,7 @@ pub mod util;
 pub mod waveshape;
 
 pub use biquad::{Biquad, BiquadKind, StereoBiquad};
+pub use chain::EffectChain;
 pub use dc_blocker::DcBlocker;
 pub use delay::{DelayLine, FeedbackDelay};
 pub use envelope::{Adsr, EnvelopeFollower};

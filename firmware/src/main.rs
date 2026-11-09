@@ -12,7 +12,6 @@ mod audio;
 mod board;
 mod codec;
 mod controls;
-mod effects;
 
 use cortex_m::interrupt;
 use cortex_m_rt::entry;
@@ -87,7 +86,9 @@ fn main() -> ! {
         unsafe {
             audio::EFFECTS
                 .as_mut_ptr()
-                .write(effects::EffectChain::new(board::SAMPLE_RATE as f32));
+                .write(pedal_dsp::chain::EffectChain::new(
+                    board::SAMPLE_RATE as f32,
+                ));
         }
     });
 

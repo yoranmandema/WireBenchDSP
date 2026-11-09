@@ -25,7 +25,7 @@ use hal::time::Hertz;
 use hal::traits::i2s::FullDuplex;
 
 use crate::board::SAMPLE_RATE;
-use crate::effects::EffectChain;
+use pedal_dsp::chain::EffectChain;
 
 /// Stereo frames processed per interrupt.
 pub const FRAMES_PER_BLOCK: usize = 32;
