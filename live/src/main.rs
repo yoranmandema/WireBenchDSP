@@ -32,7 +32,7 @@ pub struct Params {
     pub delay_mix: AtomicU32,
     pub delay_feedback: AtomicU32,
     pub reverb_mix: AtomicU32,
-    pub shaper: AtomicU32,   // index into SHAPERS
+    pub shaper: AtomicU32,
     pub enabled: AtomicBool,
 }
 
@@ -107,7 +107,6 @@ impl Source {
                     }
                 };
                 *phase = (*phase + *freq / fs).fract();
-                // Keep levels comparable to a guitar pickup.
                 s * 0.35
             }
             Source::Wav { samples, pos } => {
@@ -132,32 +131,23 @@ struct AudioState {
     channels: usize,
     fs: f32,
     peak: Arc<Mutex<f32>>,
+    cb_count: u64,
+    last_print: std::time::Instant,
 }
 
 impl AudioState {
     fn new(fs: f32, channels: usize, params: &Params, peak: Arc<Mutex<f32>>) -> Self {
-        let mut chain = EffectChain::new(fs);
-        chain.drive = get_f32(&params.drive);
-        chain.distortion_mix = get_f32(&params.distortion_mix);
-        chain.distortion_level = get_f32(&params.distortion_level);
-        chain.tone = get_f32(&params.tone);
-        chain.level = get_f32(&params.level);
-        chain.delay_ms = get_f32(&params.delay_ms);
-        chain.delay_mix = get_f32(&params.delay_mix);
-        chain.delay_feedback = get_f32(&params.delay_feedback);
-        chain.reverb_mix = get_f32(&params.reverb_mix);
-        chain.enabled = params.enabled.load(Ordering::Relaxed);
-        let kind = SHAPERS[params.shaper.load(Ordering::Relaxed) as usize % SHAPERS.len()].1;
-        chain.set_shaper(kind);
-        chain.update_params();
-
-        Self {
-            chain,
+        let mut state = Self {
+            chain: EffectChain::new(fs),
             source: Source::Silence,
             channels,
             fs,
             peak,
-        }
+            cb_count: 0,
+            last_print: std::time::Instant::now(),
+        };
+        state.apply_params(params);
+        state
     }
 
     fn apply_params(&mut self, p: &Params) {
@@ -191,8 +181,12 @@ impl AudioState {
             }
         }
         if let Ok(mut pk) = self.peak.lock() {
-            // Decay the meter so it is readable.
             *pk = (*pk * 0.9 + peak * 0.1).max(peak);
+        }
+        self.cb_count += 1;
+        if self.last_print.elapsed().as_secs_f32() > 1.0 {
+            eprintln!("audio: {} callbacks, peak {:.3}", self.cb_count, peak);
+            self.last_print = std::time::Instant::now();
         }
     }
 }
@@ -227,25 +221,24 @@ impl FromF32 for u16 {
 
 fn build_stream<T: FromF32 + 'static>(
     device: &cpal::Device,
-    config: &cpal::StreamConfig,
+    config: cpal::StreamConfig,
     state: Arc<Mutex<AudioState>>,
     params: Arc<Params>,
-) -> Result<cpal::Stream, cpal::BuildStreamError> {
-    let channels = config.channels as usize;
+) -> Result<cpal::Stream, cpal::Error> {
     device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let mut st = state.lock().unwrap();
             let mut buf = vec![0.0f32; data.len()];
-            // channels is captured for the mono case.
-            let _ = channels;
             st.process(&params, &mut buf);
             for (o, s) in data.iter_mut().zip(buf.iter()) {
                 *o = T::from_f32(*s);
             }
         },
         |err| eprintln!("audio callback error: {err}"),
-        None,
+        // A timeout is essential: cpal may call `set_sample_rate` with this
+        // value, and `None` can block indefinitely on some CoreAudio devices.
+        Some(std::time::Duration::from_millis(500)),
     )
 }
 
@@ -273,66 +266,60 @@ impl App {
 
 fn slider(ui: &mut egui::Ui, label: &str, value: &AtomicU32, range: std::ops::RangeInclusive<f32>) {
     let mut v = get_f32(value);
-    if ui
-        .add(egui::Slider::new(&mut v, range).text(label))
-        .changed()
-    {
+    if ui.add(egui::Slider::new(&mut v, range).text(label)).changed() {
         set_f32(value, v);
     }
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::SidePanel::left("controls", 320.0).show(ctx, |ui| {
-            ui.heading("Pedal DSP — live");
-            ui.label(egui::RichText::new("same code as the STM32H723 firmware").weak());
-            ui.separator();
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::containers::Panel::left("controls")
+            .resizable(true)
+            .show(ui, |ui| {
+                ui.heading("Pedal DSP — live");
+                ui.label(egui::RichText::new("same code as the STM32H723 firmware").weak());
+                ui.separator();
 
-            let mut bypass = !self.params.enabled.load(Ordering::Relaxed);
-            if ui.checkbox(&mut bypass, "Bypass").changed() {
-                self.params.enabled.store(!bypass, Ordering::Relaxed);
-            }
+                let mut bypass = !self.params.enabled.load(Ordering::Relaxed);
+                if ui.checkbox(&mut bypass, "Bypass").changed() {
+                    self.params.enabled.store(!bypass, Ordering::Relaxed);
+                }
 
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new("Distortion").strong());
-            slider(ui, "Drive", &self.params.drive, 0.1..=20.0);
-            slider(ui, "Mix", &self.params.distortion_mix, 0.0..=1.0);
-            slider(ui, "Level", &self.params.distortion_level, 0.0..=2.0);
-            slider(ui, "Tone", &self.params.tone, -1.0..=1.0);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Distortion").strong());
+                slider(ui, "Drive", &self.params.drive, 0.1..=20.0);
+                slider(ui, "Mix", &self.params.distortion_mix, 0.0..=1.0);
+                slider(ui, "Level", &self.params.distortion_level, 0.0..=2.0);
+                slider(ui, "Tone", &self.params.tone, -1.0..=1.0);
 
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new("Time").strong());
-            slider(ui, "Delay ms", &self.params.delay_ms, 20.0..=1000.0);
-            slider(ui, "Delay mix", &self.params.delay_mix, 0.0..=1.0);
-            slider(ui, "Feedback", &self.params.delay_feedback, 0.0..=0.95);
-            slider(ui, "Reverb mix", &self.params.reverb_mix, 0.0..=1.0);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Time").strong());
+                slider(ui, "Delay ms", &self.params.delay_ms, 20.0..=1000.0);
+                slider(ui, "Delay mix", &self.params.delay_mix, 0.0..=1.0);
+                slider(ui, "Feedback", &self.params.delay_feedback, 0.0..=0.95);
+                slider(ui, "Reverb mix", &self.params.reverb_mix, 0.0..=1.0);
 
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new("Output").strong());
-            slider(ui, "Master", &self.params.level, 0.0..=2.0);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Output").strong());
+                slider(ui, "Master", &self.params.level, 0.0..=2.0);
 
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new("Shaper").strong());
-            egui::ComboBox::from_id_salt("shaper")
-                .selected_text(SHAPERS[self.shaper_idx].0)
-                .show_ui(ui, |ui| {
-                    for (i, (name, _)) in SHAPERS.iter().enumerate() {
-                        if ui
-                            .selectable_value(&mut self.shaper_idx, i, *name)
-                            .changed()
-                        {
-                            self.params
-                                .shaper
-                                .store(i as u32, Ordering::Relaxed);
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new("Shaper").strong());
+                egui::ComboBox::from_id_salt("shaper")
+                    .selected_text(SHAPERS[self.shaper_idx].0)
+                    .show_ui(ui, |ui| {
+                        for (i, (name, _)) in SHAPERS.iter().enumerate() {
+                            if ui.selectable_value(&mut self.shaper_idx, i, *name).changed() {
+                                self.params.shaper.store(i as u32, Ordering::Relaxed);
+                            }
                         }
-                    }
-                });
+                    });
 
-            ui.add_space(10.0);
-            ui.label(format!("Source: {}", self.source_name));
-        });
+                ui.add_space(10.0);
+                ui.label(format!("Source: {}", self.source_name));
+            });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::containers::CentralPanel::default().show(ui, |ui| {
             ui.heading("Output");
             let peak = self
                 .state
@@ -341,7 +328,7 @@ impl eframe::App for App {
                 .unwrap_or(0.0);
             ui.add(egui::ProgressBar::new(peak.clamp(0.0, 1.0)).text(format!("peak {peak:.2}")));
             ui.label("Drag the sliders while audio plays. Parameters are read by the audio callback atomically — no dropouts.");
-            ui.label(egui::RichText::new("Tip: pick the guitar WAV as the source, then drive it into the distortion.").weak());
+            ui.label(egui::RichText::new("Tip: the guitar WAV is the default source — drive it into the distortion.").weak());
         });
     }
 }
@@ -352,30 +339,47 @@ impl eframe::App for App {
 
 fn main() -> eframe::Result<()> {
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .expect("no audio output device found");
+
+    // Enumerate output devices so we can avoid one that is busy or hanging
+    // (e.g. an external interface held by another application).
+    let mut devices: Vec<(String, cpal::Device)> = Vec::new();
+    if let Ok(iter) = host.output_devices() {
+        for d in iter {
+            if let Ok(desc) = d.description() {
+                devices.push((desc.name().to_string(), d));
+            }
+        }
+    }
+    if devices.is_empty() {
+        panic!("no audio output devices found");
+    }
+    eprintln!("output devices:");
+    for (i, (name, _)) in devices.iter().enumerate() {
+        eprintln!("  [{i}] {name}");
+    }
+
+    // Prefer the built-in speakers; fall back to the first device.
+    let idx = devices
+        .iter()
+        .position(|(n, _)| n.contains("MacBook") || n.contains("Built-in") || n.contains("Speakers"))
+        .unwrap_or(0);
+    let device_name = devices[idx].0.clone();
+    let device = &devices[idx].1;
+    eprintln!("using output device: {device_name}");
+
     let config = device
         .default_output_config()
         .expect("no default output configuration");
-    let fs = config.sample_rate.0 as f32;
-    let channels = config.channels as usize;
-    eprintln!(
-        "output: {}  {} Hz  {} ch  {:?}",
-        device.name().unwrap_or_default(),
-        fs,
-        channels,
-        config.sample_format()
-    );
+    let fs = config.sample_rate() as f32;
+    let channels = config.channels() as usize;
+    eprintln!("output: {} Hz, {} ch, {:?}", fs, channels, config.sample_format());
 
     let params = Arc::new(Params::new());
     let peak = Arc::new(Mutex::new(0.0f32));
     let state = Arc::new(Mutex::new(AudioState::new(fs, channels, &params, Arc::clone(&peak))));
 
     // Pick a source: the guitar WAV if present, else a test tone.
-    let wav_path = std::path::Path::new(
-        "/Users/yoran/Downloads/3-Audio 0010 [2026-11-03 215835].wav",
-    );
+    let wav_path = std::path::Path::new("/Users/yoran/Downloads/3-Audio 0010 [2026-11-03 215835].wav");
     let (source, source_name) = if wav_path.exists() {
         match hound::WavReader::open(wav_path) {
             Ok(mut r) => {
@@ -395,32 +399,21 @@ fn main() -> eframe::Result<()> {
                     _ => Vec::new(),
                 };
                 (
-                    Source::Wav {
-                        samples,
-                        pos: 0,
-                    },
+                    Source::Wav { samples, pos: 0 },
                     "guitar WAV (looped)".to_string(),
                 )
             }
             Err(e) => {
                 eprintln!("could not read WAV: {e}");
                 (
-                    Source::Tone {
-                        kind: ToneKind::Saw,
-                        freq: 110.0,
-                        phase: 0.0,
-                    },
+                    Source::Tone { kind: ToneKind::Saw, freq: 110.0, phase: 0.0 },
                     "110 Hz saw (WAV unreadable)".to_string(),
                 )
             }
         }
     } else {
         (
-            Source::Tone {
-                kind: ToneKind::Saw,
-                freq: 110.0,
-                phase: 0.0,
-            },
+            Source::Tone { kind: ToneKind::Saw, freq: 110.0, phase: 0.0 },
             "110 Hz saw".to_string(),
         )
     };
@@ -432,23 +425,25 @@ fn main() -> eframe::Result<()> {
 
     let stream_config: cpal::StreamConfig = config.into();
     let sample_format = config.sample_format();
+    eprintln!("building stream ({sample_format:?})...");
     let stream = match sample_format {
         cpal::SampleFormat::F32 => {
-            build_stream::<f32>(&device, &stream_config, Arc::clone(&state), Arc::clone(&params))
+            build_stream::<f32>(&device, stream_config, Arc::clone(&state), Arc::clone(&params))
         }
         cpal::SampleFormat::I16 => {
-            build_stream::<i16>(&device, &stream_config, Arc::clone(&state), Arc::clone(&params))
+            build_stream::<i16>(&device, stream_config, Arc::clone(&state), Arc::clone(&params))
         }
         cpal::SampleFormat::I32 => {
-            build_stream::<i32>(&device, &stream_config, Arc::clone(&state), Arc::clone(&params))
+            build_stream::<i32>(&device, stream_config, Arc::clone(&state), Arc::clone(&params))
         }
         cpal::SampleFormat::U16 => {
-            build_stream::<u16>(&device, &stream_config, Arc::clone(&state), Arc::clone(&params))
+            build_stream::<u16>(&device, stream_config, Arc::clone(&state), Arc::clone(&params))
         }
         other => panic!("unsupported output sample format: {other:?}"),
     }
     .expect("failed to build output stream");
     stream.play().expect("failed to start audio");
+    eprintln!("stream playing");
 
     // Keep the stream alive for the lifetime of the app.
     std::mem::forget(stream);
@@ -460,6 +455,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
+    eprintln!("starting UI...");
     eframe::run_native(
         "Pedal DSP — live",
         options,
