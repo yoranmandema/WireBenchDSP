@@ -1,14 +1,15 @@
 //! Live pedal model: the *same* `pedal_dsp::chain::EffectChain` that runs on
 //! the STM32H723, driven in real time from a GUI.
 //!
-//!   * audio out via CoreAudio (cpal)
-//!   * source = a looped WAV, a test tone, or silence
-//!   * every parameter is an atomic, so the GUI thread never blocks the
-//!     audio callback
+//!   * input  = an audio interface (Scarlett 2i2 by default), mono-summed
+//!   * output = CoreAudio (built-in speakers by default)
+//!   * a single-producer/single-consumer ring joins the two callbacks
+//!   * every parameter is an atomic, so the GUI never blocks the audio path
 //!
 //! Usage: `cargo run --release`
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -16,10 +17,11 @@ use pedal_dsp::chain::EffectChain;
 use pedal_dsp::waveshape::ShaperKind;
 
 const TAU: f32 = std::f32::consts::TAU;
+/// Ring capacity in input samples.
+const RING_CAPACITY: usize = 8192;
 
 // ---------------------------------------------------------------------------
-// Parameters: atomics so the GUI can write and the audio thread can read
-// without any lock in the audio path.
+// Parameters
 // ---------------------------------------------------------------------------
 
 pub struct Params {
@@ -74,10 +76,79 @@ fn set_f32(a: &AtomicU32, v: f32) {
 }
 
 // ---------------------------------------------------------------------------
-// Audio source
+// Ring buffer: SPSC. The input callback produces, the output callback consumes.
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq)]
+struct RingBuffer {
+    ptr: std::ptr::NonNull<f32>,
+    mask: usize,
+    write: AtomicUsize,
+    read: AtomicUsize,
+}
+
+// SPSC by construction: one input callback writes, one output callback reads.
+unsafe impl Sync for RingBuffer {}
+unsafe impl Send for RingBuffer {}
+
+impl RingBuffer {
+    fn new(capacity: usize) -> Self {
+        let cap = capacity.next_power_of_two().max(1024);
+        let mut v = vec![0.0f32; cap];
+        let ptr = NonNull::from(v.as_mut_slice()).cast::<f32>();
+        std::mem::forget(v); // lives for the lifetime of the app
+        Self {
+            ptr,
+            mask: cap - 1,
+            write: AtomicUsize::new(0),
+            read: AtomicUsize::new(0),
+        }
+    }
+
+    #[inline]
+    fn slot(&self, i: usize) -> *mut f32 {
+        // `i & mask` is always inside the allocation.
+        unsafe { self.ptr.as_ptr().add(i & self.mask) }
+    }
+
+    fn push(&self, samples: &[f32]) {
+        let mut w = self.write.load(Ordering::Relaxed);
+        for &s in samples {
+            unsafe {
+                *self.slot(w) = s;
+            }
+            w = w.wrapping_add(1);
+        }
+        self.write.store(w, Ordering::Release);
+    }
+
+    /// Fill `out` with samples; underrun produces silence.
+    fn pop(&self, out: &mut [f32]) {
+        let mut r = self.read.load(Ordering::Relaxed);
+        let w = self.write.load(Ordering::Acquire);
+        for o in out.iter_mut() {
+            if r != w {
+                *o = unsafe { *self.slot(r) };
+                r = r.wrapping_add(1);
+            } else {
+                *o = 0.0;
+            }
+        }
+        self.read.store(r, Ordering::Release);
+    }
+
+    fn available(&self) -> usize {
+        self.write
+            .load(Ordering::Acquire)
+            .wrapping_sub(self.read.load(Ordering::Relaxed))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audio source (for the non-live modes)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum ToneKind {
     Sine,
     Saw,
@@ -121,6 +192,13 @@ impl Source {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Live,
+    Wav,
+    Tone,
+}
+
 // ---------------------------------------------------------------------------
 // Shared audio state
 // ---------------------------------------------------------------------------
@@ -128,21 +206,31 @@ impl Source {
 struct AudioState {
     chain: EffectChain,
     source: Source,
+    mode: Mode,
     channels: usize,
     fs: f32,
     peak: Arc<Mutex<f32>>,
+    ring_level: Arc<AtomicUsize>,
     cb_count: u64,
     last_print: std::time::Instant,
 }
 
 impl AudioState {
-    fn new(fs: f32, channels: usize, params: &Params, peak: Arc<Mutex<f32>>) -> Self {
+    fn new(
+        fs: f32,
+        channels: usize,
+        params: &Params,
+        peak: Arc<Mutex<f32>>,
+        ring_level: Arc<AtomicUsize>,
+    ) -> Self {
         let mut state = Self {
             chain: EffectChain::new(fs),
             source: Source::Silence,
+            mode: Mode::Live,
             channels,
             fs,
             peak,
+            ring_level,
             cb_count: 0,
             last_print: std::time::Instant::now(),
         };
@@ -166,11 +254,13 @@ impl AudioState {
         self.chain.update_params();
     }
 
-    fn process(&mut self, p: &Params, out: &mut [f32]) {
+    /// Render `out` (interleaved, `channels` wide) from a mono input buffer.
+    fn render(&mut self, p: &Params, in_mono: &[f32], out: &mut [f32]) {
         self.apply_params(p);
+        let ch = self.channels.max(1);
         let mut peak = 0.0f32;
-        for frame in out.chunks_mut(self.channels.max(1)) {
-            let s = self.source.sample(self.fs);
+        for (i, frame) in out.chunks_mut(ch).enumerate() {
+            let s = in_mono.get(i).copied().unwrap_or(0.0);
             let (l, r) = self.chain.process_stereo(s, s);
             peak = peak.max(l.abs()).max(r.abs());
             if frame.len() >= 2 {
@@ -184,9 +274,20 @@ impl AudioState {
             *pk = (*pk * 0.9 + peak * 0.1).max(peak);
         }
         self.cb_count += 1;
-        if self.last_print.elapsed().as_secs_f32() > 1.0 {
-            eprintln!("audio: {} callbacks, peak {:.3}", self.cb_count, peak);
+        if self.last_print.elapsed().as_secs_f32() > 2.0 {
+            eprintln!(
+                "audio: {} callbacks, peak {:.3}, ring {}",
+                self.cb_count,
+                peak,
+                self.ring_level.load(Ordering::Relaxed)
+            );
             self.last_print = std::time::Instant::now();
+        }
+    }
+
+    fn fill_source(&mut self, out: &mut [f32]) {
+        for o in out.iter_mut() {
+            *o = self.source.sample(self.fs);
         }
     }
 }
@@ -219,25 +320,85 @@ impl FromF32 for u16 {
     }
 }
 
-fn build_stream<T: FromF32 + 'static>(
+trait ToF32: cpal::SizedSample {
+    fn to_f32(&self) -> f32;
+}
+impl ToF32 for f32 {
+    fn to_f32(&self) -> f32 {
+        *self
+    }
+}
+impl ToF32 for i16 {
+    fn to_f32(&self) -> f32 {
+        *self as f32 / 32768.0
+    }
+}
+impl ToF32 for i32 {
+    fn to_f32(&self) -> f32 {
+        *self as f32 / 2_147_483_648.0
+    }
+}
+impl ToF32 for u16 {
+    fn to_f32(&self) -> f32 {
+        (*self as f32 / 32768.0) - 1.0
+    }
+}
+
+fn build_output_stream<T: FromF32 + 'static>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     state: Arc<Mutex<AudioState>>,
     params: Arc<Params>,
+    ring: Arc<RingBuffer>,
+    channels: usize,
 ) -> Result<cpal::Stream, cpal::Error> {
     device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+            let frames = data.len() / channels.max(1);
             let mut st = state.lock().unwrap();
-            let mut buf = vec![0.0f32; data.len()];
-            st.process(&params, &mut buf);
-            for (o, s) in data.iter_mut().zip(buf.iter()) {
+            let mut in_mono = vec![0.0f32; frames];
+            if st.mode == Mode::Live {
+                ring.pop(&mut in_mono);
+            } else {
+                st.fill_source(&mut in_mono);
+            }
+            let mut out = vec![0.0f32; data.len()];
+            st.render(&params, &in_mono, &mut out);
+            for (o, s) in data.iter_mut().zip(out.iter()) {
                 *o = T::from_f32(*s);
             }
         },
-        |err| eprintln!("audio callback error: {err}"),
+        |err| eprintln!("output callback error: {err}"),
         // A timeout is essential: cpal may call `set_sample_rate` with this
         // value, and `None` can block indefinitely on some CoreAudio devices.
+        Some(std::time::Duration::from_millis(500)),
+    )
+}
+
+fn build_input_stream<T: ToF32 + 'static>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    channels: usize,
+    ring: Arc<RingBuffer>,
+    ring_level: Arc<AtomicUsize>,
+) -> Result<cpal::Stream, cpal::Error> {
+    device.build_input_stream(
+        config,
+        move |data: &[T], _: &cpal::InputCallbackInfo| {
+            let ch = channels.max(1);
+            let mut mono = Vec::with_capacity(data.len() / ch);
+            for frame in data.chunks(ch) {
+                let mut sum = 0.0f32;
+                for s in frame {
+                    sum += s.to_f32();
+                }
+                mono.push(sum / frame.len().max(1) as f32);
+            }
+            ring.push(&mono);
+            ring_level.store(ring.available().min(1_000_000), Ordering::Relaxed);
+        },
+        |err| eprintln!("input callback error: {err}"),
         Some(std::time::Duration::from_millis(500)),
     )
 }
@@ -249,17 +410,35 @@ fn build_stream<T: FromF32 + 'static>(
 struct App {
     params: Arc<Params>,
     state: Arc<Mutex<AudioState>>,
-    source_name: String,
+    ring_level: Arc<AtomicUsize>,
+    mode: Mode,
     shaper_idx: usize,
+    input_name: String,
+    output_name: String,
+    input_rate: u32,
+    output_rate: u32,
 }
 
 impl App {
-    fn new(state: Arc<Mutex<AudioState>>, params: Arc<Params>, source_name: String) -> Self {
+    fn new(
+        state: Arc<Mutex<AudioState>>,
+        params: Arc<Params>,
+        ring_level: Arc<AtomicUsize>,
+        input_name: String,
+        output_name: String,
+        input_rate: u32,
+        output_rate: u32,
+    ) -> Self {
         Self {
             params,
             state,
-            source_name,
+            ring_level,
+            mode: Mode::Live,
             shaper_idx: 0,
+            input_name,
+            output_name,
+            input_rate,
+            output_rate,
         }
     }
 }
@@ -280,6 +459,24 @@ impl eframe::App for App {
                 ui.label(egui::RichText::new("same code as the STM32H723 firmware").weak());
                 ui.separator();
 
+                ui.label(egui::RichText::new("Source").strong());
+                if ui.radio_value(&mut self.mode, Mode::Live, "Live input").changed() {
+                    if let Ok(mut st) = self.state.lock() {
+                        st.mode = Mode::Live;
+                    }
+                }
+                if ui.radio_value(&mut self.mode, Mode::Wav, "Guitar WAV").changed() {
+                    if let Ok(mut st) = self.state.lock() {
+                        st.mode = Mode::Wav;
+                    }
+                }
+                if ui.radio_value(&mut self.mode, Mode::Tone, "Test tone").changed() {
+                    if let Ok(mut st) = self.state.lock() {
+                        st.mode = Mode::Tone;
+                    }
+                }
+
+                ui.add_space(6.0);
                 let mut bypass = !self.params.enabled.load(Ordering::Relaxed);
                 if ui.checkbox(&mut bypass, "Bypass").changed() {
                     self.params.enabled.store(!bypass, Ordering::Relaxed);
@@ -314,21 +511,26 @@ impl eframe::App for App {
                             }
                         }
                     });
-
-                ui.add_space(10.0);
-                ui.label(format!("Source: {}", self.source_name));
             });
 
         egui::containers::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Output");
+            ui.heading("Audio");
             let peak = self
                 .state
                 .lock()
                 .map(|s| *s.peak.lock().unwrap())
                 .unwrap_or(0.0);
             ui.add(egui::ProgressBar::new(peak.clamp(0.0, 1.0)).text(format!("peak {peak:.2}")));
-            ui.label("Drag the sliders while audio plays. Parameters are read by the audio callback atomically — no dropouts.");
-            ui.label(egui::RichText::new("Tip: the guitar WAV is the default source — drive it into the distortion.").weak());
+            let ring = self.ring_level.load(Ordering::Relaxed);
+            ui.add(
+                egui::ProgressBar::new(ring as f32 / RING_CAPACITY as f32).text(format!("input ring {ring}")),
+            );
+            ui.separator();
+            ui.label(format!("input  : {}  @ {} Hz", self.input_name, self.input_rate));
+            ui.label(format!("output : {}  @ {} Hz", self.output_name, self.output_rate));
+            ui.separator();
+            ui.label("Plug your guitar into the interface, pick Live input, and strum.");
+            ui.label(egui::RichText::new("No sound? The interface may be busy, or macOS's CoreAudio daemon may need a restart: sudo killall coreaudiod").weak());
         });
     }
 }
@@ -337,128 +539,258 @@ impl eframe::App for App {
 // main
 // ---------------------------------------------------------------------------
 
+fn device_name(device: &cpal::Device) -> String {
+    device
+        .description()
+        .map(|d| d.name().to_string())
+        .unwrap_or_else(|_| "unknown device".to_string())
+}
+
+fn supports_rate<I>(mut configs: I, rate: u32) -> bool
+where
+    I: Iterator<Item = cpal::SupportedStreamConfigRange>,
+{
+    configs.any(|r| r.min_sample_rate() <= rate && rate <= r.max_sample_rate())
+}
+
 fn main() -> eframe::Result<()> {
     let host = cpal::default_host();
 
-    // Enumerate output devices so we can avoid one that is busy or hanging
-    // (e.g. an external interface held by another application).
-    let mut devices: Vec<(String, cpal::Device)> = Vec::new();
+    // --- output devices ---
+    let mut out_devices: Vec<cpal::Device> = Vec::new();
     if let Ok(iter) = host.output_devices() {
-        for d in iter {
-            if let Ok(desc) = d.description() {
-                devices.push((desc.name().to_string(), d));
-            }
-        }
+        out_devices.extend(iter);
     }
-    if devices.is_empty() {
+    if out_devices.is_empty() {
         panic!("no audio output devices found");
     }
     eprintln!("output devices:");
-    for (i, (name, _)) in devices.iter().enumerate() {
-        eprintln!("  [{i}] {name}");
+    for (i, d) in out_devices.iter().enumerate() {
+        eprintln!("  [{i}] {}", device_name(d));
     }
-
-    // Prefer the built-in speakers; fall back to the first device.
-    let idx = devices
+    let out_idx = out_devices
         .iter()
-        .position(|(n, _)| n.contains("MacBook") || n.contains("Built-in") || n.contains("Speakers"))
+        .position(|d| {
+            let n = device_name(d);
+            n.contains("MacBook") || n.contains("Built-in") || n.contains("Speakers")
+        })
         .unwrap_or(0);
-    let device_name = devices[idx].0.clone();
-    let device = &devices[idx].1;
-    eprintln!("using output device: {device_name}");
+    let output_device = out_devices[out_idx].clone();
+    let output_name = device_name(&output_device);
+    eprintln!("using output device: {output_name}");
 
-    let config = device
+    // --- input devices ---
+    let mut in_devices: Vec<cpal::Device> = Vec::new();
+    if let Ok(iter) = host.input_devices() {
+        in_devices.extend(iter);
+    }
+    if in_devices.is_empty() {
+        panic!("no audio input devices found");
+    }
+    eprintln!("input devices:");
+    for (i, d) in in_devices.iter().enumerate() {
+        eprintln!("  [{i}] {}", device_name(d));
+    }
+    let in_idx = in_devices
+        .iter()
+        .position(|d| device_name(d).contains("Scarlett"))
+        .or_else(|| in_devices.iter().position(|d| device_name(d).contains("MacBook")))
+        .or_else(|| in_devices.iter().position(|d| device_name(d).contains("Built-in")))
+        .unwrap_or(0);
+    let input_device = in_devices[in_idx].clone();
+    let input_name = device_name(&input_device);
+    eprintln!("using input device: {input_name}");
+
+    // --- defaults + a common sample rate ---
+    let out_default = output_device
         .default_output_config()
         .expect("no default output configuration");
-    let fs = config.sample_rate() as f32;
-    let channels = config.channels() as usize;
-    eprintln!("output: {} Hz, {} ch, {:?}", fs, channels, config.sample_format());
+    let in_default = input_device
+        .default_input_config()
+        .expect("no default input configuration");
+    let out_rate = out_default.sample_rate();
+    let in_rate = in_default.sample_rate();
 
-    let params = Arc::new(Params::new());
-    let peak = Arc::new(Mutex::new(0.0f32));
-    let state = Arc::new(Mutex::new(AudioState::new(fs, channels, &params, Arc::clone(&peak))));
-
-    // Pick a source: the guitar WAV if present, else a test tone.
-    let wav_path = std::path::Path::new("/Users/yoran/Downloads/3-Audio 0010 [2026-11-03 215835].wav");
-    let (source, source_name) = if wav_path.exists() {
-        match hound::WavReader::open(wav_path) {
-            Ok(mut r) => {
-                let spec = r.spec();
-                let samples: Vec<f32> = match (spec.sample_format, spec.bits_per_sample) {
-                    (hound::SampleFormat::Int, 16) => r
-                        .samples::<i16>()
-                        .map(|s| s.unwrap() as f32 / 32768.0)
-                        .collect(),
-                    (hound::SampleFormat::Int, 24) => r
-                        .samples::<i32>()
-                        .map(|s| s.unwrap() as f32 / 8_388_608.0)
-                        .collect(),
-                    (hound::SampleFormat::Float, 32) => {
-                        r.samples::<f32>().map(|s| s.unwrap()).collect()
-                    }
-                    _ => Vec::new(),
-                };
-                (
-                    Source::Wav { samples, pos: 0 },
-                    "guitar WAV (looped)".to_string(),
-                )
-            }
-            Err(e) => {
-                eprintln!("could not read WAV: {e}");
-                (
-                    Source::Tone { kind: ToneKind::Saw, freq: 110.0, phase: 0.0 },
-                    "110 Hz saw (WAV unreadable)".to_string(),
-                )
+    let target_rate = if out_rate == in_rate {
+        out_rate
+    } else {
+        let out_ok = output_device
+            .supported_output_configs()
+            .map(|c| supports_rate(c, in_rate))
+            .unwrap_or(false);
+        if out_ok {
+            in_rate
+        } else {
+            let in_ok = input_device
+                .supported_input_configs()
+                .map(|c| supports_rate(c, out_rate))
+                .unwrap_or(false);
+            if in_ok {
+                out_rate
+            } else {
+                out_rate
             }
         }
-    } else {
-        (
-            Source::Tone { kind: ToneKind::Saw, freq: 110.0, phase: 0.0 },
-            "110 Hz saw".to_string(),
-        )
     };
+    eprintln!("sample rate: out default {out_rate}, in default {in_rate}, using {target_rate}");
 
+    let mut out_config: cpal::StreamConfig = out_default.into();
+    out_config.sample_rate = target_rate;
+    let mut in_config: cpal::StreamConfig = in_default.into();
+    in_config.sample_rate = target_rate;
+    let out_channels = out_config.channels as usize;
+    let in_channels = in_config.channels.max(1) as usize;
+    eprintln!("channels: out {out_channels}, in {in_channels}");
+
+    // --- shared state ---
+    let params = Arc::new(Params::new());
+    let peak = Arc::new(Mutex::new(0.0f32));
+    let ring_level = Arc::new(AtomicUsize::new(0));
+    let ring = Arc::new(RingBuffer::new(RING_CAPACITY));
+    let state = Arc::new(Mutex::new(AudioState::new(
+        target_rate as f32,
+        out_channels,
+        &params,
+        Arc::clone(&peak),
+        Arc::clone(&ring_level),
+    )));
+
+    // Pick a source for the non-live modes.
+    let wav_path = std::path::Path::new("/Users/yoran/Downloads/3-Audio 0010 [2026-11-03 215835].wav");
     {
+        let source = if wav_path.exists() {
+            match hound::WavReader::open(wav_path) {
+                Ok(mut r) => {
+                    let spec = r.spec();
+                    let samples: Vec<f32> = match (spec.sample_format, spec.bits_per_sample) {
+                        (hound::SampleFormat::Int, 16) => r
+                            .samples::<i16>()
+                            .map(|s| s.unwrap() as f32 / 32768.0)
+                            .collect(),
+                        (hound::SampleFormat::Int, 24) => r
+                            .samples::<i32>()
+                            .map(|s| s.unwrap() as f32 / 8_388_608.0)
+                            .collect(),
+                        (hound::SampleFormat::Float, 32) => {
+                            r.samples::<f32>().map(|s| s.unwrap()).collect()
+                        }
+                        _ => Vec::new(),
+                    };
+                    Source::Wav { samples, pos: 0 }
+                }
+                Err(e) => {
+                    eprintln!("could not read WAV: {e}");
+                    Source::Tone { kind: ToneKind::Saw, freq: 110.0, phase: 0.0 }
+                }
+            }
+        } else {
+            Source::Tone { kind: ToneKind::Saw, freq: 110.0, phase: 0.0 }
+        };
         let mut st = state.lock().unwrap();
         st.source = source;
     }
 
-    let stream_config: cpal::StreamConfig = config.into();
-    let sample_format = config.sample_format();
-    eprintln!("building stream ({sample_format:?})...");
-    let stream = match sample_format {
-        cpal::SampleFormat::F32 => {
-            build_stream::<f32>(&device, stream_config, Arc::clone(&state), Arc::clone(&params))
-        }
-        cpal::SampleFormat::I16 => {
-            build_stream::<i16>(&device, stream_config, Arc::clone(&state), Arc::clone(&params))
-        }
-        cpal::SampleFormat::I32 => {
-            build_stream::<i32>(&device, stream_config, Arc::clone(&state), Arc::clone(&params))
-        }
-        cpal::SampleFormat::U16 => {
-            build_stream::<u16>(&device, stream_config, Arc::clone(&state), Arc::clone(&params))
-        }
+    // --- input stream ---
+    let in_format = in_default.sample_format();
+    let in_stream = match in_format {
+        cpal::SampleFormat::F32 => build_input_stream::<f32>(
+            &input_device,
+            in_config,
+            in_channels,
+            Arc::clone(&ring),
+            Arc::clone(&ring_level),
+        ),
+        cpal::SampleFormat::I16 => build_input_stream::<i16>(
+            &input_device,
+            in_config,
+            in_channels,
+            Arc::clone(&ring),
+            Arc::clone(&ring_level),
+        ),
+        cpal::SampleFormat::I32 => build_input_stream::<i32>(
+            &input_device,
+            in_config,
+            in_channels,
+            Arc::clone(&ring),
+            Arc::clone(&ring_level),
+        ),
+        cpal::SampleFormat::U16 => build_input_stream::<u16>(
+            &input_device,
+            in_config,
+            in_channels,
+            Arc::clone(&ring),
+            Arc::clone(&ring_level),
+        ),
+        other => panic!("unsupported input sample format: {other:?}"),
+    }
+    .expect("failed to build input stream");
+    in_stream.play().expect("failed to start input");
+    eprintln!("input stream playing");
+    std::mem::forget(in_stream);
+
+    // --- output stream ---
+    let out_format = out_default.sample_format();
+    let out_stream = match out_format {
+        cpal::SampleFormat::F32 => build_output_stream::<f32>(
+            &output_device,
+            out_config,
+            Arc::clone(&state),
+            Arc::clone(&params),
+            Arc::clone(&ring),
+            out_channels,
+        ),
+        cpal::SampleFormat::I16 => build_output_stream::<i16>(
+            &output_device,
+            out_config,
+            Arc::clone(&state),
+            Arc::clone(&params),
+            Arc::clone(&ring),
+            out_channels,
+        ),
+        cpal::SampleFormat::I32 => build_output_stream::<i32>(
+            &output_device,
+            out_config,
+            Arc::clone(&state),
+            Arc::clone(&params),
+            Arc::clone(&ring),
+            out_channels,
+        ),
+        cpal::SampleFormat::U16 => build_output_stream::<u16>(
+            &output_device,
+            out_config,
+            Arc::clone(&state),
+            Arc::clone(&params),
+            Arc::clone(&ring),
+            out_channels,
+        ),
         other => panic!("unsupported output sample format: {other:?}"),
     }
     .expect("failed to build output stream");
-    stream.play().expect("failed to start audio");
-    eprintln!("stream playing");
+    out_stream.play().expect("failed to start output");
+    eprintln!("output stream playing");
+    std::mem::forget(out_stream);
 
-    // Keep the stream alive for the lifetime of the app.
-    std::mem::forget(stream);
-
+    // --- GUI ---
+    eprintln!("starting UI...");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 520.0])
+            .with_inner_size([980.0, 560.0])
             .with_title("Pedal DSP — live"),
         ..Default::default()
     };
-
-    eprintln!("starting UI...");
     eframe::run_native(
         "Pedal DSP — live",
         options,
-        Box::new(move |_cc| Ok(Box::new(App::new(state, params, source_name)))),
+        Box::new(move |_cc| {
+            Ok(Box::new(App::new(
+                state,
+                params,
+                ring_level,
+                input_name,
+                output_name,
+                target_rate,
+                target_rate,
+            )))
+        }),
     )
 }
