@@ -152,6 +152,11 @@ impl Biquad {
         Self::new(b0, b1, b2, a0, a1, a2)
     }
 
+    pub fn design(&mut self, kind: BiquadKind, fs: f32, f0: f32, q: f32, gain_db: f32) {
+        let f = Biquad::make(kind, fs, f0, q, gain_db);
+        self.set_coefficients(f.b0, f.b1, f.b2, 1.0, f.a1, f.a2);
+    }
+
     /// Process a single sample.
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {

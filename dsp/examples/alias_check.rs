@@ -172,8 +172,45 @@ fn live_simulation_test() {
     );
 }
 
+/// Verify the delay time is actually honoured: fire an impulse and find the
+/// first echo.  With feedback at zero there is exactly one echo.
+fn delay_test() {
+    let fs = 48_000.0f32;
+    for ms in [50.0, 150.0, 300.0, 600.0, 900.0, 1200.0] {
+        let mut chain = EffectChain::new(fs);
+        chain.delay_ms = ms;
+        chain.delay_mix = 1.0;
+        chain.delay_feedback = 0.0;
+        chain.distortion_mix = 0.0;
+        chain.distortion_level = 1.0;
+        chain.reverb_mix = 0.0;
+        chain.level = 1.0;
+        chain.update_params();
+
+        let mut peak_idx = 0usize;
+        let mut peak_val = 0.0f32;
+        for i in 0..70000 {
+            let x = if i == 0 { 1.0 } else { 0.0 };
+            let (l, _) = chain.process_stereo(x, x);
+            if i > 10 && l.abs() > peak_val {
+                peak_val = l.abs();
+                peak_idx = i;
+            }
+        }
+        println!(
+            "delay {:>5.0} ms -> first echo at {:>6} samples = {:>6.1} ms (peak {:.3})",
+            ms,
+            peak_idx,
+            peak_idx as f32 / fs * 1000.0,
+            peak_val
+        );
+    }
+}
+
 fn main() {
-    println!("== root cause: per-sample shaper reset ==");
+    println!("== delay time ==");
+    delay_test();
+    println!("\n== root cause: per-sample shaper reset ==");
     live_simulation_test();
     println!("\n== shaper oversampling (sawtooth) ==");
     for drive in [3.0, 20.0] {

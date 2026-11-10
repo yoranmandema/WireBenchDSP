@@ -1,44 +1,49 @@
 //! The effect chain: the musical heart of the pedal.
 //!
-//! Signal flow (per channel unless noted):
+//! Signal flow (mono):
 //!
 //!   in -> DC block -> distortion -> tone stack -> delay -> reverb -> DC block -> out
 //!
-//! Everything is stereo.  Parameters are plain `f32` fields so the control
-//! loop can update them from pots/footswitch without allocating.
+//! The pedal is a **mono** device, so the whole chain runs on a single
+//! channel.  That is not just simpler: it halves the delay-line and reverb
+//! memory, which is what makes a ~1.25 s delay affordable on the H723.
+//!
+//! Parameters are plain `f32` fields so the control loop can update them
+//! from pots/footswitch without allocating.
 //!
 //! This module lives in `pedal-dsp` (not in the firmware crate) so the host
 //! reference model in `examples/wav_process.rs` runs the *exact same* code
 //! as the MCU.  No `std`, no allocator.
 
-use crate::reverb::Reverb48k;
+use crate::reverb::Reverb48kMono;
 use crate::{
-    BiquadKind, DcBlocker, EnvelopeFollower, FeedbackDelay, Shaper, ShaperKind, StereoBiquad,
+    Biquad, BiquadKind, DcBlocker, EnvelopeFollower, FeedbackDelay, Shaper, ShaperKind,
 };
 
-/// Maximum delay line length in samples (100 ms at 48 kHz).
-pub const MAX_DELAY_SAMPLES: usize = 4800;
+/// Maximum delay line length in samples.
+///
+/// 60000 samples = 1.25 s at 48 kHz (1.36 s at 44.1 kHz).  The line is
+/// `f32`, so this costs 240 KB.  Together with the mono reverb (66 KB) and
+/// the rest of the firmware (~8 KB) that lands at ~314 KB, just inside the
+/// H723's 320 KB RAM region.
+pub const MAX_DELAY_SAMPLES: usize = 60000;
 
 pub struct EffectChain {
     sample_rate: f32,
 
-    dc_in_l: DcBlocker,
-    dc_in_r: DcBlocker,
-    dc_out_l: DcBlocker,
-    dc_out_r: DcBlocker,
+    dc_in: DcBlocker,
+    dc_out: DcBlocker,
 
     // Distortion
-    shaper_l: Shaper,
-    shaper_r: Shaper,
+    shaper: Shaper,
 
     // Tone stack
-    tone_low: StereoBiquad,
-    tone_high: StereoBiquad,
+    tone_low: Biquad,
+    tone_high: Biquad,
 
     // Time-based
-    delay_l: FeedbackDelay<MAX_DELAY_SAMPLES>,
-    delay_r: FeedbackDelay<MAX_DELAY_SAMPLES>,
-    reverb: Reverb48k,
+    delay: FeedbackDelay<MAX_DELAY_SAMPLES>,
+    reverb: Reverb48kMono,
 
     // Dynamics (envelope follower drives an optional auto-gain)
     follower: EnvelopeFollower,
@@ -70,17 +75,13 @@ impl EffectChain {
     pub fn new(sample_rate: f32) -> Self {
         let mut chain = Self {
             sample_rate,
-            dc_in_l: DcBlocker::new(20.0, sample_rate),
-            dc_in_r: DcBlocker::new(20.0, sample_rate),
-            dc_out_l: DcBlocker::new(20.0, sample_rate),
-            dc_out_r: DcBlocker::new(20.0, sample_rate),
-            shaper_l: Shaper::new(ShaperKind::Tanh),
-            shaper_r: Shaper::new(ShaperKind::Tanh),
-            tone_low: StereoBiquad::make(BiquadKind::LowShelf, sample_rate, 200.0, 0.707, 0.0),
-            tone_high: StereoBiquad::make(BiquadKind::HighShelf, sample_rate, 4_000.0, 0.707, 0.0),
-            delay_l: FeedbackDelay::new(sample_rate, 250.0),
-            delay_r: FeedbackDelay::new(sample_rate, 250.0),
-            reverb: Reverb48k::new_48k(),
+            dc_in: DcBlocker::new(20.0, sample_rate),
+            dc_out: DcBlocker::new(20.0, sample_rate),
+            shaper: Shaper::new(ShaperKind::Tanh),
+            tone_low: Biquad::make(BiquadKind::LowShelf, sample_rate, 200.0, 0.707, 0.0),
+            tone_high: Biquad::make(BiquadKind::HighShelf, sample_rate, 4_000.0, 0.707, 0.0),
+            delay: FeedbackDelay::new(sample_rate, 250.0),
+            reverb: Reverb48kMono::new_48k(),
             follower: EnvelopeFollower::new(2.0, 50.0, sample_rate),
             drive: 3.0,
             distortion_level: 0.8,
@@ -98,12 +99,9 @@ impl EffectChain {
     }
 
     fn apply_static_params(&mut self) {
-        self.shaper_l.set_drive(self.drive);
-        self.shaper_l.set_level(self.distortion_level);
-        self.shaper_l.set_mix(self.distortion_mix);
-        self.shaper_r.set_drive(self.drive);
-        self.shaper_r.set_level(self.distortion_level);
-        self.shaper_r.set_mix(self.distortion_mix);
+        self.shaper.set_drive(self.drive);
+        self.shaper.set_level(self.distortion_level);
+        self.shaper.set_mix(self.distortion_mix);
 
         let tone_db = self.tone * 12.0;
         self.tone_low
@@ -111,12 +109,9 @@ impl EffectChain {
         self.tone_high
             .design(BiquadKind::HighShelf, self.sample_rate, 4_000.0, 0.707, tone_db);
 
-        self.delay_l.set_delay_ms(self.delay_ms);
-        self.delay_l.set_feedback(self.delay_feedback);
-        self.delay_l.mix = self.delay_mix;
-        self.delay_r.set_delay_ms(self.delay_ms);
-        self.delay_r.set_feedback(self.delay_feedback);
-        self.delay_r.mix = self.delay_mix;
+        self.delay.set_delay_ms(self.delay_ms);
+        self.delay.set_feedback(self.delay_feedback);
+        self.delay.mix = self.delay_mix;
 
         self.reverb.set_wet(self.reverb_mix);
         self.reverb.set_dry(1.0 - self.reverb_mix);
@@ -127,70 +122,66 @@ impl EffectChain {
         self.apply_static_params();
     }
 
-    /// Swap the distortion type.  The shapers are recreated (their internal
-    /// state resets), which is acceptable — the user is changing character.
+    /// Swap the distortion type.  The shaper is recreated (its internal
+    /// oversampling state resets), which is acceptable -- the user is
+    /// changing character.  Do NOT call this per sample: it would silently
+    /// disable oversampling and the distortion would alias.
     pub fn set_shaper(&mut self, kind: ShaperKind) {
-        self.shaper_l = Shaper::new(kind);
-        self.shaper_r = Shaper::new(kind);
+        self.shaper = Shaper::new(kind);
         self.apply_static_params();
     }
 
+    /// Process one mono sample.
     #[inline]
-    pub fn process_stereo(&mut self, l_in: f32, r_in: f32) -> (f32, f32) {
-        // Input DC removal.  Each channel needs its OWN blocker: sharing one
-        // instance would filter the right channel twice (the second call sees
-        // the state left by the first), leaving L and R inconsistent.
-        let mut l = self.dc_in_l.process(l_in);
-        let mut r = self.dc_in_r.process(r_in);
+    pub fn process_mono(&mut self, x_in: f32) -> f32 {
+        // Input DC removal.
+        let x = self.dc_in.process(x_in);
 
         if !self.enabled {
-            return (l * self.level, r * self.level);
+            return x * self.level;
         }
 
         // Distortion
-        l = self.shaper_l.process(l);
-        r = self.shaper_r.process(r);
+        let x = self.shaper.process(x);
 
         // Tone stack
-        let (tl, tr) = self.tone_low.process(l, r);
-        let (tl, tr) = self.tone_high.process(tl, tr);
-        l = tl;
-        r = tr;
+        let x = self.tone_low.process(x);
+        let x = self.tone_high.process(x);
 
-        // Delay (each channel has its own line)
-        l = self.delay_l.process(l);
-        r = self.delay_r.process(r);
+        // Delay
+        let x = self.delay.process(x);
 
         // Reverb
-        let (rl, rr) = self.reverb.process(l, r);
+        let x = self.reverb.process(x);
 
         // Output DC removal + master level
-        l = self.dc_out_l.process(rl) * self.level;
-        r = self.dc_out_r.process(rr) * self.level;
+        let x = self.dc_out.process(x) * self.level;
 
         // Soft-limit the output so the codec never sees a clipped word.
-        (soft_limit(l), soft_limit(r))
+        soft_limit(x)
+    }
+
+    /// Stereo convenience: the pedal is mono, so both channels are identical.
+    #[inline]
+    pub fn process_stereo(&mut self, l_in: f32, r_in: f32) -> (f32, f32) {
+        let _ = r_in;
+        let y = self.process_mono(l_in);
+        (y, y)
     }
 
     /// Envelope follower, useful for tuner/dynamics ideas.
     #[inline]
-    pub fn envelope(&mut self, l: f32, r: f32) -> f32 {
-        let e = self.follower.process(l);
-        let _ = r;
-        e
+    pub fn envelope(&mut self, x: f32) -> f32 {
+        self.follower.process(x)
     }
 
     pub fn reset(&mut self) {
-        self.dc_in_l.reset();
-        self.dc_in_r.reset();
-        self.dc_out_l.reset();
-        self.dc_out_r.reset();
-        self.shaper_l.reset();
-        self.shaper_r.reset();
+        self.dc_in.reset();
+        self.dc_out.reset();
+        self.shaper.reset();
         self.tone_low.reset();
         self.tone_high.reset();
-        self.delay_l.clear();
-        self.delay_r.clear();
+        self.delay.clear();
         self.reverb.clear();
         self.follower.reset();
     }

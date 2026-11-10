@@ -194,14 +194,16 @@ fn DMA1_STR1() {
         let l = word_to_f32(unsafe { *rx_ptr.add(start + 2 * i) });
         let r = word_to_f32(unsafe { *rx_ptr.add(start + 2 * i + 1) });
 
-        let (lo, ro) = cortex_m::interrupt::free(|_| {
+        // The pedal is mono: sum the inputs so it works whichever channel
+        // the instrument is plugged into, process once, drive both outputs.
+        let lo = cortex_m::interrupt::free(|_| {
             let chain = unsafe { &mut *EFFECTS.as_mut_ptr() };
-            chain.process_stereo(l, r)
+            chain.process_mono(l + r)
         });
 
         unsafe {
             *tx_ptr.add(start + 2 * i) = f32_to_word(lo);
-            *tx_ptr.add(start + 2 * i + 1) = f32_to_word(ro);
+            *tx_ptr.add(start + 2 * i + 1) = f32_to_word(lo);
         }
     }
 }

@@ -224,8 +224,96 @@ impl<const COMB: usize, const ALLPASS: usize> Freeverb<COMB, ALLPASS> {
     }
 }
 
+/// Mono Freeverb: identical topology and tunings, one channel, half the
+/// memory (66 KB at 48 kHz instead of 132 KB).
+pub struct FreeverbMono<const COMB: usize, const ALLPASS: usize> {
+    combs: [Comb<COMB>; NUM_COMBS],
+    aps: [Allpass<ALLPASS>; NUM_ALLPASSES],
+    room_size: f32,
+    damping: f32,
+    wet: f32,
+    dry: f32,
+}
+
+impl FreeverbMono<1760, 605> {
+    pub fn new_48k() -> Self {
+        Self::new(48_000.0)
+    }
+}
+
+impl<const COMB: usize, const ALLPASS: usize> FreeverbMono<COMB, ALLPASS> {
+    pub fn new(sample_rate: f32) -> Self {
+        let scale = sample_rate / 44_100.0;
+        let comb_sizes: [usize; NUM_COMBS] =
+            core::array::from_fn(|i| (COMB_TUNINGS_44K[i] as f32 * scale) as usize);
+        let ap_sizes: [usize; NUM_ALLPASSES] =
+            core::array::from_fn(|i| (ALLPASS_TUNINGS_44K[i] as f32 * scale) as usize);
+
+        let mut rv = Self {
+            combs: core::array::from_fn(|i| Comb::new(comb_sizes[i], 0.84, 0.2)),
+            aps: core::array::from_fn(|i| Allpass::new(ap_sizes[i])),
+            room_size: 0.5,
+            damping: 0.5,
+            wet: 0.3,
+            dry: 0.7,
+        };
+        rv.recompute();
+        rv
+    }
+
+    fn recompute(&mut self) {
+        let feedback = self.room_size * 0.28 + 0.7;
+        let damp = self.damping * 0.4;
+        for c in self.combs.iter_mut() {
+            c.set_params(feedback, damp);
+        }
+    }
+
+    pub fn set_room_size(&mut self, v: f32) {
+        self.room_size = clamp(v, 0.0, 1.0);
+        self.recompute();
+    }
+
+    pub fn set_damping(&mut self, v: f32) {
+        self.damping = clamp(v, 0.0, 1.0);
+        self.recompute();
+    }
+
+    pub fn set_wet(&mut self, v: f32) {
+        self.wet = clamp(v, 0.0, 1.0);
+    }
+
+    pub fn set_dry(&mut self, v: f32) {
+        self.dry = clamp(v, 0.0, 1.0);
+    }
+
+    #[inline]
+    pub fn process(&mut self, input: f32) -> f32 {
+        let mut out = 0.0f32;
+        for c in self.combs.iter_mut() {
+            out += c.process(input);
+        }
+        for a in self.aps.iter_mut() {
+            out = a.process(out);
+        }
+        out * self.wet + input * self.dry
+    }
+
+    pub fn clear(&mut self) {
+        for c in self.combs.iter_mut() {
+            c.clear();
+        }
+        for a in self.aps.iter_mut() {
+            a.clear();
+        }
+    }
+}
+
 /// Convenience alias for a 48 kHz stereo reverb.
 pub type Reverb48k = Freeverb<1760, 605>;
+
+/// Convenience alias for a 48 kHz mono reverb.
+pub type Reverb48kMono = FreeverbMono<1760, 605>;
 
 #[cfg(test)]
 mod tests {
