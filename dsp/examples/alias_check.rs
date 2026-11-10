@@ -274,8 +274,41 @@ fn pitch_test() {
     }
 }
 
+/// 0 ms should be a one-sample comb: finite, bounded, and it should ring.
+fn zero_delay_test() {
+    let fs = 48_000.0f32;
+    let mut chain = EffectChain::new(fs);
+    chain.delay_ms = 0.0;
+    chain.delay_mix = 1.0;
+    chain.delay_feedback = 0.9;
+    chain.distortion_mix = 0.0;
+    chain.distortion_level = 1.0;
+    chain.reverb_mix = 0.0;
+    chain.level = 1.0;
+    chain.update_params();
+    let mut peak = 0.0f32;
+    let mut finite = true;
+    let mut last = 0.0f32;
+    for i in 0..48_000 {
+        let x = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / fs).sin();
+        let y = chain.process_mono(x);
+        if !y.is_finite() {
+            finite = false;
+        }
+        peak = peak.max(y.abs());
+        if i > 40_000 {
+            last = y.abs();
+        }
+    }
+    println!(
+        "0 ms, feedback 0.9: peak {peak:.3}, still ringing at 1 s ({last:.4}), finite {finite}"
+    );
+}
+
 fn main() {
-    println!("== pitch modulation ==");
+    println!("== zero-delay check ==");
+    zero_delay_test();
+    println!("\n== pitch modulation ==");
     pitch_test();
     println!("\n== delay time ==");
     delay_test();

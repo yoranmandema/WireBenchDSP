@@ -273,7 +273,9 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
     }
 
     pub fn set_delay_ms(&mut self, ms: f32) {
-        self.delay_ms = clamp(ms, 0.05, (self.line.capacity() as f32) / self.sample_rate * 1000.0);
+        // 0 ms is allowed: the read happens before the write, so it becomes a
+        // one-sample delay (a comb, which is a useful sound with feedback).
+        self.delay_ms = clamp(ms, 0.0, (self.line.capacity() as f32) / self.sample_rate * 1000.0);
     }
 
     pub fn set_feedback(&mut self, fb: f32) {

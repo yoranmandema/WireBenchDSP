@@ -620,7 +620,7 @@ impl eframe::App for App {
 
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new("Time").strong());
-                slider(ui, "Delay ms", &self.params.delay_ms, 20.0..=1040.0);
+                slider(ui, "Delay ms", &self.params.delay_ms, 0.0..=1040.0);
                 slider(ui, "Delay mix", &self.params.delay_mix, 0.0..=1.0);
                 slider(ui, "Delay feedback", &self.params.delay_feedback, 0.0..=0.95);
                 slider(ui, "Pitch", &self.params.pitch, -2400.0..=2400.0);
