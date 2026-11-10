@@ -22,18 +22,18 @@ use crate::{
 
 /// Maximum delay line length in samples.
 ///
-/// 50000 samples = 1041 ms at 48 kHz (1134 ms at 44.1 kHz).  The line is
-/// `f32`, so this costs 200 KB.
-pub const MAX_DELAY_SAMPLES: usize = 50000;
+/// 60000 samples = 1.25 s at 48 kHz (1.36 s at 44.1 kHz).  The line is
+/// `f32`, so this costs 240 KB.
+pub const MAX_DELAY_SAMPLES: usize = 60000;
 
 /// Pitch-shifter buffer length in samples.
 ///
-/// 12000 samples = 250 ms at 48 kHz, i.e. 6000 samples (125 ms) of latency.
-/// A longer buffer gives a cleaner shift (the two crossfaded read heads are
-/// further apart), but costs 4 bytes per sample.  Together the delay, pitch
-/// shifter, mono reverb and the rest of the firmware land at ~318 KB of the
-/// H723's 320 KB RAM region.
-pub const PITCH_BUFFER_SAMPLES: usize = 12000;
+/// 2400 samples = 50 ms at 48 kHz.  The shifter's latency is half the buffer
+/// (the Hann window peaks at N/2), so this gives ~25 ms -- close to real time.
+/// A longer buffer would lower the latency further but smear the shift,
+/// because the two crossfaded read heads are only N/2 apart and the crossfade
+/// completes in N/|rate-1| samples.
+pub const PITCH_BUFFER_SAMPLES: usize = 2400;
 
 pub struct EffectChain {
     sample_rate: f32,
