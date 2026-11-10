@@ -22,8 +22,10 @@ pub const MAX_DELAY_SAMPLES: usize = 4800;
 pub struct EffectChain {
     sample_rate: f32,
 
-    dc_in: DcBlocker,
-    dc_out: DcBlocker,
+    dc_in_l: DcBlocker,
+    dc_in_r: DcBlocker,
+    dc_out_l: DcBlocker,
+    dc_out_r: DcBlocker,
 
     // Distortion
     shaper_l: Shaper,
@@ -68,8 +70,10 @@ impl EffectChain {
     pub fn new(sample_rate: f32) -> Self {
         let mut chain = Self {
             sample_rate,
-            dc_in: DcBlocker::new(20.0, sample_rate),
-            dc_out: DcBlocker::new(20.0, sample_rate),
+            dc_in_l: DcBlocker::new(20.0, sample_rate),
+            dc_in_r: DcBlocker::new(20.0, sample_rate),
+            dc_out_l: DcBlocker::new(20.0, sample_rate),
+            dc_out_r: DcBlocker::new(20.0, sample_rate),
             shaper_l: Shaper::new(ShaperKind::Tanh),
             shaper_r: Shaper::new(ShaperKind::Tanh),
             tone_low: StereoBiquad::make(BiquadKind::LowShelf, sample_rate, 200.0, 0.707, 0.0),
@@ -133,9 +137,11 @@ impl EffectChain {
 
     #[inline]
     pub fn process_stereo(&mut self, l_in: f32, r_in: f32) -> (f32, f32) {
-        // Input DC removal.
-        let mut l = self.dc_in.process(l_in);
-        let mut r = self.dc_in.process(r_in);
+        // Input DC removal.  Each channel needs its OWN blocker: sharing one
+        // instance would filter the right channel twice (the second call sees
+        // the state left by the first), leaving L and R inconsistent.
+        let mut l = self.dc_in_l.process(l_in);
+        let mut r = self.dc_in_r.process(r_in);
 
         if !self.enabled {
             return (l * self.level, r * self.level);
@@ -159,8 +165,8 @@ impl EffectChain {
         let (rl, rr) = self.reverb.process(l, r);
 
         // Output DC removal + master level
-        l = self.dc_out.process(rl) * self.level;
-        r = self.dc_out.process(rr) * self.level;
+        l = self.dc_out_l.process(rl) * self.level;
+        r = self.dc_out_r.process(rr) * self.level;
 
         // Soft-limit the output so the codec never sees a clipped word.
         (soft_limit(l), soft_limit(r))
@@ -175,8 +181,10 @@ impl EffectChain {
     }
 
     pub fn reset(&mut self) {
-        self.dc_in.reset();
-        self.dc_out.reset();
+        self.dc_in_l.reset();
+        self.dc_in_r.reset();
+        self.dc_out_l.reset();
+        self.dc_out_r.reset();
         self.shaper_l.reset();
         self.shaper_r.reset();
         self.tone_low.reset();
@@ -188,14 +196,21 @@ impl EffectChain {
     }
 }
 
-/// Gentle output limiter (keeps the 24-bit word conversion well behaved).
+/// Gentle output limiter.
+///
+/// This must be a SOFT clipper: a hard `if x > 1 { 1 }` corner is a
+/// nonlinearity too, and it folds harmonics back into the audio band,
+/// which is exactly the aliasing we oversample to avoid.
 #[inline]
 fn soft_limit(x: f32) -> f32 {
-    if x > 1.0 {
+    // Cubic saturation: unity slope at 0, reaches +/-1 with zero slope,
+    // so the knee is smooth and adds no aliasing of its own.
+    let x = if x > 1.0 {
         1.0
     } else if x < -1.0 {
         -1.0
     } else {
         x
-    }
+    };
+    1.5 * x - 0.5 * x * x * x
 }

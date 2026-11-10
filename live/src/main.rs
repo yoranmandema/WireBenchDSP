@@ -19,6 +19,9 @@ use pedal_dsp::waveshape::ShaperKind;
 const TAU: f32 = std::f32::consts::TAU;
 /// Ring capacity in input samples.
 const RING_CAPACITY: usize = 8192;
+/// Target buffering delay in samples (~23 ms at 44.1 kHz).  Lower feels
+/// more immediate but leaves less slack for a late input callback.
+const LATENCY_SAMPLES: usize = 1024;
 
 // ---------------------------------------------------------------------------
 // Parameters
@@ -141,6 +144,47 @@ impl RingBuffer {
             .load(Ordering::Acquire)
             .wrapping_sub(self.read.load(Ordering::Relaxed))
     }
+
+    /// Trim the buffered delay to `samples` by moving the read pointer.
+    /// Used once at startup to discard the backlog that accumulates before
+    /// the output stream starts pulling.
+    fn set_delay(&self, samples: usize) {
+        let w = self.write.load(Ordering::Acquire);
+        let r = self.read.load(Ordering::Relaxed);
+        let level = w.wrapping_sub(r);
+        let target = level.min(samples);
+        self.read.store(w.wrapping_sub(target), Ordering::Release);
+    }
+}
+
+/// Live-path diagnostics: which input channels carry signal, callback
+/// sizes, and ring underruns. Printed every couple of seconds.
+struct Diag {
+    ch_rms: Mutex<[f32; 4]>,
+    mono_rms: Mutex<f32>,
+    out_rms: Mutex<f32>,
+    mute: AtomicBool,
+    shaper_resets: AtomicUsize,
+    underruns: AtomicUsize,
+    in_frames: AtomicUsize,
+    out_frames: AtomicUsize,
+    in_samples: AtomicUsize,
+}
+
+impl Diag {
+    fn new() -> Self {
+        Self {
+            ch_rms: Mutex::new([0.0; 4]),
+            mono_rms: Mutex::new(0.0),
+            out_rms: Mutex::new(0.0),
+            mute: AtomicBool::new(false),
+            shaper_resets: AtomicUsize::new(0),
+            underruns: AtomicUsize::new(0),
+            in_frames: AtomicUsize::new(0),
+            out_frames: AtomicUsize::new(0),
+            in_samples: AtomicUsize::new(0),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,8 +255,10 @@ struct AudioState {
     fs: f32,
     peak: Arc<Mutex<f32>>,
     ring_level: Arc<AtomicUsize>,
+    diag: Arc<Diag>,
     cb_count: u64,
     last_print: std::time::Instant,
+    shaper_idx: u32,
 }
 
 impl AudioState {
@@ -222,6 +268,7 @@ impl AudioState {
         params: &Params,
         peak: Arc<Mutex<f32>>,
         ring_level: Arc<AtomicUsize>,
+        diag: Arc<Diag>,
     ) -> Self {
         let mut state = Self {
             chain: EffectChain::new(fs),
@@ -231,8 +278,10 @@ impl AudioState {
             fs,
             peak,
             ring_level,
+            diag,
             cb_count: 0,
             last_print: std::time::Instant::now(),
+            shaper_idx: 0,
         };
         state.apply_params(params);
         state
@@ -249,8 +298,16 @@ impl AudioState {
         self.chain.delay_feedback = get_f32(&p.delay_feedback);
         self.chain.reverb_mix = get_f32(&p.reverb_mix);
         self.chain.enabled = p.enabled.load(Ordering::Relaxed);
-        let idx = p.shaper.load(Ordering::Relaxed) as usize % SHAPERS.len();
-        self.chain.set_shaper(SHAPERS[idx].1);
+        // Only recreate the shaper when the selection actually changes.
+        // Shaper::new() resets the oversampling FIRs, so doing this on every
+        // callback would silently disable oversampling and the distortion
+        // would alias badly.
+        let idx = p.shaper.load(Ordering::Relaxed);
+        if idx != self.shaper_idx {
+            self.shaper_idx = idx;
+            self.chain.set_shaper(SHAPERS[idx as usize % SHAPERS.len()].1);
+            self.diag.shaper_resets.fetch_add(1, Ordering::Relaxed);
+        }
         self.chain.update_params();
     }
 
@@ -259,10 +316,14 @@ impl AudioState {
         self.apply_params(p);
         let ch = self.channels.max(1);
         let mut peak = 0.0f32;
+        let mut sum_sq = 0.0f32;
+        let mut count = 0usize;
         for (i, frame) in out.chunks_mut(ch).enumerate() {
             let s = in_mono.get(i).copied().unwrap_or(0.0);
             let (l, r) = self.chain.process_stereo(s, s);
             peak = peak.max(l.abs()).max(r.abs());
+            sum_sq += l * l + r * r;
+            count += 2;
             if frame.len() >= 2 {
                 frame[0] = l;
                 frame[1] = r;
@@ -270,16 +331,39 @@ impl AudioState {
                 frame[0] = (l + r) * 0.5;
             }
         }
+        if let Ok(mut d) = self.diag.out_rms.lock() {
+            *d = *d * 0.95 + (sum_sq / count.max(1) as f32).sqrt();
+        }
         if let Ok(mut pk) = self.peak.lock() {
             *pk = (*pk * 0.9 + peak * 0.1).max(peak);
         }
         self.cb_count += 1;
         if self.last_print.elapsed().as_secs_f32() > 2.0 {
+            let rms = self
+                .diag
+                .ch_rms
+                .lock()
+                .map(|r| format!("{:.3} {:.3} {:.3} {:.3}", r[0], r[1], r[2], r[3]))
+                .unwrap_or_else(|_| "? ? ? ?".to_string());
+            let mono = self.diag.mono_rms.lock().map(|v| *v).unwrap_or(0.0);
+            let outr = self.diag.out_rms.lock().map(|v| *v).unwrap_or(0.0);
+            // (The loopback auto-test that used to run here has served its
+            // purpose: channels 2-3 of the interface are its own output
+            // loopback, channel 1 is the real instrument input.)
             eprintln!(
-                "audio: {} callbacks, peak {:.3}, ring {}",
+                "audio: {} cb, peak {:.4}, ring {} | shaper resets {} | in {}fr/{}sm out {}fr, underruns {} | ch rms [{}] mono {:.4} out {:.4} {}",
                 self.cb_count,
                 peak,
-                self.ring_level.load(Ordering::Relaxed)
+                self.ring_level.load(Ordering::Relaxed),
+                self.diag.shaper_resets.load(Ordering::Relaxed),
+                self.diag.in_frames.load(Ordering::Relaxed),
+                self.diag.in_samples.load(Ordering::Relaxed),
+                self.diag.out_frames.load(Ordering::Relaxed),
+                self.diag.underruns.load(Ordering::Relaxed),
+                rms,
+                mono,
+                outr,
+                ""
             );
             self.last_print = std::time::Instant::now();
         }
@@ -351,22 +435,34 @@ fn build_output_stream<T: FromF32 + 'static>(
     params: Arc<Params>,
     ring: Arc<RingBuffer>,
     channels: usize,
+    diag: Arc<Diag>,
 ) -> Result<cpal::Stream, cpal::Error> {
     device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             let frames = data.len() / channels.max(1);
+            diag.out_frames.store(frames, Ordering::Relaxed);
             let mut st = state.lock().unwrap();
             let mut in_mono = vec![0.0f32; frames];
             if st.mode == Mode::Live {
+                let before = ring.available();
                 ring.pop(&mut in_mono);
+                if before < frames {
+                    diag.underruns.fetch_add(1, Ordering::Relaxed);
+                }
             } else {
                 st.fill_source(&mut in_mono);
             }
             let mut out = vec![0.0f32; data.len()];
             st.render(&params, &in_mono, &mut out);
-            for (o, s) in data.iter_mut().zip(out.iter()) {
-                *o = T::from_f32(*s);
+            if diag.mute.load(Ordering::Relaxed) {
+                for o in data.iter_mut() {
+                    *o = T::from_f32(0.0);
+                }
+            } else {
+                for (o, s) in data.iter_mut().zip(out.iter()) {
+                    *o = T::from_f32(*s);
+                }
             }
         },
         |err| eprintln!("output callback error: {err}"),
@@ -382,21 +478,45 @@ fn build_input_stream<T: ToF32 + 'static>(
     channels: usize,
     ring: Arc<RingBuffer>,
     ring_level: Arc<AtomicUsize>,
+    diag: Arc<Diag>,
 ) -> Result<cpal::Stream, cpal::Error> {
     device.build_input_stream(
         config,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
             let ch = channels.max(1);
-            let mut mono = Vec::with_capacity(data.len() / ch);
+            let frames = data.len() / ch;
+            diag.in_frames.store(frames, Ordering::Relaxed);
+            diag.in_samples.store(data.len(), Ordering::Relaxed);
+            let mut mono = Vec::with_capacity(frames);
+            // Per-channel mean square, so we can see which channels are live.
+            let mut ms = [0.0f32; 4];
+            let mut mono_ms = 0.0f32;
             for frame in data.chunks(ch) {
-                // Only the first two channels are real inputs; any extra
-                // channels on the device are ignored (avoids loopback).
-                let n = frame.len().min(2);
+                // Sum the first two channels at FULL level.  Interfaces often
+                // report more channels than they have physical inputs (the
+                // Scarlett 2i2 exposes its playback mix as inputs 3-4), and
+                // one of the two real inputs may be dead -- averaging would
+                // throw away half the guitar signal and push the user to
+                // crank the drive into the aliasing region.
                 let mut sum = 0.0f32;
-                for s in frame.iter().take(n) {
-                    sum += s.to_f32();
+                for (i, s) in frame.iter().take(4).enumerate() {
+                    let v = s.to_f32();
+                    ms[i] += v * v;
+                    if i < 2 {
+                        sum += v;
+                    }
                 }
-                mono.push(sum / n.max(1) as f32);
+                mono_ms += sum * sum;
+                mono.push(sum);
+            }
+            if let Ok(mut d) = diag.ch_rms.lock() {
+                let norm = (frames as f32).max(1.0);
+                for i in 0..4 {
+                    d[i] = d[i] * 0.95 + (ms[i] / norm).sqrt();
+                }
+            }
+            if let Ok(mut d) = diag.mono_rms.lock() {
+                *d = *d * 0.95 + (mono_ms / (frames as f32).max(1.0)).sqrt();
             }
             ring.push(&mono);
             ring_level.store(ring.available().min(1_000_000), Ordering::Relaxed);
@@ -655,6 +775,7 @@ fn main() -> eframe::Result<()> {
     let params = Arc::new(Params::new());
     let peak = Arc::new(Mutex::new(0.0f32));
     let ring_level = Arc::new(AtomicUsize::new(0));
+    let diag = Arc::new(Diag::new());
     let ring = Arc::new(RingBuffer::new(RING_CAPACITY));
     let state = Arc::new(Mutex::new(AudioState::new(
         target_rate as f32,
@@ -662,6 +783,7 @@ fn main() -> eframe::Result<()> {
         &params,
         Arc::clone(&peak),
         Arc::clone(&ring_level),
+        Arc::clone(&diag),
     )));
 
     // Pick a source for the non-live modes.
@@ -708,6 +830,7 @@ fn main() -> eframe::Result<()> {
             in_channels,
             Arc::clone(&ring),
             Arc::clone(&ring_level),
+            Arc::clone(&diag),
         ),
         cpal::SampleFormat::I16 => build_input_stream::<i16>(
             &input_device,
@@ -715,6 +838,7 @@ fn main() -> eframe::Result<()> {
             in_channels,
             Arc::clone(&ring),
             Arc::clone(&ring_level),
+            Arc::clone(&diag),
         ),
         cpal::SampleFormat::I32 => build_input_stream::<i32>(
             &input_device,
@@ -722,6 +846,7 @@ fn main() -> eframe::Result<()> {
             in_channels,
             Arc::clone(&ring),
             Arc::clone(&ring_level),
+            Arc::clone(&diag),
         ),
         cpal::SampleFormat::U16 => build_input_stream::<u16>(
             &input_device,
@@ -729,6 +854,7 @@ fn main() -> eframe::Result<()> {
             in_channels,
             Arc::clone(&ring),
             Arc::clone(&ring_level),
+            Arc::clone(&diag),
         ),
         other => panic!("unsupported input sample format: {other:?}"),
     }
@@ -747,6 +873,7 @@ fn main() -> eframe::Result<()> {
             Arc::clone(&params),
             Arc::clone(&ring),
             out_channels,
+            Arc::clone(&diag),
         ),
         cpal::SampleFormat::I16 => build_output_stream::<i16>(
             &output_device,
@@ -755,6 +882,7 @@ fn main() -> eframe::Result<()> {
             Arc::clone(&params),
             Arc::clone(&ring),
             out_channels,
+            Arc::clone(&diag),
         ),
         cpal::SampleFormat::I32 => build_output_stream::<i32>(
             &output_device,
@@ -763,6 +891,7 @@ fn main() -> eframe::Result<()> {
             Arc::clone(&params),
             Arc::clone(&ring),
             out_channels,
+            Arc::clone(&diag),
         ),
         cpal::SampleFormat::U16 => build_output_stream::<u16>(
             &output_device,
@@ -771,6 +900,7 @@ fn main() -> eframe::Result<()> {
             Arc::clone(&params),
             Arc::clone(&ring),
             out_channels,
+            Arc::clone(&diag),
         ),
         other => panic!("unsupported output sample format: {other:?}"),
     }
@@ -778,6 +908,10 @@ fn main() -> eframe::Result<()> {
     out_stream.play().expect("failed to start output");
     eprintln!("output stream playing");
     std::mem::forget(out_stream);
+
+    // Discard the startup backlog so the pedal feels immediate.
+    ring.set_delay(LATENCY_SAMPLES);
+    eprintln!("latency trimmed to {LATENCY_SAMPLES} samples");
 
     // --- GUI ---
     eprintln!("starting UI...");

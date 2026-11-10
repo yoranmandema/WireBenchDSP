@@ -58,17 +58,21 @@ pub fn mix(dry: f32, wet: f32, amount: f32) -> f32 {
     dry + (wet - dry) * amount
 }
 
-/// Polynomial tanh approximation (Padé [3/3]-ish), clamped outside |x| > 4.
-/// Max error ~2% around |x| = 1, which is inaudible inside a distortion stage.
+/// Polynomial tanh approximation (Padé [3/3]-ish).
+///
+/// Beyond |x| >= 4 the curve continues smoothly into saturation instead of
+/// stepping to +/-1: a step discontinuity would add broadband aliasing of
+/// its own, on top of the intended harmonics.
 #[inline]
 pub fn tanh_approx(x: f32) -> f32 {
-    if x > 4.0 {
-        1.0
-    } else if x < -4.0 {
-        -1.0
-    } else {
+    let ax = x.abs();
+    if ax < 4.0 {
         let x2 = x * x;
         x * (27.0 + x2) / (27.0 + 9.0 * x2)
+    } else {
+        // Padé value at x = 4 is 172/171; decay smoothly from there to 1.
+        let s = if x > 0.0 { 1.0 } else { -1.0 };
+        s * (1.0 + (172.0 / 171.0 - 1.0) * (4.0 / ax))
     }
 }
 
