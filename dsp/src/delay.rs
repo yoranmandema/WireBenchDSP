@@ -112,9 +112,21 @@ pub enum PitchMode {
     /// `pitch_rate` is ignored.
     Target,
     /// Move to `pitch_cents`, then keep sweeping at `pitch_rate` without
-    /// settling.  This is the Shepard-style endless climb.
+    /// settling.
     Sweep,
+    /// Shepard mode: the shift wraps every `SHEPARD_INTERVAL_CENTS`, and a
+    /// low-pass whose cutoff tracks the position fades each partial out at the
+    /// top of its octave while a new one fades in at the bottom.  The ear
+    /// hears a pitch that rises forever without the spectrum running away.
+    Shepard,
 }
+
+/// Interval the Shepard mode wraps over, in cents (one octave).
+pub const SHEPARD_INTERVAL_CENTS: f32 = 1200.0;
+/// Shepard low-pass at the bottom of the octave (fully open).
+pub const SHEPARD_CUTOFF_HI: f32 = 6_000.0;
+/// Shepard low-pass at the top of the octave (nearly closed).
+pub const SHEPARD_CUTOFF_LO: f32 = 250.0;
 
 /// A static pitch shifter.
 ///
@@ -155,6 +167,9 @@ pub struct PitchShifter<const N: usize> {
     jitter_target: f32,
     rng: u32,
     sample_rate: f32,
+    /// Shepard low-pass state and smoothed cutoff.
+    shepard_state: f32,
+    shepard_cutoff: f32,
 }
 
 impl<const N: usize> Default for PitchShifter<N> {
@@ -183,6 +198,8 @@ impl<const N: usize> PitchShifter<N> {
             jitter_target: 0.0,
             rng: 0x2345_6789,
             sample_rate,
+            shepard_state: 0.0,
+            shepard_cutoff: SHEPARD_CUTOFF_HI,
         }
     }
 
@@ -283,7 +300,7 @@ impl<const N: usize> PitchShifter<N> {
         } else {
             0.0
         };
-        let cents = clamp(
+        let mut cents = clamp(
             self.glide() + sweep + self.jitter_state * self.jitter * 150.0,
             -12_000.0,
             12_000.0,
@@ -301,7 +318,25 @@ impl<const N: usize> PitchShifter<N> {
         let w = 0.5 - 0.5 * libm::cosf(core::f32::consts::TAU * self.sweep / n);
         let a = self.read_at(self.wp - self.sweep);
         let b = self.read_at(self.wp - self.sweep - half);
-        a * w + b * (1.0 - w)
+        let mut out = a * w + b * (1.0 - w);
+
+        // Shepard: wrap the shift into one octave and track it with a low-pass,
+        // so partials fade out at the top of the octave and fade in at the
+        // bottom -- an endless rise that never leaves the spectrum.
+        if self.mode == PitchMode::Shepard {
+            cents = ((cents % SHEPARD_INTERVAL_CENTS) + SHEPARD_INTERVAL_CENTS)
+                % SHEPARD_INTERVAL_CENTS;
+            let target = SHEPARD_CUTOFF_HI
+                - (SHEPARD_CUTOFF_HI - SHEPARD_CUTOFF_LO)
+                    * (cents / SHEPARD_INTERVAL_CENTS);
+            self.shepard_cutoff += (target - self.shepard_cutoff) * 0.002;
+            let coef =
+                1.0 - libm::expf(-2.0 * core::f32::consts::PI * self.shepard_cutoff / n);
+            self.shepard_state += (out - self.shepard_state) * coef;
+            out = self.shepard_state;
+        }
+
+        out
     }
 
     pub fn clear(&mut self) {
@@ -311,6 +346,8 @@ impl<const N: usize> PitchShifter<N> {
         self.pitch_current = self.pitch_cents;
         self.pitch_ramping = false;
         self.pitch_accum = 0.0;
+        self.shepard_state = 0.0;
+        self.shepard_cutoff = SHEPARD_CUTOFF_HI;
     }
 }
 

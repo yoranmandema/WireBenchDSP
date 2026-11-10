@@ -40,7 +40,7 @@ pub struct Params {
     pub pitch: AtomicU32,
     pub pitch_glide: AtomicU32,
     pub pitch_rate: AtomicU32,
-    pub pitch_sweep: AtomicBool,
+    pub pitch_mode: AtomicU32,
     pub jitter: AtomicU32,
     pub reverb_mix: AtomicU32,
     pub shaper: AtomicU32,
@@ -71,7 +71,7 @@ impl Params {
             pitch: AtomicU32::new(0.0f32.to_bits()),
             pitch_glide: AtomicU32::new(0.0f32.to_bits()),
             pitch_rate: AtomicU32::new(0.0f32.to_bits()),
-            pitch_sweep: AtomicBool::new(false),
+            pitch_mode: AtomicU32::new(0),
             jitter: AtomicU32::new(0.0f32.to_bits()),
             reverb_mix: AtomicU32::new(0.0f32.to_bits()),
             shaper: AtomicU32::new(0),
@@ -310,10 +310,10 @@ impl AudioState {
         self.chain.pitch_cents = get_f32(&p.pitch);
         self.chain.pitch_glide_ms = get_f32(&p.pitch_glide);
         self.chain.pitch_rate = get_f32(&p.pitch_rate);
-        self.chain.pitch_mode = if p.pitch_sweep.load(Ordering::Relaxed) {
-            PitchMode::Sweep
-        } else {
-            PitchMode::Target
+        self.chain.pitch_mode = match p.pitch_mode.load(Ordering::Relaxed) {
+            1 => PitchMode::Sweep,
+            2 => PitchMode::Shepard,
+            _ => PitchMode::Target,
         };
         self.chain.jitter = get_f32(&p.jitter);
         self.chain.reverb_mix = get_f32(&p.reverb_mix);
@@ -556,7 +556,7 @@ struct App {
     ring_level: Arc<AtomicUsize>,
     mode: Mode,
     shaper_idx: usize,
-    sweep: bool,
+    pitch_mode: u32,
     input_name: String,
     output_name: String,
     input_rate: u32,
@@ -579,7 +579,7 @@ impl App {
             ring_level,
             mode: Mode::Live,
             shaper_idx: 0,
-            sweep: false,
+            pitch_mode: 0,
             input_name,
             output_name,
             input_rate,
@@ -652,19 +652,28 @@ impl eframe::App for App {
                 slider(ui, "Delay feedback", &self.params.delay_feedback, 0.0..=0.95);
                 slider(ui, "Pitch", &self.params.pitch, -2400.0..=2400.0);
                 slider(ui, "Pitch glide ms", &self.params.pitch_glide, 0.0..=2000.0);
+                ui.label(egui::RichText::new("Pitch mode").strong());
+                let mode_changed = ui
+                    .radio_value(&mut self.pitch_mode, 0, "Target (hold the pitch)")
+                    .changed()
+                    | ui
+                        .radio_value(&mut self.pitch_mode, 1, "Sweep (keep climbing)")
+                        .changed()
+                    | ui
+                        .radio_value(&mut self.pitch_mode, 2, "Shepard (endless rise)")
+                        .changed();
+                if mode_changed {
+                    self.params
+                        .pitch_mode
+                        .store(self.pitch_mode, Ordering::Relaxed);
+                }
                 slider_enabled(
                     ui,
-                    self.sweep,
+                    self.pitch_mode > 0,
                     "Pitch rate cents/s",
                     &self.params.pitch_rate,
                     -1200.0..=1200.0,
                 );
-                ui.checkbox(&mut self.sweep, "Continuous sweep (Pitch rate keeps climbing)");
-                if self.sweep {
-                    self.params.pitch_sweep.store(true, Ordering::Relaxed);
-                } else {
-                    self.params.pitch_sweep.store(false, Ordering::Relaxed);
-                }
                 slider(ui, "Pitch jitter", &self.params.jitter, 0.0..=1.0);
                 slider(ui, "Reverb mix", &self.params.reverb_mix, 0.0..=1.0);
 

@@ -415,8 +415,58 @@ fn rate_test() {
     println!("Target mode, rate 1200 c/s: {f:.0} Hz at 1.8 s (should hold at 432 Hz)");
 }
 
+/// The point of Shepard mode: the perceived pitch rises forever, but the
+/// spectrum must stay bounded.  Compare the high-frequency energy over time.
+fn shepard_test() {
+    let fs = 48_000.0f32;
+    let f0 = 440.0f32;
+    // Crude high-frequency indicator: RMS of the first difference.
+    fn hf(s: &[f32]) -> f32 {
+        let mut e = 0.0f32;
+        for i in 1..s.len() {
+            let d = s[i] - s[i - 1];
+            e += d * d;
+        }
+        (e / s.len() as f32).sqrt()
+    }
+    for (name, mode) in [
+        ("Sweep", pedal_dsp::PitchMode::Sweep),
+        ("Shepard", pedal_dsp::PitchMode::Shepard),
+    ] {
+        let mut chain = EffectChain::new(fs);
+        chain.delay_ms = 300.0;
+        chain.delay_mix = 1.0;
+        chain.delay_feedback = 0.7;
+        chain.pitch_cents = 0.0;
+        chain.pitch_rate = 600.0;
+        chain.pitch_mode = mode;
+        chain.distortion_mix = 0.0;
+        chain.distortion_level = 1.0;
+        chain.reverb_mix = 0.0;
+        chain.level = 1.0;
+        chain.update_params();
+
+        let mut out = Vec::new();
+        for i in 0..96_000 {
+            let x = (2.0 * std::f32::consts::PI * f0 * i as f32 / fs).sin();
+            out.push(chain.process_mono(x));
+        }
+        print!("{name:>8}: ");
+        for w in [10_000usize, 30_000, 50_000, 70_000, 90_000] {
+            print!(
+                "@{:>4} ms hf {:.4}  ",
+                w * 1000 / fs as usize,
+                hf(&out[w..w + 2000])
+            );
+        }
+        println!();
+    }
+}
+
 fn main() {
-    println!("== pitch rate ==");
+    println!("== shepard vs sweep ==");
+    shepard_test();
+    println!("\n== pitch rate ==");
     rate_test();
     println!("\n== pitch glide ==");
     glide_test();
