@@ -463,8 +463,39 @@ fn shepard_test() {
     }
 }
 
+/// Feed a sine straight into the pitch shifter and report level + frequency.
+fn shifter_debug() {
+    let fs = 48_000.0f32;
+    for heads in [2usize, 3, 4, 6] {
+        // PITCH_HEADS is a constant; re-create via the public type with the
+        // same buffer, but we can only change the constant and recompile.
+        let _ = heads;
+    }
+    let mut s = pedal_dsp::PitchShifter::<2400>::new(fs);
+    s.pitch_cents = 600.0;
+    s.set_pitch_glide_ms(0.0);
+    let mut peak = 0.0f32;
+    let mut sum = 0.0f32;
+    let mut n = 0usize;
+    for i in 0..48_000 {
+        let x = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / fs).sin();
+        let y = s.process(x);
+        if i > 2000 {
+            peak = peak.max(y.abs());
+            sum += y * y;
+            n += 1;
+        }
+    }
+    println!(
+        "direct shifter @600 cents: peak {peak:.4}, rms {:.4} (input rms 0.707)",
+        (sum / n as f32).sqrt()
+    );
+}
+
 fn main() {
-    println!("== shepard vs sweep ==");
+    println!("== shifter debug ==");
+    shifter_debug();
+    println!("\n== shepard vs sweep ==");
     shepard_test();
     println!("\n== pitch rate ==");
     rate_test();

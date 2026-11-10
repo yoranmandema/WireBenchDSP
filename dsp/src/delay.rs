@@ -338,13 +338,18 @@ impl<const N: usize> PitchShifter<N> {
         self.sweep += 1.0 - rate;
         self.sweep = ((self.sweep % n) + n) % n;
 
-        // Two heads half a buffer apart.  The window is a function of the
-        // DELAY, so it is 0 exactly where the read head laps the write head
-        // (the wrap) and 1 halfway through the buffer.
-        let w = 0.5 - 0.5 * libm::cosf(core::f32::consts::TAU * self.sweep / n);
+        // Two read heads half a buffer apart, constant-power crossfade.
+        //
+        // The obvious Hann weights (sin^2 / cos^2) keep the *sum* constant but
+        // the sum of squares dips twice per cycle, and that dip is exactly the
+        // amplitude modulation that reads as a ring modulator after a few
+        // repeats.  cos/sin keeps the power constant instead.
+        let theta = core::f32::consts::PI * self.sweep / n;
+        let w0 = libm::cosf(theta);
+        let w1 = libm::sinf(theta);
         let a = self.read_at(self.wp - self.sweep);
-        let b = self.read_at(self.wp - self.sweep - half);
-        let mut out = a * w + b * (1.0 - w);
+        let b = self.read_at(self.wp - self.sweep - n * 0.5);
+        let mut out = w0 * a + w1 * b;
 
         // Shepard: track the wrapped position with a low-pass, so partials
         // fade out at the top of the octave and fade in at the bottom.
