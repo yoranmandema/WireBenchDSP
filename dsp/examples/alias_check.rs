@@ -207,14 +207,14 @@ fn delay_test() {
     }
 }
 
-/// Verify pitch modulation: a sine goes in, and the delay's output frequency
-/// should swing above and below the input frequency.
+/// Verify the static pitch shift: a sine goes in, and the delay's output
+/// should sit at the shifted frequency (not swing around it).
 fn pitch_test() {
     let fs = 48_000.0f32;
     let f0 = 440.0f32;
-    for cents in [0.0, 300.0, 600.0] {
+    for cents in [0.0, 600.0, 1200.0, -1200.0] {
         let mut chain = EffectChain::new(fs);
-        chain.delay_ms = 50.0;
+        chain.delay_ms = 200.0;
         chain.delay_mix = 1.0;
         chain.delay_feedback = 0.0;
         chain.pitch_cents = cents;
@@ -230,7 +230,6 @@ fn pitch_test() {
             out.push(chain.process_mono(x));
         }
 
-        // Zero-crossing frequency estimate over a window.
         fn zc_freq(s: &[f32], fs: f32) -> f32 {
             let mut n = 0usize;
             for i in 1..s.len() {
@@ -240,18 +239,37 @@ fn pitch_test() {
             }
             n as f32 / (s.len() as f32 / fs)
         }
-        // Short windows (42 ms) so the vibrato is not averaged out.
-        let mut fmin = f32::MAX;
-        let mut fmax = 0.0f32;
-        let mut w = 2000;
-        while w + 2000 < out.len() {
-            let f = zc_freq(&out[w..w + 2000], fs);
-            fmin = fmin.min(f);
-            fmax = fmax.max(f);
-            w += 2000;
-        }
+        let f = zc_freq(&out[20_000..90_000], fs);
+        let expect = f0 * (2.0f32).powf(cents / 1200.0);
+        let rms = (out[20_000..90_000].iter().map(|v| v * v).sum::<f32>() / 70_000.0).sqrt();
         println!(
-            "pitch {cents:>6.0} cents: output swings {fmin:>6.1} .. {fmax:>6.1} Hz (input {f0} Hz)"
+            "pitch {cents:>7.0} cents -> output {f:>7.1} Hz (expected {expect:>7.1}), rms {rms:.3}"
+        );
+    }
+
+    // With feedback the shift accumulates: each repeat is shifted again, so
+    // the output should contain 440, 880, 1760, 3520 ... Hz.
+    let mut chain = EffectChain::new(fs);
+    chain.delay_ms = 300.0;
+    chain.delay_mix = 1.0;
+    chain.delay_feedback = 0.6;
+    chain.pitch_cents = 1200.0;
+    chain.distortion_mix = 0.0;
+    chain.distortion_level = 1.0;
+    chain.reverb_mix = 0.0;
+    chain.level = 1.0;
+    chain.update_params();
+    let mut out = Vec::new();
+    for i in 0..96_000 {
+        let x = (2.0 * std::f32::consts::PI * f0 * i as f32 / fs).sin();
+        out.push(chain.process_mono(x));
+    }
+    let s = &out[20_000..90_000];
+    for k in 0..5 {
+        let f = f0 * (2.0f32).powi(k);
+        println!(
+            "  repeat {k}: {f:>7.1} Hz bin magnitude {:.6}",
+            dft_mag(s, fs, f)
         );
     }
 }

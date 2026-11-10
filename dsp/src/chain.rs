@@ -22,11 +22,18 @@ use crate::{
 
 /// Maximum delay line length in samples.
 ///
-/// 60000 samples = 1.25 s at 48 kHz (1.36 s at 44.1 kHz).  The line is
-/// `f32`, so this costs 240 KB.  Together with the mono reverb (66 KB) and
-/// the rest of the firmware (~8 KB) that lands at ~314 KB, just inside the
+/// 50000 samples = 1041 ms at 48 kHz (1134 ms at 44.1 kHz).  The line is
+/// `f32`, so this costs 200 KB.
+pub const MAX_DELAY_SAMPLES: usize = 50000;
+
+/// Pitch-shifter buffer length in samples.
+///
+/// 12000 samples = 250 ms at 48 kHz, i.e. 6000 samples (125 ms) of latency.
+/// A longer buffer gives a cleaner shift (the two crossfaded read heads are
+/// further apart), but costs 4 bytes per sample.  Together the delay, pitch
+/// shifter, mono reverb and the rest of the firmware land at ~318 KB of the
 /// H723's 320 KB RAM region.
-pub const MAX_DELAY_SAMPLES: usize = 60000;
+pub const PITCH_BUFFER_SAMPLES: usize = 12000;
 
 pub struct EffectChain {
     sample_rate: f32,
@@ -42,7 +49,7 @@ pub struct EffectChain {
     tone_high: Biquad,
 
     // Time-based
-    delay: FeedbackDelay<MAX_DELAY_SAMPLES>,
+    delay: FeedbackDelay<MAX_DELAY_SAMPLES, PITCH_BUFFER_SAMPLES>,
     reverb: Reverb48kMono,
 
     // Dynamics (envelope follower drives an optional auto-gain)
