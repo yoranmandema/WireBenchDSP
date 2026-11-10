@@ -72,8 +72,10 @@ pub struct EffectChain {
     pub delay_mix: f32,
     /// Delay feedback, 0..0.95
     pub delay_feedback: f32,
-    /// Delay pitch swing in cents, -1200..+1200 (0 = off)
+    /// Delay pitch swing in cents, -2400..+2400 (0 = off)
     pub pitch_cents: f32,
+    /// Glide time toward a new pitch, in ms (0 = instant)
+    pub pitch_glide_ms: f32,
     /// Delay pitch jitter amount, 0..1
     pub jitter: f32,
     /// Reverb mix, 0..1
@@ -103,6 +105,7 @@ impl EffectChain {
             delay_mix: 0.0,
             delay_feedback: 0.35,
             pitch_cents: 0.0,
+            pitch_glide_ms: 0.0,
             jitter: 0.0,
             reverb_mix: 0.0,
             enabled: true,
@@ -125,6 +128,7 @@ impl EffectChain {
         self.delay.set_delay_ms(self.delay_ms);
         self.delay.set_feedback(self.delay_feedback);
         self.delay.set_pitch_cents(self.pitch_cents);
+        self.delay.set_pitch_glide_ms(self.pitch_glide_ms);
         self.delay.set_jitter(self.jitter);
         self.delay.mix = self.delay_mix;
 
@@ -153,7 +157,9 @@ impl EffectChain {
         let x = self.dc_in.process(x_in);
 
         if !self.enabled {
-            return x * self.level;
+            // Still limited: the bypass path would otherwise let a hot input
+            // times a master > 1 clip the DAC.
+            return soft_limit(x * self.level);
         }
 
         // Distortion

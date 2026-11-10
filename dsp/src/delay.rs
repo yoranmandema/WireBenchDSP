@@ -121,33 +121,86 @@ pub struct PitchShifter<const N: usize> {
     /// Current delay (write minus read), in samples.  Sweeps as the pitch
     /// shifts, wrapping from N back to 0.
     sweep: f32,
-    /// Pitch shift in cents.  0 = unchanged, 1200 = one octave up.
+    /// Pitch shift target in cents.  0 = unchanged, 1200 = one octave up.
     pub pitch_cents: f32,
+    /// Glide time toward a new pitch, in ms.  0 = instant.
+    pub pitch_glide_ms: f32,
+    /// The pitch actually used right now (glides toward `pitch_cents`).
+    pitch_current: f32,
+    /// Pitch wander target of the ramp currently running.
+    pitch_ramp_target: f32,
+    /// Ramp rate in cents per sample.
+    pitch_step: f32,
+    pitch_ramping: bool,
     /// Random pitch wander, 0..1.
     pub jitter: f32,
     jitter_state: f32,
     jitter_target: f32,
     rng: u32,
+    sample_rate: f32,
 }
 
 impl<const N: usize> Default for PitchShifter<N> {
     fn default() -> Self {
-        Self::new()
+        Self::new(48_000.0)
     }
 }
 
 impl<const N: usize> PitchShifter<N> {
-    pub fn new() -> Self {
+    pub fn new(sample_rate: f32) -> Self {
         Self {
             buf: [0.0; N],
             wp: 0.0,
             sweep: (N / 2) as f32,
             pitch_cents: 0.0,
+            pitch_glide_ms: 0.0,
+            pitch_current: 0.0,
+            pitch_ramp_target: 0.0,
+            pitch_step: 0.0,
+            pitch_ramping: false,
             jitter: 0.0,
             jitter_state: 0.0,
             jitter_target: 0.0,
             rng: 0x2345_6789,
+            sample_rate,
         }
+    }
+
+    /// Set the glide time (ms) toward a new pitch.  0 = instant.
+    pub fn set_pitch_glide_ms(&mut self, ms: f32) {
+        self.pitch_glide_ms = clamp(ms, 0.0, 30_000.0);
+    }
+
+    /// Glide the working pitch toward the target, and return it.
+    ///
+    /// The remaining distance is always covered in `pitch_glide_ms`, so the
+    /// control is a true portamento time rather than a fixed slew rate.
+    #[inline]
+    fn glide(&mut self) -> f32 {
+        if self.pitch_glide_ms <= 0.0 {
+            self.pitch_current = self.pitch_cents;
+            self.pitch_ramping = false;
+            return self.pitch_current;
+        }
+        // (Re)start the ramp when the target has moved.
+        if !self.pitch_ramping || self.pitch_ramp_target != self.pitch_cents {
+            let samples = (self.pitch_glide_ms * 0.001 * self.sample_rate).max(1.0);
+            self.pitch_ramp_target = self.pitch_cents;
+            self.pitch_step = (self.pitch_cents - self.pitch_current) / samples;
+            self.pitch_ramping = self.pitch_step != 0.0;
+            if !self.pitch_ramping {
+                self.pitch_current = self.pitch_cents;
+                return self.pitch_current;
+            }
+        }
+        self.pitch_current += self.pitch_step;
+        if (self.pitch_step > 0.0 && self.pitch_current >= self.pitch_ramp_target)
+            || (self.pitch_step < 0.0 && self.pitch_current <= self.pitch_ramp_target)
+        {
+            self.pitch_current = self.pitch_ramp_target;
+            self.pitch_ramping = false;
+        }
+        self.pitch_current
     }
 
     #[inline]
@@ -178,14 +231,14 @@ impl<const N: usize> PitchShifter<N> {
             self.wp -= n;
         }
 
-        // Jitter: a smoothed random wander around the set pitch.
+        // Jitter: a smoothed random wander around the (glided) pitch.
         self.jitter_target = clamp(
             self.jitter_target + next_random(&mut self.rng) * 0.06,
             -1.0,
             1.0,
         );
         self.jitter_state += (self.jitter_target - self.jitter_state) * 0.001;
-        let cents = self.pitch_cents + self.jitter_state * self.jitter * 150.0;
+        let cents = self.glide() + self.jitter_state * self.jitter * 150.0;
 
         // Read rate: 1.0 = unchanged, 2.0 = octave up, 0.5 = octave down.
         // The delay changes at (1 - rate) samples per sample.
@@ -206,6 +259,8 @@ impl<const N: usize> PitchShifter<N> {
         self.buf = [0.0; N];
         self.wp = 0.0;
         self.sweep = (N / 2) as f32;
+        self.pitch_current = self.pitch_cents;
+        self.pitch_ramping = false;
     }
 }
 
@@ -229,6 +284,8 @@ pub struct FeedbackDelay<const N: usize, const P: usize = N> {
     pub pitch_cents: f32,
     /// Random pitch wander amount, 0..1.
     pub jitter: f32,
+    /// Glide time toward a new pitch, in ms.  0 = instant.
+    pub pitch_glide_ms: f32,
     sample_rate: f32,
     pitch: PitchShifter<P>,
 }
@@ -242,8 +299,9 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
             mix: 0.5,
             pitch_cents: 0.0,
             jitter: 0.0,
+            pitch_glide_ms: 0.0,
             sample_rate,
-            pitch: PitchShifter::new(),
+            pitch: PitchShifter::new(sample_rate),
         }
     }
 
@@ -251,6 +309,7 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
     pub fn process(&mut self, x: f32) -> f32 {
         self.pitch.pitch_cents = self.pitch_cents;
         self.pitch.jitter = self.jitter;
+        self.pitch.pitch_glide_ms = self.pitch_glide_ms;
         let pitching = self.pitch_cents != 0.0 || self.jitter != 0.0;
 
         // Compensate for the shifter's latency so the delay time stays put.
@@ -288,6 +347,10 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
 
     pub fn set_jitter(&mut self, amount: f32) {
         self.jitter = clamp(amount, 0.0, 1.0);
+    }
+
+    pub fn set_pitch_glide_ms(&mut self, ms: f32) {
+        self.pitch_glide_ms = clamp(ms, 0.0, 30_000.0);
     }
 
     pub fn clear(&mut self) {

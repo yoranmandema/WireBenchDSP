@@ -305,8 +305,58 @@ fn zero_delay_test() {
     );
 }
 
+/// Verify the glide: jump the pitch target and watch the output frequency
+/// ramp from 440 Hz to 880 Hz.
+fn glide_test() {
+    let fs = 48_000.0f32;
+    let f0 = 440.0f32;
+    fn zc_freq(s: &[f32], fs: f32) -> f32 {
+        let mut n = 0usize;
+        for i in 1..s.len() {
+            if s[i - 1] < 0.0 && s[i] >= 0.0 {
+                n += 1;
+            }
+        }
+        n as f32 / (s.len() as f32 / fs)
+    }
+    for glide_ms in [0.0, 500.0, 2000.0] {
+        let mut chain = EffectChain::new(fs);
+        chain.delay_ms = 50.0;
+        chain.delay_mix = 1.0;
+        chain.delay_feedback = 0.0;
+        chain.pitch_cents = 0.0;
+        chain.pitch_glide_ms = glide_ms;
+        chain.distortion_mix = 0.0;
+        chain.distortion_level = 1.0;
+        chain.reverb_mix = 0.0;
+        chain.level = 1.0;
+        chain.update_params();
+
+        for i in 0..2000 {
+            let x = (2.0 * std::f32::consts::PI * f0 * i as f32 / fs).sin();
+            chain.process_mono(x);
+        }
+        chain.pitch_cents = 1200.0;
+        chain.update_params();
+
+        let mut out = Vec::new();
+        for i in 0..96_000 {
+            let x = (2.0 * std::f32::consts::PI * f0 * (2000 + i) as f32 / fs).sin();
+            out.push(chain.process_mono(x));
+        }
+        print!("glide {glide_ms:>5.0} ms: ");
+        for w in [2_000usize, 8_000, 20_000, 44_000, 92_000] {
+            let f = zc_freq(&out[w..w + 2000], fs);
+            print!("@{:>4} ms {:.0} Hz   ", w * 1000 / fs as usize, f);
+        }
+        println!();
+    }
+}
+
 fn main() {
-    println!("== zero-delay check ==");
+    println!("== pitch glide ==");
+    glide_test();
+    println!("\n== zero-delay check ==");
     zero_delay_test();
     println!("\n== pitch modulation ==");
     pitch_test();
