@@ -207,8 +207,59 @@ fn delay_test() {
     }
 }
 
+/// Verify pitch modulation: a sine goes in, and the delay's output frequency
+/// should swing above and below the input frequency.
+fn pitch_test() {
+    let fs = 48_000.0f32;
+    let f0 = 440.0f32;
+    for cents in [0.0, 300.0, 600.0] {
+        let mut chain = EffectChain::new(fs);
+        chain.delay_ms = 50.0;
+        chain.delay_mix = 1.0;
+        chain.delay_feedback = 0.0;
+        chain.pitch_cents = cents;
+        chain.distortion_mix = 0.0;
+        chain.distortion_level = 1.0;
+        chain.reverb_mix = 0.0;
+        chain.level = 1.0;
+        chain.update_params();
+
+        let mut out = Vec::with_capacity(96_000);
+        for i in 0..96_000 {
+            let x = (2.0 * std::f32::consts::PI * f0 * i as f32 / fs).sin();
+            out.push(chain.process_mono(x));
+        }
+
+        // Zero-crossing frequency estimate over a window.
+        fn zc_freq(s: &[f32], fs: f32) -> f32 {
+            let mut n = 0usize;
+            for i in 1..s.len() {
+                if s[i - 1] < 0.0 && s[i] >= 0.0 {
+                    n += 1;
+                }
+            }
+            n as f32 / (s.len() as f32 / fs)
+        }
+        // Short windows (42 ms) so the vibrato is not averaged out.
+        let mut fmin = f32::MAX;
+        let mut fmax = 0.0f32;
+        let mut w = 2000;
+        while w + 2000 < out.len() {
+            let f = zc_freq(&out[w..w + 2000], fs);
+            fmin = fmin.min(f);
+            fmax = fmax.max(f);
+            w += 2000;
+        }
+        println!(
+            "pitch {cents:>6.0} cents: output swings {fmin:>6.1} .. {fmax:>6.1} Hz (input {f0} Hz)"
+        );
+    }
+}
+
 fn main() {
-    println!("== delay time ==");
+    println!("== pitch modulation ==");
+    pitch_test();
+    println!("\n== delay time ==");
     delay_test();
     println!("\n== root cause: per-sample shaper reset ==");
     live_simulation_test();

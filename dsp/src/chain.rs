@@ -65,6 +65,10 @@ pub struct EffectChain {
     pub delay_mix: f32,
     /// Delay feedback, 0..0.95
     pub delay_feedback: f32,
+    /// Delay pitch swing in cents, -1200..+1200 (0 = off)
+    pub pitch_cents: f32,
+    /// Delay pitch jitter amount, 0..1
+    pub jitter: f32,
     /// Reverb mix, 0..1
     pub reverb_mix: f32,
     /// Effect bypass
@@ -91,6 +95,8 @@ impl EffectChain {
             delay_ms: 250.0,
             delay_mix: 0.0,
             delay_feedback: 0.35,
+            pitch_cents: 0.0,
+            jitter: 0.0,
             reverb_mix: 0.0,
             enabled: true,
         };
@@ -111,6 +117,8 @@ impl EffectChain {
 
         self.delay.set_delay_ms(self.delay_ms);
         self.delay.set_feedback(self.delay_feedback);
+        self.delay.set_pitch_cents(self.pitch_cents);
+        self.delay.set_jitter(self.jitter);
         self.delay.mix = self.delay_mix;
 
         self.reverb.set_wet(self.reverb_mix);

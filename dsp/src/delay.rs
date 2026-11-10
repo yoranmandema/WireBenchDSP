@@ -105,13 +105,47 @@ impl<const N: usize> AllpassDelayLine<N> {
     }
 }
 
-/// Classic feedback delay (echo).
+/// Classic feedback delay (echo), with optional pitch modulation and jitter.
+///
+/// Pitch modulation works by wobbling the delay time: a delay whose length
+/// changes over time plays back faster or slower, which is a pitch shift.
+/// `pitch_cents` sets the peak swing (so the pitch moves up *and* down around
+/// the base), and `jitter` adds a random wander on top.
 pub struct FeedbackDelay<const N: usize> {
     pub line: DelayLine<N>,
     pub delay_ms: f32,
     pub feedback: f32,
     pub mix: f32,
+    /// Peak pitch swing in cents (-1200..+1200).  0 = no modulation.
+    pub pitch_cents: f32,
+    /// Random pitch wander amount, 0..1.
+    pub jitter: f32,
     sample_rate: f32,
+    lfo_phase: f32,
+    jitter_state: f32,
+    jitter_target: f32,
+    rng: u32,
+}
+
+/// LFO rate (Hz) for the pitch vibrato.
+const PITCH_LFO_HZ: f32 = 1.2;
+/// Cap on the pitch-modulation amplitude, in samples (~42 ms at 48 kHz).
+const PITCH_MOD_MAX_SAMPLES: f32 = 2000.0;
+
+/// Small deterministic PRNG (no `rand` crate in a `no_std` audio callback).
+#[inline]
+fn next_random(state: &mut u32) -> f32 {
+    *state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+    ((*state >> 8) as f32 / 16_777_216.0) * 2.0 - 1.0
+}
+
+/// Convert a peak pitch swing in cents into a delay-modulation amplitude in
+/// samples.  A delay `D(t) = D0 + A*sin(2*pi*f*t)` has `dD/dt = A*2*pi*f/fs`,
+/// and a rate of change `r` sounds like a pitch ratio of `1 + r`, i.e.
+/// `1731 * r` cents.
+fn pitch_mod_samples(cents: f32, fs: f32) -> f32 {
+    let a = cents.abs() * fs / (1731.0 * 2.0 * core::f32::consts::PI * PITCH_LFO_HZ);
+    a.min(PITCH_MOD_MAX_SAMPLES)
 }
 
 impl<const N: usize> FeedbackDelay<N> {
@@ -121,13 +155,35 @@ impl<const N: usize> FeedbackDelay<N> {
             delay_ms,
             feedback: 0.4,
             mix: 0.5,
+            pitch_cents: 0.0,
+            jitter: 0.0,
             sample_rate,
+            lfo_phase: 0.0,
+            jitter_state: 0.0,
+            jitter_target: 0.0,
+            rng: 0x1234_5678,
         }
     }
 
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {
-        let d = self.delay_ms * 0.001 * self.sample_rate;
+        // --- pitch vibrato: a sine LFO on the delay time ---
+        let lfo = libm::sinf(core::f32::consts::TAU * self.lfo_phase);
+        self.lfo_phase += PITCH_LFO_HZ / self.sample_rate;
+        if self.lfo_phase >= 1.0 {
+            self.lfo_phase -= 1.0;
+        }
+        // A negative pitch control starts the swing downwards.
+        let lfo = if self.pitch_cents < 0.0 { -lfo } else { lfo };
+
+        // --- jitter: a smoothed random walk on the delay time ---
+        self.jitter_target = clamp(self.jitter_target + next_random(&mut self.rng) * 0.06, -1.0, 1.0);
+        self.jitter_state += (self.jitter_target - self.jitter_state) * 0.001;
+        let jitter_samples = self.jitter_state * self.jitter * 60.0;
+
+        let mod_samples = pitch_mod_samples(self.pitch_cents, self.sample_rate) * lfo;
+        let d = self.delay_ms * 0.001 * self.sample_rate + mod_samples + jitter_samples;
+
         let y = self.line.read_at(d);
         self.line.write(x + y * self.feedback);
         mix(x, y, self.mix)
@@ -139,6 +195,14 @@ impl<const N: usize> FeedbackDelay<N> {
 
     pub fn set_feedback(&mut self, fb: f32) {
         self.feedback = clamp(fb, 0.0, 0.99);
+    }
+
+    pub fn set_pitch_cents(&mut self, cents: f32) {
+        self.pitch_cents = clamp(cents, -1200.0, 1200.0);
+    }
+
+    pub fn set_jitter(&mut self, amount: f32) {
+        self.jitter = clamp(amount, 0.0, 1.0);
     }
 
     pub fn clear(&mut self) {
