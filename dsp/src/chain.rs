@@ -76,6 +76,8 @@ pub struct EffectChain {
     pub pitch_cents: f32,
     /// Glide time toward a new pitch, in ms (0 = instant)
     pub pitch_glide_ms: f32,
+    /// Continuous pitch sweep rate, cents per second
+    pub pitch_rate: f32,
     /// Delay pitch jitter amount, 0..1
     pub jitter: f32,
     /// Reverb mix, 0..1
@@ -106,6 +108,7 @@ impl EffectChain {
             delay_feedback: 0.35,
             pitch_cents: 0.0,
             pitch_glide_ms: 0.0,
+            pitch_rate: 0.0,
             jitter: 0.0,
             reverb_mix: 0.0,
             enabled: true,
@@ -129,6 +132,7 @@ impl EffectChain {
         self.delay.set_feedback(self.delay_feedback);
         self.delay.set_pitch_cents(self.pitch_cents);
         self.delay.set_pitch_glide_ms(self.pitch_glide_ms);
+        self.delay.set_pitch_rate(self.pitch_rate);
         self.delay.set_jitter(self.jitter);
         self.delay.mix = self.delay_mix;
 

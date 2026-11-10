@@ -38,6 +38,7 @@ pub struct Params {
     pub delay_feedback: AtomicU32,
     pub pitch: AtomicU32,
     pub pitch_glide: AtomicU32,
+    pub pitch_rate: AtomicU32,
     pub jitter: AtomicU32,
     pub reverb_mix: AtomicU32,
     pub shaper: AtomicU32,
@@ -67,6 +68,7 @@ impl Params {
             delay_feedback: AtomicU32::new(0.35f32.to_bits()),
             pitch: AtomicU32::new(0.0f32.to_bits()),
             pitch_glide: AtomicU32::new(0.0f32.to_bits()),
+            pitch_rate: AtomicU32::new(0.0f32.to_bits()),
             jitter: AtomicU32::new(0.0f32.to_bits()),
             reverb_mix: AtomicU32::new(0.0f32.to_bits()),
             shaper: AtomicU32::new(0),
@@ -304,6 +306,7 @@ impl AudioState {
         self.chain.delay_feedback = get_f32(&p.delay_feedback);
         self.chain.pitch_cents = get_f32(&p.pitch);
         self.chain.pitch_glide_ms = get_f32(&p.pitch_glide);
+        self.chain.pitch_rate = get_f32(&p.pitch_rate);
         self.chain.jitter = get_f32(&p.jitter);
         self.chain.reverb_mix = get_f32(&p.reverb_mix);
         self.chain.enabled = p.enabled.load(Ordering::Relaxed);
@@ -628,6 +631,7 @@ impl eframe::App for App {
                 slider(ui, "Delay feedback", &self.params.delay_feedback, 0.0..=0.95);
                 slider(ui, "Pitch", &self.params.pitch, -2400.0..=2400.0);
                 slider(ui, "Pitch glide ms", &self.params.pitch_glide, 0.0..=2000.0);
+                slider(ui, "Pitch rate cents/s", &self.params.pitch_rate, -1200.0..=1200.0);
                 slider(ui, "Pitch jitter", &self.params.jitter, 0.0..=1.0);
                 slider(ui, "Reverb mix", &self.params.reverb_mix, 0.0..=1.0);
 

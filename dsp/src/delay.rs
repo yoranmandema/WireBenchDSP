@@ -123,6 +123,11 @@ pub struct PitchShifter<const N: usize> {
     sweep: f32,
     /// Pitch shift target in cents.  0 = unchanged, 1200 = one octave up.
     pub pitch_cents: f32,
+    /// Continuous pitch sweep rate, in cents per second.  This is what makes
+    /// the pitch climb forever instead of settling on a target.
+    pub pitch_rate: f32,
+    /// Accumulated sweep, in cents (grows without bound).
+    pitch_accum: f32,
     /// Glide time toward a new pitch, in ms.  0 = instant.
     pub pitch_glide_ms: f32,
     /// The pitch actually used right now (glides toward `pitch_cents`).
@@ -153,6 +158,8 @@ impl<const N: usize> PitchShifter<N> {
             wp: 0.0,
             sweep: (N / 2) as f32,
             pitch_cents: 0.0,
+            pitch_rate: 0.0,
+            pitch_accum: 0.0,
             pitch_glide_ms: 0.0,
             pitch_current: 0.0,
             pitch_ramp_target: 0.0,
@@ -169,6 +176,11 @@ impl<const N: usize> PitchShifter<N> {
     /// Set the glide time (ms) toward a new pitch.  0 = instant.
     pub fn set_pitch_glide_ms(&mut self, ms: f32) {
         self.pitch_glide_ms = clamp(ms, 0.0, 30_000.0);
+    }
+
+    /// Set the continuous pitch sweep rate, in cents per second.
+    pub fn set_pitch_rate(&mut self, cents_per_sec: f32) {
+        self.pitch_rate = clamp(cents_per_sec, -2400.0, 2400.0);
     }
 
     /// Glide the working pitch toward the target, and return it.
@@ -238,7 +250,13 @@ impl<const N: usize> PitchShifter<N> {
             1.0,
         );
         self.jitter_state += (self.jitter_target - self.jitter_state) * 0.001;
-        let cents = self.glide() + self.jitter_state * self.jitter * 150.0;
+        // Continuous sweep: the working pitch climbs at `pitch_rate`.
+        self.pitch_accum += self.pitch_rate / self.sample_rate;
+        let cents = clamp(
+            self.glide() + self.pitch_accum + self.jitter_state * self.jitter * 150.0,
+            -12_000.0,
+            12_000.0,
+        );
 
         // Read rate: 1.0 = unchanged, 2.0 = octave up, 0.5 = octave down.
         // The delay changes at (1 - rate) samples per sample.
@@ -261,6 +279,7 @@ impl<const N: usize> PitchShifter<N> {
         self.sweep = (N / 2) as f32;
         self.pitch_current = self.pitch_cents;
         self.pitch_ramping = false;
+        self.pitch_accum = 0.0;
     }
 }
 
@@ -282,6 +301,8 @@ pub struct FeedbackDelay<const N: usize, const P: usize = N> {
     pub mix: f32,
     /// Static pitch shift in cents (-2400..+2400).  0 = plain delay.
     pub pitch_cents: f32,
+    /// Continuous pitch sweep rate, cents per second.
+    pub pitch_rate: f32,
     /// Random pitch wander amount, 0..1.
     pub jitter: f32,
     /// Glide time toward a new pitch, in ms.  0 = instant.
@@ -298,6 +319,7 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
             feedback: 0.4,
             mix: 0.5,
             pitch_cents: 0.0,
+            pitch_rate: 0.0,
             jitter: 0.0,
             pitch_glide_ms: 0.0,
             sample_rate,
@@ -310,7 +332,9 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
         self.pitch.pitch_cents = self.pitch_cents;
         self.pitch.jitter = self.jitter;
         self.pitch.pitch_glide_ms = self.pitch_glide_ms;
-        let pitching = self.pitch_cents != 0.0 || self.jitter != 0.0;
+        self.pitch.pitch_rate = self.pitch_rate;
+        let pitching =
+            self.pitch_cents != 0.0 || self.jitter != 0.0 || self.pitch_rate != 0.0;
 
         // Compensate for the shifter's latency so the delay time stays put.
         let mut d = self.delay_ms * 0.001 * self.sample_rate;
@@ -351,6 +375,10 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
 
     pub fn set_pitch_glide_ms(&mut self, ms: f32) {
         self.pitch_glide_ms = clamp(ms, 0.0, 30_000.0);
+    }
+
+    pub fn set_pitch_rate(&mut self, cents_per_sec: f32) {
+        self.pitch_rate = clamp(cents_per_sec, -2400.0, 2400.0);
     }
 
     pub fn clear(&mut self) {

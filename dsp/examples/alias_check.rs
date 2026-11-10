@@ -353,8 +353,50 @@ fn glide_test() {
     }
 }
 
+/// Verify the continuous sweep rate: the output pitch should keep climbing.
+fn rate_test() {
+    let fs = 48_000.0f32;
+    let f0 = 440.0f32;
+    fn zc_freq(s: &[f32], fs: f32) -> f32 {
+        let mut n = 0usize;
+        for i in 1..s.len() {
+            if s[i - 1] < 0.0 && s[i] >= 0.0 {
+                n += 1;
+            }
+        }
+        n as f32 / (s.len() as f32 / fs)
+    }
+    for rate in [0.0, 300.0, 1200.0] {
+        let mut chain = EffectChain::new(fs);
+        chain.delay_ms = 100.0;
+        chain.delay_mix = 1.0;
+        chain.delay_feedback = 0.0;
+        chain.pitch_cents = 0.0;
+        chain.pitch_rate = rate;
+        chain.distortion_mix = 0.0;
+        chain.distortion_level = 1.0;
+        chain.reverb_mix = 0.0;
+        chain.level = 1.0;
+        chain.update_params();
+
+        let mut out = Vec::new();
+        for i in 0..96_000 {
+            let x = (2.0 * std::f32::consts::PI * f0 * i as f32 / fs).sin();
+            out.push(chain.process_mono(x));
+        }
+        print!("rate {rate:>6.0} cents/s: ");
+        for w in [2_000usize, 20_000, 40_000, 60_000, 80_000] {
+            let f = zc_freq(&out[w..w + 2000], fs);
+            print!("@{:>4} ms {:.0} Hz  ", w * 1000 / fs as usize, f);
+        }
+        println!();
+    }
+}
+
 fn main() {
-    println!("== pitch glide ==");
+    println!("== pitch rate ==");
+    rate_test();
+    println!("\n== pitch glide ==");
     glide_test();
     println!("\n== zero-delay check ==");
     zero_delay_test();
