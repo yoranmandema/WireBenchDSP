@@ -37,7 +37,7 @@ pub mod waveshape;
 pub use biquad::{Biquad, BiquadKind, StereoBiquad};
 pub use chain::EffectChain;
 pub use dc_blocker::DcBlocker;
-pub use delay::{DelayLine, FeedbackDelay};
+pub use delay::{DelayLine, FeedbackDelay, PitchMode, PitchShifter};
 pub use envelope::{Adsr, EnvelopeFollower};
 pub use lfo::{Lfo, LfoShape};
 pub use oversample::{Downsampler2, Oversampler4, Upsampler2};

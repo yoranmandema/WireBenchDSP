@@ -373,6 +373,7 @@ fn rate_test() {
         chain.delay_feedback = 0.0;
         chain.pitch_cents = 0.0;
         chain.pitch_rate = rate;
+        chain.pitch_mode = pedal_dsp::PitchMode::Sweep;
         chain.distortion_mix = 0.0;
         chain.distortion_level = 1.0;
         chain.reverb_mix = 0.0;
@@ -391,6 +392,27 @@ fn rate_test() {
         }
         println!();
     }
+
+    // Same rate, Target mode: the sweep must be ignored and the pitch hold.
+    let mut chain = EffectChain::new(fs);
+    chain.delay_ms = 100.0;
+    chain.delay_mix = 1.0;
+    chain.delay_feedback = 0.0;
+    chain.pitch_cents = 0.0;
+    chain.pitch_rate = 1200.0;
+    chain.pitch_mode = pedal_dsp::PitchMode::Target;
+    chain.distortion_mix = 0.0;
+    chain.distortion_level = 1.0;
+    chain.reverb_mix = 0.0;
+    chain.level = 1.0;
+    chain.update_params();
+    let mut out = Vec::new();
+    for i in 0..96_000 {
+        let x = (2.0 * std::f32::consts::PI * f0 * i as f32 / fs).sin();
+        out.push(chain.process_mono(x));
+    }
+    let f = zc_freq(&out[80_000..90_000], fs);
+    println!("Target mode, rate 1200 c/s: {f:.0} Hz at 1.8 s (should hold at 432 Hz)");
 }
 
 fn main() {

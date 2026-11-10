@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use pedal_dsp::chain::EffectChain;
 use pedal_dsp::waveshape::ShaperKind;
+use pedal_dsp::PitchMode;
 
 const TAU: f32 = std::f32::consts::TAU;
 /// Ring capacity in input samples.
@@ -39,6 +40,7 @@ pub struct Params {
     pub pitch: AtomicU32,
     pub pitch_glide: AtomicU32,
     pub pitch_rate: AtomicU32,
+    pub pitch_sweep: AtomicBool,
     pub jitter: AtomicU32,
     pub reverb_mix: AtomicU32,
     pub shaper: AtomicU32,
@@ -69,6 +71,7 @@ impl Params {
             pitch: AtomicU32::new(0.0f32.to_bits()),
             pitch_glide: AtomicU32::new(0.0f32.to_bits()),
             pitch_rate: AtomicU32::new(0.0f32.to_bits()),
+            pitch_sweep: AtomicBool::new(false),
             jitter: AtomicU32::new(0.0f32.to_bits()),
             reverb_mix: AtomicU32::new(0.0f32.to_bits()),
             shaper: AtomicU32::new(0),
@@ -307,6 +310,11 @@ impl AudioState {
         self.chain.pitch_cents = get_f32(&p.pitch);
         self.chain.pitch_glide_ms = get_f32(&p.pitch_glide);
         self.chain.pitch_rate = get_f32(&p.pitch_rate);
+        self.chain.pitch_mode = if p.pitch_sweep.load(Ordering::Relaxed) {
+            PitchMode::Sweep
+        } else {
+            PitchMode::Target
+        };
         self.chain.jitter = get_f32(&p.jitter);
         self.chain.reverb_mix = get_f32(&p.reverb_mix);
         self.chain.enabled = p.enabled.load(Ordering::Relaxed);
@@ -548,6 +556,7 @@ struct App {
     ring_level: Arc<AtomicUsize>,
     mode: Mode,
     shaper_idx: usize,
+    sweep: bool,
     input_name: String,
     output_name: String,
     input_rate: u32,
@@ -570,6 +579,7 @@ impl App {
             ring_level,
             mode: Mode::Live,
             shaper_idx: 0,
+            sweep: false,
             input_name,
             output_name,
             input_rate,
@@ -579,8 +589,19 @@ impl App {
 }
 
 fn slider(ui: &mut egui::Ui, label: &str, value: &AtomicU32, range: std::ops::RangeInclusive<f32>) {
+    slider_enabled(ui, true, label, value, range);
+}
+
+fn slider_enabled(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    value: &AtomicU32,
+    range: std::ops::RangeInclusive<f32>,
+) {
     let mut v = get_f32(value);
-    if ui.add(egui::Slider::new(&mut v, range).text(label)).changed() {
+    let r = ui.add_enabled(enabled, egui::Slider::new(&mut v, range).text(label));
+    if r.changed() {
         set_f32(value, v);
     }
 }
@@ -631,7 +652,19 @@ impl eframe::App for App {
                 slider(ui, "Delay feedback", &self.params.delay_feedback, 0.0..=0.95);
                 slider(ui, "Pitch", &self.params.pitch, -2400.0..=2400.0);
                 slider(ui, "Pitch glide ms", &self.params.pitch_glide, 0.0..=2000.0);
-                slider(ui, "Pitch rate cents/s", &self.params.pitch_rate, -1200.0..=1200.0);
+                slider_enabled(
+                    ui,
+                    self.sweep,
+                    "Pitch rate cents/s",
+                    &self.params.pitch_rate,
+                    -1200.0..=1200.0,
+                );
+                ui.checkbox(&mut self.sweep, "Continuous sweep (Pitch rate keeps climbing)");
+                if self.sweep {
+                    self.params.pitch_sweep.store(true, Ordering::Relaxed);
+                } else {
+                    self.params.pitch_sweep.store(false, Ordering::Relaxed);
+                }
                 slider(ui, "Pitch jitter", &self.params.jitter, 0.0..=1.0);
                 slider(ui, "Reverb mix", &self.params.reverb_mix, 0.0..=1.0);
 

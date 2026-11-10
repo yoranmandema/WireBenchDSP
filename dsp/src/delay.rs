@@ -105,6 +105,17 @@ impl<const N: usize> AllpassDelayLine<N> {
     }
 }
 
+/// How the pitch shifter treats the incoming controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PitchMode {
+    /// Move to `pitch_cents` (over `pitch_glide_ms`) and hold there.
+    /// `pitch_rate` is ignored.
+    Target,
+    /// Move to `pitch_cents`, then keep sweeping at `pitch_rate` without
+    /// settling.  This is the Shepard-style endless climb.
+    Sweep,
+}
+
 /// A static pitch shifter.
 ///
 /// The write head advances one sample per sample; the read head advances at
@@ -123,11 +134,12 @@ pub struct PitchShifter<const N: usize> {
     sweep: f32,
     /// Pitch shift target in cents.  0 = unchanged, 1200 = one octave up.
     pub pitch_cents: f32,
-    /// Continuous pitch sweep rate, in cents per second.  This is what makes
-    /// the pitch climb forever instead of settling on a target.
+    /// Continuous pitch sweep rate, in cents per second.
     pub pitch_rate: f32,
-    /// Accumulated sweep, in cents (grows without bound).
+    /// Accumulated sweep, in cents (grows without bound in `Sweep` mode).
     pitch_accum: f32,
+    /// Target or continuous sweep.
+    pub mode: PitchMode,
     /// Glide time toward a new pitch, in ms.  0 = instant.
     pub pitch_glide_ms: f32,
     /// The pitch actually used right now (glides toward `pitch_cents`).
@@ -160,6 +172,7 @@ impl<const N: usize> PitchShifter<N> {
             pitch_cents: 0.0,
             pitch_rate: 0.0,
             pitch_accum: 0.0,
+            mode: PitchMode::Target,
             pitch_glide_ms: 0.0,
             pitch_current: 0.0,
             pitch_ramp_target: 0.0,
@@ -181,6 +194,16 @@ impl<const N: usize> PitchShifter<N> {
     /// Set the continuous pitch sweep rate, in cents per second.
     pub fn set_pitch_rate(&mut self, cents_per_sec: f32) {
         self.pitch_rate = clamp(cents_per_sec, -2400.0, 2400.0);
+    }
+
+    /// Switch between holding the target pitch and sweeping continuously.
+    /// Changing mode resets the accumulated sweep so it starts from the
+    /// current pitch rather than jumping.
+    pub fn set_mode(&mut self, mode: PitchMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.pitch_accum = 0.0;
+        }
     }
 
     /// Glide the working pitch toward the target, and return it.
@@ -250,10 +273,18 @@ impl<const N: usize> PitchShifter<N> {
             1.0,
         );
         self.jitter_state += (self.jitter_target - self.jitter_state) * 0.001;
-        // Continuous sweep: the working pitch climbs at `pitch_rate`.
-        self.pitch_accum += self.pitch_rate / self.sample_rate;
+        // Continuous sweep: in Sweep mode the working pitch climbs at
+        // `pitch_rate` instead of settling on the target.
+        if self.mode == PitchMode::Sweep {
+            self.pitch_accum += self.pitch_rate / self.sample_rate;
+        }
+        let sweep = if self.mode == PitchMode::Sweep {
+            self.pitch_accum
+        } else {
+            0.0
+        };
         let cents = clamp(
-            self.glide() + self.pitch_accum + self.jitter_state * self.jitter * 150.0,
+            self.glide() + sweep + self.jitter_state * self.jitter * 150.0,
             -12_000.0,
             12_000.0,
         );
@@ -303,6 +334,8 @@ pub struct FeedbackDelay<const N: usize, const P: usize = N> {
     pub pitch_cents: f32,
     /// Continuous pitch sweep rate, cents per second.
     pub pitch_rate: f32,
+    /// Target-and-hold or continuous sweep.
+    pub pitch_mode: PitchMode,
     /// Random pitch wander amount, 0..1.
     pub jitter: f32,
     /// Glide time toward a new pitch, in ms.  0 = instant.
@@ -320,6 +353,7 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
             mix: 0.5,
             pitch_cents: 0.0,
             pitch_rate: 0.0,
+            pitch_mode: PitchMode::Target,
             jitter: 0.0,
             pitch_glide_ms: 0.0,
             sample_rate,
@@ -333,6 +367,7 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
         self.pitch.jitter = self.jitter;
         self.pitch.pitch_glide_ms = self.pitch_glide_ms;
         self.pitch.pitch_rate = self.pitch_rate;
+        self.pitch.set_mode(self.pitch_mode);
         let pitching =
             self.pitch_cents != 0.0 || self.jitter != 0.0 || self.pitch_rate != 0.0;
 
@@ -379,6 +414,10 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
 
     pub fn set_pitch_rate(&mut self, cents_per_sec: f32) {
         self.pitch_rate = clamp(cents_per_sec, -2400.0, 2400.0);
+    }
+
+    pub fn set_pitch_mode(&mut self, mode: PitchMode) {
+        self.pitch_mode = mode;
     }
 
     pub fn clear(&mut self) {
