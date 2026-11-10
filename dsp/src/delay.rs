@@ -150,8 +150,10 @@ pub struct PitchShifter<const N: usize> {
     pub pitch_rate: f32,
     /// Accumulated sweep, in cents (grows without bound in `Sweep` mode).
     pitch_accum: f32,
-    /// Target or continuous sweep.
+    /// Target, sweep or Shepard.
     pub mode: PitchMode,
+    /// Trigger gate: hold to sweep, release to return to the target.
+    pub sweep_gate: bool,
     /// Glide time toward a new pitch, in ms.  0 = instant.
     pub pitch_glide_ms: f32,
     /// The pitch actually used right now (glides toward `pitch_cents`).
@@ -188,6 +190,7 @@ impl<const N: usize> PitchShifter<N> {
             pitch_rate: 0.0,
             pitch_accum: 0.0,
             mode: PitchMode::Target,
+            sweep_gate: true,
             pitch_glide_ms: 0.0,
             pitch_current: 0.0,
             pitch_ramp_target: 0.0,
@@ -221,6 +224,11 @@ impl<const N: usize> PitchShifter<N> {
             self.mode = mode;
             self.pitch_accum = 0.0;
         }
+    }
+
+    /// Trigger the sweep: hold to sweep, release to return to the target.
+    pub fn set_sweep_gate(&mut self, held: bool) {
+        self.sweep_gate = held;
     }
 
     /// Glide the working pitch toward the target, and return it.
@@ -290,21 +298,39 @@ impl<const N: usize> PitchShifter<N> {
             1.0,
         );
         self.jitter_state += (self.jitter_target - self.jitter_state) * 0.001;
-        // Continuous sweep: in Sweep mode the working pitch climbs at
-        // `pitch_rate` instead of settling on the target.
-        if self.mode == PitchMode::Sweep {
-            self.pitch_accum += self.pitch_rate / self.sample_rate;
+        // Continuous sweep: in Sweep/Shepard mode the working pitch climbs at
+        // `pitch_rate` instead of settling on the target.  The gate makes it
+        // triggerable: hold to sweep, release to sweep back.
+        if self.mode != PitchMode::Target {
+            if self.sweep_gate {
+                self.pitch_accum += self.pitch_rate / self.sample_rate;
+            } else {
+                let step = self.pitch_rate.abs() / self.sample_rate;
+                if self.pitch_accum > 0.0 {
+                    self.pitch_accum = (self.pitch_accum - step).max(0.0);
+                } else if self.pitch_accum < 0.0 {
+                    self.pitch_accum = (self.pitch_accum + step).min(0.0);
+                }
+            }
         }
-        let sweep = if self.mode == PitchMode::Sweep {
-            self.pitch_accum
-        } else {
+        let sweep = if self.mode == PitchMode::Target {
             0.0
+        } else {
+            self.pitch_accum
         };
         let mut cents = clamp(
             self.glide() + sweep + self.jitter_state * self.jitter * 150.0,
             -12_000.0,
             12_000.0,
         );
+
+        // Shepard: wrap the shift into one octave BEFORE it drives the read
+        // rate, so the partials cycle instead of climbing forever.  The filter
+        // below then fades each one out at the top of its octave.
+        if self.mode == PitchMode::Shepard {
+            cents = ((cents % SHEPARD_INTERVAL_CENTS) + SHEPARD_INTERVAL_CENTS)
+                % SHEPARD_INTERVAL_CENTS;
+        }
 
         // Read rate: 1.0 = unchanged, 2.0 = octave up, 0.5 = octave down.
         // The delay changes at (1 - rate) samples per sample.
@@ -320,18 +346,16 @@ impl<const N: usize> PitchShifter<N> {
         let b = self.read_at(self.wp - self.sweep - half);
         let mut out = a * w + b * (1.0 - w);
 
-        // Shepard: wrap the shift into one octave and track it with a low-pass,
-        // so partials fade out at the top of the octave and fade in at the
-        // bottom -- an endless rise that never leaves the spectrum.
+        // Shepard: track the wrapped position with a low-pass, so partials
+        // fade out at the top of the octave and fade in at the bottom.
         if self.mode == PitchMode::Shepard {
-            cents = ((cents % SHEPARD_INTERVAL_CENTS) + SHEPARD_INTERVAL_CENTS)
-                % SHEPARD_INTERVAL_CENTS;
             let target = SHEPARD_CUTOFF_HI
                 - (SHEPARD_CUTOFF_HI - SHEPARD_CUTOFF_LO)
                     * (cents / SHEPARD_INTERVAL_CENTS);
             self.shepard_cutoff += (target - self.shepard_cutoff) * 0.002;
-            let coef =
-                1.0 - libm::expf(-2.0 * core::f32::consts::PI * self.shepard_cutoff / n);
+            // NB: the sample rate, not the buffer size, sets the coefficient.
+            let coef = 1.0
+                - libm::expf(-2.0 * core::f32::consts::PI * self.shepard_cutoff / self.sample_rate);
             self.shepard_state += (out - self.shepard_state) * coef;
             out = self.shepard_state;
         }
@@ -371,8 +395,10 @@ pub struct FeedbackDelay<const N: usize, const P: usize = N> {
     pub pitch_cents: f32,
     /// Continuous pitch sweep rate, cents per second.
     pub pitch_rate: f32,
-    /// Target-and-hold or continuous sweep.
+    /// Trigger-and-hold or continuous sweep.
     pub pitch_mode: PitchMode,
+    /// Trigger gate for the sweep (hold to sweep, release to return).
+    pub sweep_gate: bool,
     /// Random pitch wander amount, 0..1.
     pub jitter: f32,
     /// Glide time toward a new pitch, in ms.  0 = instant.
@@ -391,6 +417,7 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
             pitch_cents: 0.0,
             pitch_rate: 0.0,
             pitch_mode: PitchMode::Target,
+            sweep_gate: true,
             jitter: 0.0,
             pitch_glide_ms: 0.0,
             sample_rate,
@@ -405,8 +432,11 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
         self.pitch.pitch_glide_ms = self.pitch_glide_ms;
         self.pitch.pitch_rate = self.pitch_rate;
         self.pitch.set_mode(self.pitch_mode);
-        let pitching =
-            self.pitch_cents != 0.0 || self.jitter != 0.0 || self.pitch_rate != 0.0;
+        self.pitch.set_sweep_gate(self.sweep_gate);
+        let pitching = self.pitch_cents != 0.0
+            || self.jitter != 0.0
+            || self.pitch_rate != 0.0
+            || self.pitch_mode != PitchMode::Target;
 
         // Compensate for the shifter's latency so the delay time stays put.
         let mut d = self.delay_ms * 0.001 * self.sample_rate;
@@ -455,6 +485,10 @@ impl<const N: usize, const P: usize> FeedbackDelay<N, P> {
 
     pub fn set_pitch_mode(&mut self, mode: PitchMode) {
         self.pitch_mode = mode;
+    }
+
+    pub fn set_sweep_gate(&mut self, held: bool) {
+        self.sweep_gate = held;
     }
 
     pub fn clear(&mut self) {

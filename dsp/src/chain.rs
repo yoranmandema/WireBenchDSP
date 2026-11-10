@@ -80,6 +80,8 @@ pub struct EffectChain {
     pub pitch_rate: f32,
     /// Target-and-hold or continuous sweep.
     pub pitch_mode: PitchMode,
+    /// Trigger gate for the sweep (hold to sweep, release to return).
+    pub sweep_gate: bool,
     /// Delay pitch jitter amount, 0..1
     pub jitter: f32,
     /// Reverb mix, 0..1
@@ -112,6 +114,7 @@ impl EffectChain {
             pitch_glide_ms: 0.0,
             pitch_rate: 0.0,
             pitch_mode: PitchMode::Target,
+            sweep_gate: true,
             jitter: 0.0,
             reverb_mix: 0.0,
             enabled: true,
@@ -137,6 +140,7 @@ impl EffectChain {
         self.delay.set_pitch_glide_ms(self.pitch_glide_ms);
         self.delay.set_pitch_rate(self.pitch_rate);
         self.delay.set_pitch_mode(self.pitch_mode);
+        self.delay.set_sweep_gate(self.sweep_gate);
         self.delay.set_jitter(self.jitter);
         self.delay.mix = self.delay_mix;
 

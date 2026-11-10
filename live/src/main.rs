@@ -41,6 +41,7 @@ pub struct Params {
     pub pitch_glide: AtomicU32,
     pub pitch_rate: AtomicU32,
     pub pitch_mode: AtomicU32,
+    pub sweep_gate: AtomicBool,
     pub jitter: AtomicU32,
     pub reverb_mix: AtomicU32,
     pub shaper: AtomicU32,
@@ -72,6 +73,7 @@ impl Params {
             pitch_glide: AtomicU32::new(0.0f32.to_bits()),
             pitch_rate: AtomicU32::new(0.0f32.to_bits()),
             pitch_mode: AtomicU32::new(0),
+            sweep_gate: AtomicBool::new(true),
             jitter: AtomicU32::new(0.0f32.to_bits()),
             reverb_mix: AtomicU32::new(0.0f32.to_bits()),
             shaper: AtomicU32::new(0),
@@ -315,6 +317,7 @@ impl AudioState {
             2 => PitchMode::Shepard,
             _ => PitchMode::Target,
         };
+        self.chain.sweep_gate = p.sweep_gate.load(Ordering::Relaxed);
         self.chain.jitter = get_f32(&p.jitter);
         self.chain.reverb_mix = get_f32(&p.reverb_mix);
         self.chain.enabled = p.enabled.load(Ordering::Relaxed);
@@ -557,6 +560,7 @@ struct App {
     mode: Mode,
     shaper_idx: usize,
     pitch_mode: u32,
+    sweep_gate: bool,
     input_name: String,
     output_name: String,
     input_rate: u32,
@@ -580,6 +584,7 @@ impl App {
             mode: Mode::Live,
             shaper_idx: 0,
             pitch_mode: 0,
+            sweep_gate: true,
             input_name,
             output_name,
             input_rate,
@@ -674,6 +679,12 @@ impl eframe::App for App {
                     &self.params.pitch_rate,
                     -1200.0..=1200.0,
                 );
+                if self.pitch_mode > 0 {
+                    ui.checkbox(&mut self.sweep_gate, "Sweep running (uncheck to hold the pitch)");
+                    self.params
+                        .sweep_gate
+                        .store(self.sweep_gate, Ordering::Relaxed);
+                }
                 slider(ui, "Pitch jitter", &self.params.jitter, 0.0..=1.0);
                 slider(ui, "Reverb mix", &self.params.reverb_mix, 0.0..=1.0);
 
