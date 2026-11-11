@@ -168,6 +168,12 @@ pub struct Executor {
     params_real: Vec<Vec<f32>>,
     /// Per-node output latency in samples, indexed by node position.
     out_latency: Vec<u32>,
+    /// Node ids, indexed by node position (topological order).
+    ids: Vec<NodeId>,
+    /// Per-node bypass flags, indexed by node position.
+    bypass: Vec<bool>,
+    /// Position of the `io.output` node.
+    output_node: usize,
     pool: Pool,
     /// The buffer slot that receives the raw input.
     input_slot: usize,
@@ -203,7 +209,7 @@ pub enum CompileError {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CompileError::Graph(g) => write!(f, "graph error: {g:?}"),
+            CompileError::Graph(g) => write!(f, "{g}"),
             CompileError::Prepare { node, error } => {
                 write!(f, "prepare failed on node '{node}': {error}")
             }
@@ -428,19 +434,26 @@ impl Executor {
             });
         }
 
-        // The input slot is the first step's output; the output slot is the
-        // last step's input. (The first node has no inputs, so it can never be
-        // preceded by a delay step.)
-        let input_slot = steps
-            .first()
-            .and_then(|s| s.outputs.first().copied())
-            .map(|b| b.0)
-            .ok_or(CompileError::Graph(GraphError::Cycle(Vec::new())))?;
-        let output_slot = steps
-            .last()
-            .and_then(|s| s.inputs.first().copied())
-            .map(|b| b.0)
-            .ok_or(CompileError::Graph(GraphError::Cycle(Vec::new())))?;
+        // Locate the I/O nodes by type, not by position: a dangling branch
+        // (a block whose output goes nowhere yet) can sort after the output.
+        // `validate()` guarantees exactly one of each.
+        let find = |kind: &str| {
+            specs
+                .iter()
+                .position(|s| s.id == kind)
+                .ok_or_else(|| CompileError::Graph(GraphError::Io(format!("no {kind} node"))))
+        };
+        let input_node = find("io.input")?;
+        let output_node = find("io.output")?;
+        let input_slot = *slot_of
+            .get(&(order[input_node].clone(), "out".to_string()))
+            .ok_or_else(|| CompileError::Graph(GraphError::Io("io.input has no 'out' port".into())))?;
+        let output_slot = {
+            let plan = edge_plan
+                .get(&(order[output_node].clone(), "in".to_string()))
+                .ok_or_else(|| CompileError::Graph(GraphError::Io("io.output has no 'in' port".into())))?;
+            plan.delay_slot.unwrap_or(plan.source_slot)
+        };
 
         let pool = Pool::new(next_slot, max_block);
 
@@ -452,6 +465,9 @@ impl Executor {
             params_norm,
             params_real,
             out_latency,
+            bypass: vec![false; order.len()],
+            ids: order,
+            output_node,
             pool,
             input_slot,
             output_slot,
@@ -459,6 +475,39 @@ impl Executor {
             max_block,
             block_index: 0,
         })
+    }
+
+    /// Node ids in executor order; the position is the `node` index used by
+    /// [`set_param_at`](Self::set_param_at) and [`set_bypass_at`](Self::set_bypass_at).
+    pub fn node_ids(&self) -> &[NodeId] {
+        &self.ids
+    }
+
+    /// Set a parameter by index, real value. Real-time safe (no lookup, no
+    /// allocation) — this is what the audio thread calls when the UI turns a
+    /// knob. Returns false if either index is out of range.
+    pub fn set_param_at(&mut self, node: usize, param: usize, real: f32) -> bool {
+        let Some(spec) = self.specs.get(node).and_then(|s| s.params.get(param)) else {
+            return false;
+        };
+        let norm = spec.normalise(real);
+        let real = spec.denormalise(norm); // clamp into range
+        self.params_norm[node][param] = norm;
+        self.params_real[node][param] = real;
+        true
+    }
+
+    /// Bypass a node: its first input is copied to every output. Real-time
+    /// safe. Note the latency pass does not re-run, so bypassing a block that
+    /// declares latency shifts its branch earlier by that amount.
+    pub fn set_bypass_at(&mut self, node: usize, on: bool) -> bool {
+        match self.bypass.get_mut(node) {
+            Some(b) => {
+                *b = on;
+                true
+            }
+            None => false,
+        }
     }
 
     /// The index of a node in the executor, by id.
@@ -519,7 +568,7 @@ impl Executor {
     /// It is inherent to the blocks chosen (a FIR, a pitch shifter) plus any
     /// compensation needed to keep parallel branches in phase.
     pub fn total_latency(&self) -> u32 {
-        self.out_latency.last().copied().unwrap_or(0)
+        self.out_latency.get(self.output_node).copied().unwrap_or(0)
     }
 
     /// The output latency of one node, in samples.
@@ -567,6 +616,16 @@ impl Executor {
             let Some(idx) = step.node_index else {
                 return Err(BlockError::Param("step has neither node nor delay"));
             };
+            if self.bypass[idx] {
+                for out in outs[..no].iter_mut() {
+                    match ins[..ni].first() {
+                        Some(src) => out.copy_from_slice(src),
+                        None => out.fill(0.0),
+                    }
+                }
+                continue;
+            }
+
             let mut ctx = BlockCtx {
                 inputs: &ins[..ni],
                 outputs: &mut outs[..no],

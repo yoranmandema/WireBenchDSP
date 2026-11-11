@@ -1,0 +1,116 @@
+{
+  "name": "Clean",
+  "nodes": [
+    {
+      "id": "in",
+      "block": "io.input",
+      "pos": [
+        30,
+        160
+      ]
+    },
+    {
+      "id": "amp",
+      "block": "amp.basic",
+      "pos": [
+        205,
+        160
+      ],
+      "params": {
+        "voice": 0,
+        "gain": 3.0,
+        "bass": 2.0,
+        "mid": -1.0,
+        "treble": 2.0,
+        "level": -4.0
+      }
+    },
+    {
+      "id": "cab",
+      "block": "cab.sim",
+      "pos": [
+        380,
+        160
+      ]
+    },
+    {
+      "id": "reverb",
+      "block": "time.reverb",
+      "pos": [
+        555,
+        160
+      ],
+      "params": {
+        "mix": 22.0
+      }
+    },
+    {
+      "id": "master",
+      "block": "util.master",
+      "pos": [
+        730,
+        160
+      ]
+    },
+    {
+      "id": "out",
+      "block": "io.output",
+      "pos": [
+        905,
+        160
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": [
+        "in",
+        "out"
+      ],
+      "to": [
+        "amp",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "amp",
+        "out"
+      ],
+      "to": [
+        "cab",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "cab",
+        "out"
+      ],
+      "to": [
+        "reverb",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "reverb",
+        "out"
+      ],
+      "to": [
+        "master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    }
+  ]
+}

@@ -5,7 +5,7 @@
 //! recombination.
 
 use dsp_graph::blocks::{Gain, IoInput, IoOutput, MixSum};
-use dsp_graph::{Block, BlockCtx, BlockError, Executor, Graph, ParamSpec, PortSpec, Unit};
+use dsp_graph::{Block, BlockCtx, BlockError, Executor, Graph, PortSpec, Unit};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 64;
@@ -177,11 +177,18 @@ fn missing_input_is_rejected() {
 /// A cycle is rejected in v1.
 #[test]
 fn cycle_is_rejected() {
+    // in -> mix.a; mix -> a -> b -> mix.b  (a loop through the mixer)
     let mut g = Graph::new();
+    g.add("in", Box::new(IoInput)).unwrap();
+    g.add("mix", Box::new(MixSum::default())).unwrap();
     g.add("a", Box::new(Gain::default())).unwrap();
     g.add("b", Box::new(Gain::default())).unwrap();
+    g.add("out", Box::new(IoOutput)).unwrap();
+    g.connect("in", "out", "mix", "in_a").unwrap();
+    g.connect("mix", "out", "a", "in").unwrap();
     g.connect("a", "out", "b", "in").unwrap();
-    g.connect("b", "out", "a", "in").unwrap();
+    g.connect("b", "out", "mix", "in_b").unwrap();
+    g.connect("mix", "out", "out", "in").unwrap();
     let err = Executor::compile_owned(&mut g, SR, BLOCK).unwrap_err();
     let msg = format!("{err:?}");
     assert!(msg.contains("Cycle"), "got: {msg}");
@@ -214,7 +221,7 @@ fn registry_builds_blocks() {
     assert!(r.get("util.gain").is_some());
     assert!(r.get("util.mix").is_some());
     assert!(r.get("nope").is_none());
-    let mut b = r.build("util.gain").unwrap();
+    let b = r.build("util.gain").unwrap();
     assert_eq!(b.spec().id, "util.gain");
 }
 
@@ -371,4 +378,78 @@ fn reset_clears_compensation_delays() {
         let out = ex.run(&silent, BLOCK).unwrap();
         assert!(out.iter().all(|&v| v == 0.0), "audio leaked across reset");
     }
+}
+
+// --- editor-shaped graphs ----------------------------------------------------
+
+/// A block whose output goes nowhere must not hijack the graph output, even
+/// if it sorts after `io.output`. (The executor used to take the last step's
+/// input as the output.)
+#[test]
+fn dangling_branch_does_not_become_the_output() {
+    for _ in 0..20 {
+        // HashMap order varies per graph; try several.
+        let mut g = Graph::new();
+        g.add("in", Box::new(IoInput)).unwrap();
+        g.add("amp", Box::new(Gain::default())).unwrap();
+        g.add("dangling", Box::new(Gain::default())).unwrap();
+        g.add("out", Box::new(IoOutput)).unwrap();
+        g.connect("in", "out", "amp", "in").unwrap();
+        g.connect("in", "out", "dangling", "in").unwrap();
+        g.connect("amp", "out", "out", "in").unwrap();
+        g.set_param_real("amp", "gain", 6.0).unwrap();
+        g.set_param_real("dangling", "gain", -40.0).unwrap();
+        let mut ex = Executor::compile_owned(&mut g, SR, BLOCK).unwrap();
+        let out = ex.run(&impulse(BLOCK), BLOCK).unwrap();
+        assert!((out[0] - 2.0).abs() < 0.01, "output came from the wrong node: {}", out[0]);
+    }
+}
+
+#[test]
+fn two_wires_into_one_input_is_rejected() {
+    let mut g = Graph::new();
+    g.add("in", Box::new(IoInput)).unwrap();
+    g.add("a", Box::new(Gain::default())).unwrap();
+    g.add("out", Box::new(IoOutput)).unwrap();
+    g.connect("in", "out", "a", "in").unwrap();
+    g.connect("in", "out", "out", "in").unwrap();
+    g.connect("a", "out", "out", "in").unwrap();
+    let msg = format!("{}", Executor::compile_owned(&mut g, SR, BLOCK).unwrap_err());
+    assert!(msg.contains("more than one wire"), "got: {msg}");
+}
+
+#[test]
+fn graph_without_output_is_rejected() {
+    let mut g = Graph::new();
+    g.add("in", Box::new(IoInput)).unwrap();
+    g.add("a", Box::new(Gain::default())).unwrap();
+    g.connect("in", "out", "a", "in").unwrap();
+    let msg = format!("{}", Executor::compile_owned(&mut g, SR, BLOCK).unwrap_err());
+    assert!(msg.contains("exactly one output"), "got: {msg}");
+}
+
+/// The real-time parameter path: by index, clamped into range.
+#[test]
+fn set_param_at_by_index_and_clamped() {
+    let mut ex = gain_graph(0.0);
+    let amp = ex.node_ids().iter().position(|id| id == "amp").unwrap();
+    assert!(ex.set_param_at(amp, 0, 6.0));
+    let out = ex.run(&impulse(BLOCK), BLOCK).unwrap();
+    assert!((out[0] - 2.0).abs() < 0.01);
+    assert!(ex.set_param_at(amp, 0, 1000.0)); // clamps to +24 dB
+    assert_eq!(ex.param_real("amp", "gain"), Some(24.0));
+    assert!(!ex.set_param_at(amp, 7, 0.0));
+    assert!(!ex.set_param_at(99, 0, 0.0));
+}
+
+#[test]
+fn bypass_passes_input_through() {
+    let mut ex = gain_graph(-20.0);
+    let amp = ex.node_ids().iter().position(|id| id == "amp").unwrap();
+    ex.set_bypass_at(amp, true);
+    let out = ex.run(&impulse(BLOCK), BLOCK).unwrap();
+    assert_eq!(out[0], 1.0);
+    ex.set_bypass_at(amp, false);
+    let out = ex.run(&impulse(BLOCK), BLOCK).unwrap();
+    assert!((out[0] - 0.1).abs() < 1e-3);
 }

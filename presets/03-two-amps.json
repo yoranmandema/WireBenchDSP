@@ -1,0 +1,195 @@
+{
+  "name": "Two amps in parallel",
+  "nodes": [
+    {
+      "id": "in",
+      "block": "io.input",
+      "pos": [
+        30,
+        170
+      ]
+    },
+    {
+      "id": "lead",
+      "block": "amp.basic",
+      "pos": [
+        205,
+        80
+      ],
+      "params": {
+        "voice": 2,
+        "gain": 7.0,
+        "mid": 2.0,
+        "level": -12.0
+      }
+    },
+    {
+      "id": "cab_lead",
+      "block": "cab.sim",
+      "pos": [
+        380,
+        80
+      ],
+      "params": {
+        "high_cut": 4500.0
+      }
+    },
+    {
+      "id": "clean",
+      "block": "amp.basic",
+      "pos": [
+        205,
+        260
+      ],
+      "params": {
+        "voice": 0,
+        "gain": 2.5,
+        "treble": 3.0,
+        "level": -6.0
+      }
+    },
+    {
+      "id": "cab_clean",
+      "block": "cab.sim",
+      "pos": [
+        380,
+        260
+      ],
+      "params": {
+        "high_cut": 7000.0,
+        "resonance": 2.0
+      }
+    },
+    {
+      "id": "mix",
+      "block": "util.mix",
+      "pos": [
+        555,
+        170
+      ],
+      "params": {
+        "a": 0.7,
+        "b": 0.6
+      }
+    },
+    {
+      "id": "reverb",
+      "block": "time.reverb",
+      "pos": [
+        730,
+        170
+      ],
+      "params": {
+        "mix": 15.0
+      }
+    },
+    {
+      "id": "master",
+      "block": "util.master",
+      "pos": [
+        905,
+        170
+      ]
+    },
+    {
+      "id": "out",
+      "block": "io.output",
+      "pos": [
+        1080,
+        170
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": [
+        "in",
+        "out"
+      ],
+      "to": [
+        "lead",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "in",
+        "out"
+      ],
+      "to": [
+        "clean",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "lead",
+        "out"
+      ],
+      "to": [
+        "cab_lead",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "clean",
+        "out"
+      ],
+      "to": [
+        "cab_clean",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "cab_lead",
+        "out"
+      ],
+      "to": [
+        "mix",
+        "in_a"
+      ]
+    },
+    {
+      "from": [
+        "cab_clean",
+        "out"
+      ],
+      "to": [
+        "mix",
+        "in_b"
+      ]
+    },
+    {
+      "from": [
+        "mix",
+        "out"
+      ],
+      "to": [
+        "reverb",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "reverb",
+        "out"
+      ],
+      "to": [
+        "master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    }
+  ]
+}

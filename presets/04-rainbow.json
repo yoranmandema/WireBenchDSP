@@ -1,0 +1,141 @@
+{
+  "name": "Rainbow (pitch delay)",
+  "nodes": [
+    {
+      "id": "in",
+      "block": "io.input",
+      "pos": [
+        30,
+        160
+      ]
+    },
+    {
+      "id": "amp",
+      "block": "amp.basic",
+      "pos": [
+        205,
+        160
+      ],
+      "params": {
+        "voice": 0,
+        "gain": 3.5,
+        "level": -5.0
+      }
+    },
+    {
+      "id": "cab",
+      "block": "cab.sim",
+      "pos": [
+        380,
+        160
+      ],
+      "params": {
+        "high_cut": 6500.0
+      }
+    },
+    {
+      "id": "pitch",
+      "block": "time.pitchdelay",
+      "pos": [
+        555,
+        160
+      ],
+      "params": {
+        "time": 380.0,
+        "feedback": 60.0,
+        "pitch": 700.0,
+        "mode": 0,
+        "mix": 45.0
+      }
+    },
+    {
+      "id": "reverb",
+      "block": "time.reverb",
+      "pos": [
+        730,
+        160
+      ],
+      "params": {
+        "mix": 30.0
+      }
+    },
+    {
+      "id": "master",
+      "block": "util.master",
+      "pos": [
+        905,
+        160
+      ]
+    },
+    {
+      "id": "out",
+      "block": "io.output",
+      "pos": [
+        1080,
+        160
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": [
+        "in",
+        "out"
+      ],
+      "to": [
+        "amp",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "amp",
+        "out"
+      ],
+      "to": [
+        "cab",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "cab",
+        "out"
+      ],
+      "to": [
+        "pitch",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "pitch",
+        "out"
+      ],
+      "to": [
+        "reverb",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "reverb",
+        "out"
+      ],
+      "to": [
+        "master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    }
+  ]
+}

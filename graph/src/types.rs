@@ -19,6 +19,9 @@ pub enum Unit {
     Cents,
     Ratio,
     Linear,
+    /// A discrete choice. The real value is the option index (`0..len`),
+    /// `min = 0`, `max = len - 1`, curve `Linear`. Blocks round it.
+    Choice(&'static [&'static str]),
 }
 
 impl fmt::Display for Unit {
@@ -31,7 +34,7 @@ impl fmt::Display for Unit {
             Unit::Semitones => "st",
             Unit::Cents => "cents",
             Unit::Ratio => "x",
-            Unit::Linear => "",
+            Unit::Linear | Unit::Choice(_) => "",
         };
         write!(f, "{s}")
     }
@@ -62,6 +65,14 @@ pub struct ParamSpec {
 }
 
 impl ParamSpec {
+    /// The option labels, if this is a choice parameter.
+    pub fn choices(&self) -> Option<&'static [&'static str]> {
+        match self.unit {
+            Unit::Choice(c) => Some(c),
+            _ => None,
+        }
+    }
+
     /// Map a normalised 0..1 value to the parameter's real value.
     pub fn denormalise(&self, t: f32) -> f32 {
         let t = t.clamp(0.0, 1.0);

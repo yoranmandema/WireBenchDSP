@@ -59,6 +59,30 @@ pub enum GraphError {
     Prepare { node: NodeId, error: BlockError },
     /// The graph has a cycle that is not legal (v1: no cycles at all).
     Cycle(Vec<NodeId>),
+    /// Two edges drive the same input port.
+    MultipleInputs { node: NodeId, port: String },
+    /// The graph needs exactly one `io.input` and one `io.output` node.
+    Io(String),
+}
+
+impl std::fmt::Display for GraphError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GraphError::MissingInput { node, port } => write!(f, "'{node}.{port}' is not connected"),
+            GraphError::TypeMismatch { edge, .. } => write!(
+                f,
+                "'{}.{}' → '{}.{}' connects different port kinds",
+                edge.from.0, edge.from.1, edge.to.0, edge.to.1
+            ),
+            GraphError::UnknownNode { which, .. } => write!(f, "unknown node '{which}'"),
+            GraphError::UnknownPort { node, port, .. } => write!(f, "'{node}' has no port '{port}'"),
+            GraphError::Prepare { node, error } => write!(f, "'{node}' failed to prepare: {error}"),
+            GraphError::Cycle(nodes) if nodes.is_empty() => write!(f, "the graph has a loop"),
+            GraphError::Cycle(nodes) => write!(f, "the graph has a loop through {}", nodes.join(" → ")),
+            GraphError::MultipleInputs { node, port } => write!(f, "'{node}.{port}' has more than one wire"),
+            GraphError::Io(msg) => write!(f, "{msg}"),
+        }
+    }
 }
 
 impl Graph {
@@ -201,6 +225,22 @@ impl Graph {
             }
         }
 
+        // At most one edge per input port.
+        let mut seen: HashSet<(&str, &str)> = HashSet::new();
+        for e in &self.edges {
+            if !seen.insert((e.to.0.as_str(), e.to.1.as_str())) {
+                return Err(GraphError::MultipleInputs { node: e.to.0.clone(), port: e.to.1.clone() });
+            }
+        }
+
+        // Exactly one input node and one output node.
+        for (kind, label) in [("io.input", "input"), ("io.output", "output")] {
+            let n = self.nodes.values().filter(|n| n.spec.id == kind).count();
+            if n != 1 {
+                return Err(GraphError::Io(format!("the graph needs exactly one {label} node (found {n})")));
+            }
+        }
+
         // Every audio input port must be driven.
         for (id, node) in &self.nodes {
             for port in &node.spec.inputs {
@@ -273,15 +313,6 @@ impl Graph {
             .iter()
             .filter(|e| e.from.0 == *id)
             .map(|e| e.to.0.clone())
-            .collect()
-    }
-
-    /// Nodes that feed into `id`.
-    fn predecessors(&self, id: &NodeId) -> Vec<NodeId> {
-        self.edges
-            .iter()
-            .filter(|e| e.to.0 == *id)
-            .map(|e| e.from.0.clone())
             .collect()
     }
 
