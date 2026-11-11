@@ -96,8 +96,6 @@ pub fn preset_dir() -> PathBuf {
 // Test sources (no guitar required)
 // ---------------------------------------------------------------------------
 
-const TAU: f32 = std::f32::consts::TAU;
-
 /// A plucked-string riff, Karplus-Strong, polyphonic.
 ///
 /// The pitch glide at the start of each note is what keeps a Karplus-Strong
@@ -115,20 +113,17 @@ struct Voice {
     pos: usize,
     /// Samples left in the note.
     left: usize,
-    freq: f32,
-    from: f32,
-    sr: f32,
     gain: f32,
 }
 
 impl Voice {
-    fn new(sr: f32, freq: f32, from: f32, len: usize, gain: f32) -> Self {
+    fn new(sr: f32, freq: f32, len: usize, gain: f32) -> Self {
         let n = (sr / freq).max(2.0) as usize;
         let mut line = Vec::with_capacity(n);
         for _ in 0..n {
             line.push(rand() * 2.0 - 1.0);
         }
-        Self { line, pos: 0, left: len, freq, from, sr, gain }
+        Self { line, pos: 0, left: len, gain }
     }
 
     fn tick(&mut self) -> f32 {
@@ -185,7 +180,7 @@ impl Riff {
             let chord = CHORDS[(self.step / (sr as usize / 2)) as usize % CHORDS.len()];
             let len = (sr * 0.45) as usize;
             for (k, &f) in chord.iter().enumerate() {
-                self.voices.push(Voice::new(sr, f * (1.0 + k as f32 * 0.001), f, len, 0.22));
+                self.voices.push(Voice::new(sr, f * (1.0 + k as f32 * 0.001), len, 0.22));
             }
             // Keep at most 6 voices; drop the oldest.
             while self.voices.len() > 6 {

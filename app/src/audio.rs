@@ -24,11 +24,12 @@ use std::time::Instant;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use dsp_graph::blocks::builtin_registry;
-use dsp_graph::{Doc, Executor, Registry};
+use dsp_graph::{Executor, Registry};
 
 pub const MAX_BLOCK: usize = 64;
 
 /// f32 in an atomic. Peaks only ever rise, so no CAS loop is needed.
+#[allow(dead_code)]
 pub fn read_f32(a: &AtomicU32) -> f32 {
     f32::from_bits(a.load(Ordering::Relaxed))
 }
@@ -41,15 +42,8 @@ pub struct Meters {
     pub callback_s: AtomicU32,
     pub xruns: AtomicUsize,
     pub out_frames: AtomicUsize,
+    #[allow(dead_code)]
     pub dropped_executors: AtomicUsize,
-    /// A rebuild failed; the UI shows this and keeps the old graph.
-    pub error: AtomicU32,
-}
-
-pub fn set_err(m: &Meters, msg: &str) {
-    // Keep the message out of the hot path: only set the flag here.
-    m.error.store(1, Ordering::Relaxed);
-    let _ = msg;
 }
 
 /// Commands from the UI to the audio thread.
@@ -59,19 +53,18 @@ pub enum Cmd {
     /// Set one param by index. Real-time safe.
     SetParam { node: usize, param: usize, value: f32 },
     SetBypass { node: usize, on: bool },
-    /// The callback measured its frame count; a pending compile can now go.
-    Frames(usize),
-    /// Device/sample rate changed.
-    Restart,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ChannelMode {
     /// Sum the first N input channels (the interface's real inputs).
     First(usize),
+    /// One specific input channel.
+    #[allow(dead_code)]
     One(usize),
 }
 
+#[allow(dead_code)]
 #[inline]
 pub fn pick_channel(frame: &[f32], mode: ChannelMode) -> f32 {
     match mode {
@@ -98,7 +91,9 @@ pub struct Setup {
     pub sample_rate: f32,
     pub out_channels: usize,
     pub block: usize,
+    #[allow(dead_code)]
     pub channel_mode: ChannelMode,
+    #[allow(dead_code)]
     pub latency_frames: usize,
 }
 
@@ -114,8 +109,7 @@ pub struct AudioThread {
     pub meters: Arc<Meters>,
     cmd_rx: Consumer<Cmd>,
     trash_tx: Producer<Executor>,
-    /// Bytes the input callback has produced that the output callback hasn't
-    /// consumed: kept as a sample count, wrapped at capacity.
+    #[allow(dead_code)]
     ring: Ring,
     running: Arc<AtomicBool>,
     source: Arc<AtomicU8>,
@@ -260,10 +254,6 @@ impl AudioThread {
         }
     }
 
-    pub fn ring(&self) -> &Ring {
-        &self.ring
-    }
-
     fn apply(&mut self, cmd: Cmd) {
         match cmd {
             Cmd::Swap(ex, bypass) => {
@@ -293,13 +283,6 @@ impl AudioThread {
                     ex.set_bypass_at(node, on);
                 }
             }
-            Cmd::Frames(f) => {
-                self.block = f.min(MAX_BLOCK).max(1);
-                self.scratch_in.resize(self.block, 0.0);
-                self.scratch_mono.resize(self.block, 0.0);
-                self.scratch_out.resize(self.block * self.setup.out_channels.max(1), 0.0);
-            }
-            Cmd::Restart => {}
         }
     }
 
@@ -364,7 +347,6 @@ impl AudioThread {
 
 /// UI-side handle: everything the audio thread must not touch.
 pub struct Handle {
-    pub doc: Arc<Mutex<Doc>>,
     pub node_ids: Arc<Mutex<Vec<String>>>,
     pub registry: Arc<Registry>,
     pub meters: Arc<Meters>,
@@ -372,32 +354,11 @@ pub struct Handle {
     pub trash_rx: Arc<Mutex<Consumer<Executor>>>,
     pub setup: Arc<Mutex<Setup>>,
     pub sample_rate: f32,
-    pub pending: Arc<AtomicBool>,
     /// 0 = riff, 1 = live input, 2 = silence.
     pub source: Arc<AtomicU8>,
 }
 
 impl Handle {
-    /// Compile the current doc and hand the executor to the audio thread.
-    pub fn rebuild(&self) -> Result<Vec<String>, String> {
-        let doc = self.doc.lock().unwrap();
-        let mut g = doc.build(&self.registry).map_err(|e| e.to_string())?;
-        let setup = self.setup.lock().unwrap();
-        let block = setup.block;
-        drop(setup);
-        let ex = Executor::compile_owned(&mut g, self.sample_rate, block).map_err(|e| e.to_string())?;
-        let ids = ex.node_ids().to_vec();
-        let bypass: Vec<(String, bool)> = doc
-            .nodes
-            .iter()
-            .filter(|n| n.bypass)
-            .map(|n| (n.id.clone(), true))
-            .collect();
-        self.cmd_tx.lock().unwrap().push(Cmd::Swap(ex, bypass)).map_err(|e| e.to_string())?;
-        *self.node_ids.lock().unwrap() = ids.clone();
-        Ok(ids)
-    }
-
     /// Free executors the audio thread finished with. UI thread only.
     pub fn collect_trash(&self) {
         while self.trash_rx.lock().unwrap().pop().is_ok() {}
@@ -428,10 +389,8 @@ pub fn new_engine(
     let (trash_tx, trash_rx) = RingBuffer::<Executor>::new(8);
     let meters = Arc::new(Meters::default());
     let running = Arc::new(AtomicBool::new(true));
-    let doc = Arc::new(Mutex::new(Doc::new("Untitled")));
     let registry = Arc::new(builtin_registry());
     let handle = Handle {
-        doc: doc.clone(),
         cmd_tx: Arc::new(Mutex::new(cmd_tx)),
         node_ids: Arc::new(Mutex::new(Vec::new())),
         registry,
@@ -439,7 +398,6 @@ pub fn new_engine(
         trash_rx: Arc::new(Mutex::new(trash_rx)),
         setup: Arc::new(Mutex::new(setup)),
         sample_rate: setup.sample_rate,
-        pending: Arc::new(AtomicBool::new(false)),
         source,
     };
     (handle, cmd_rx, trash_tx, running)

@@ -45,6 +45,11 @@ pub struct Rig {
     pub channels: Vec<Channel>,
 }
 
+/// The master node id for a channel.
+pub fn master_id(ch: &str) -> String {
+    format!("{ch}__master")
+}
+
 impl Rig {
     pub fn single(name: &str, blocks: Vec<NodeDoc>) -> Self {
         let mut c = Channel::new("ch1", "Channel 1");
@@ -120,10 +125,6 @@ impl Rig {
     pub fn split_id(ch: &str) -> String {
         format!("{ch}__split")
     }
-    pub fn master_id(ch: &str) -> String {
-        format!("{ch}__master")
-    }
-
     /// Lay the rig out as a graph the executor can compile.
     pub fn to_doc(&self) -> Doc {
         let mut doc = Doc::new(self.name.clone());
@@ -155,7 +156,7 @@ impl Rig {
                 doc.nodes.push(b);
             }
             let mut master = NodeDoc {
-                id: Self::master_id(&c.id),
+                id: master_id(&c.id),
                 block: "util.master".into(),
                 params: BTreeMap::new(),
                 bypass: false,
@@ -169,7 +170,7 @@ impl Rig {
             let head = if multi {
                 Self::split_id(&c.id)
             } else {
-                c.blocks.first().map(|b| b.id.clone()).unwrap_or_else(|| Self::master_id(&c.id))
+                c.blocks.first().map(|b| b.id.clone()).unwrap_or_else(|| master_id(&c.id))
             };
             // Routing edges into the head. (A channel's master is wired to
             // the pedal output by the channel-end edge below.)
@@ -177,7 +178,7 @@ impl Rig {
                 let (from_node, from_port) = if src == IN {
                     ("in".to_string(), "out".to_string())
                 } else {
-                    (Self::master_id(src), "out".to_string())
+                    (master_id(src), "out".to_string())
                 };
                 let to_port = if multi {
                     if k == 0 { "in_a" } else { "in_b" }
@@ -205,9 +206,9 @@ impl Rig {
             } else {
                 c.blocks.last().map(|b| b.id.clone()).unwrap_or_else(|| head.clone())
             };
-            doc.edges.push(EdgeDoc { from: [last, "out".into()], to: [Self::master_id(&c.id), "in".into()] });
+            doc.edges.push(EdgeDoc { from: [last, "out".into()], to: [master_id(&c.id), "in".into()] });
             let port = ["a", "b", "c", "d"][ci.min(3)];
-            doc.edges.push(EdgeDoc { from: [Self::master_id(&c.id), "out".into()], to: ["sum".to_string(), port.into()] });
+            doc.edges.push(EdgeDoc { from: [master_id(&c.id), "out".into()], to: ["sum".to_string(), port.into()] });
         }
         // Unused sum inputs are tied to silence via a zero-gain gain node, so
         // the graph's "every input driven" rule holds without a special case.
@@ -254,10 +255,9 @@ impl Rig {
             v.sort();
             v
         };
-        for (k, master) in masters.iter().enumerate() {
+        for master in masters.iter() {
             let mut blocks: Vec<NodeDoc> = Vec::new();
             let mut cur = master.clone();
-            let mut first = master.clone();
             let mut sources: Vec<String> = Vec::new();
             loop {
                 let incoming: Vec<&EdgeDoc> = doc.edges.iter().filter(|e| e.to[0] == cur && e.to[1] == "in").collect();
@@ -273,7 +273,6 @@ impl Rig {
                         }
                     }
                     sources = incoming.iter().map(|e| src_name(&e.from[0])).collect();
-                    first = cur.clone();
                     break;
                 }
                 // `cur` is part of this channel's chain (it isn't the
@@ -286,10 +285,8 @@ impl Rig {
                 let src = incoming[0].from[0].clone();
                 if src == "in" || masters.contains(&src) || src.ends_with("__split") {
                     sources.push(src_name(&src));
-                    first = cur.clone();
                     break;
                 }
-                first = cur.clone();
                 cur = src;
             }
             if sources.is_empty() {

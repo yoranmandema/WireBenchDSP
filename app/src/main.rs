@@ -427,6 +427,15 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle.collect_trash();
+        // Delete removes the selected block.
+        if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+            if let Some((channel, block)) = self.state.selected.clone() {
+                self.rig.remove_block(&channel, &block);
+                self.state.selected = None;
+                self.state.dirty = true;
+                let _ = rebuild(&self.handle, &self.rig);
+            }
+        }
         egui::containers::Panel::top("top").show(ui, |ui| {
             ui::top_bar(ui, &self.handle, &mut self.store, &mut self.rig, &mut self.state, &self.handle.meters);
         });

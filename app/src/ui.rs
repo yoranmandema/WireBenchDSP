@@ -16,7 +16,7 @@ use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Stroke};
 use dsp_graph::{BlockSpec, Category, ParamSpec, Unit};
 
 use crate::audio::{read_f32, Handle, Meters};
-use crate::channels::{Rig, IN, MAX_CHANNELS};
+use crate::channels::{master_id, Rig, IN, MAX_CHANNELS};
 use crate::store::Store;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -47,6 +47,8 @@ pub struct UiState {
     pub source: Source,
     /// Channel whose `+ Block` palette is open.
     pub add_for: Option<String>,
+    /// A block drag in progress: (channel, block id, drag-start y, accumulated offset).
+    pub drag: Option<(String, String, f32, f32)>,
 }
 
 impl Default for UiState {
@@ -58,6 +60,7 @@ impl Default for UiState {
             status: String::new(),
             source: Source::Riff,
             add_for: None,
+            drag: None,
         }
     }
 }
@@ -83,8 +86,8 @@ fn category_color(c: Category) -> Color32 {
     }
 }
 
-/// One block card. Returns `Some(new_index)` if the drag should reorder it.
-pub fn draw_block(ui: &mut egui::Ui, channel: &str, index: usize, spec: &BlockSpec, block: &dsp_graph::NodeDoc, selected: bool) -> Option<usize> {
+/// One block card. Returns the accumulated drag offset in blocks, if any.
+pub fn draw_block(ui: &mut egui::Ui, channel: &str, index: usize, spec: &BlockSpec, block: &dsp_graph::NodeDoc, selected: bool, drag_start: Option<f32>) -> Option<f32> {
     let min = pos2(STRIP_X, STRIP_Y + index as f32 * (BLOCK_H + 8.0));
     let rect = Rect::from_min_size(min, vec2(BLOCK_W, BLOCK_H));
     let painter = ui.painter();
@@ -115,10 +118,10 @@ pub fn draw_block(ui: &mut egui::Ui, channel: &str, index: usize, spec: &BlockSp
         Color32::from_rgb(180, 185, 195),
     );
     let resp = ui.interact(rect, ui.scope_id().with(("block", channel, index)), Sense::click_and_drag());
-    if resp.drag_delta().y.abs() > 2.0 {
-        let step = (resp.drag_delta().y / (BLOCK_H + 8.0)).round() as i32;
-        if step != 0 {
-            return Some((index as i32 + step).max(0) as usize);
+    if let Some(start) = drag_start {
+        if resp.dragged() {
+            let total = resp.interact_pointer_pos().map(|p| p.y - start).unwrap_or(0.0);
+            return Some((total / (BLOCK_H + 8.0)).round());
         }
     }
     None
@@ -334,6 +337,17 @@ pub fn channel_strip(
             return;
         }
     });
+    // Channel output volume. The master node lives in the compiled graph, so
+    // this sends a param change by node id.
+    if let Some(ch) = rig.channel_mut(channel) {
+        let mut vol = ch.master_volume;
+        if ui.add(egui::Slider::new(&mut vol, -60.0..=12.0).text("Volume")).changed() {
+            ch.master_volume = vol;
+            if let Some(idx) = handle.node_index(&master_id(channel)) {
+                handle.push(crate::audio::Cmd::SetParam { node: idx, param: 0, value: vol }).ok();
+            }
+        }
+    }
     ui.label("Source");
     ui.horizontal_wrapped(|ui| {
         let mut srcs = sources.clone();
@@ -373,17 +387,36 @@ pub fn channel_strip(
     });
     ui.separator();
 
+    let drag_channel = state.drag.as_ref().map(|(c, _, _, _)| c.clone());
+    let drag_start = state.drag.as_ref().and_then(|(_, _, s, _)| {
+        ui.input(|i| i.pointer.interact_pos().map(|p| p.y - *s))
+    });
     for (i, block) in blocks.iter().enumerate() {
         let spec = registry.get(&block.block).cloned().unwrap_or_else(|| empty_spec(&block.block));
         let selected = state.selected.as_ref().map(|(c, b)| c == channel && b == &block.id).unwrap_or(false);
-        if let Some(to) = draw_block(ui, channel, i, &spec, block, selected) {
-            if to != i {
-                rig.move_block(channel, &block.id, to);
-                state.dirty = true;
-                let _ = rebuild(handle, rig);
+        let this_drag = if drag_channel.as_deref() == Some(channel) { drag_start } else { None };
+        // Begin a drag when this block is dragged and none is in progress.
+        if this_drag.is_none() && state.drag.is_none() {
+            let min = pos2(STRIP_X, STRIP_Y + i as f32 * (BLOCK_H + 8.0));
+            let rect = Rect::from_min_size(min, vec2(BLOCK_W, BLOCK_H));
+            let r = ui.interact(rect, ui.scope_id().with(("blockdrag", channel, i)), Sense::click_and_drag());
+            if r.drag_started() {
+                let y = ui.input(|i| i.pointer.interact_pos().map(|p| p.y)).unwrap_or(0.0);
+                state.drag = Some((channel.to_string(), block.id.clone(), y, 0.0));
+            }
+        }
+        if let Some(steps) = draw_block(ui, channel, i, &spec, block, selected, this_drag) {
+            if steps != 0.0 {
+                let to = (i as f32 + steps).max(0.0) as usize;
+                if to != i {
+                    rig.move_block(channel, &block.id, to);
+                    state.dirty = true;
+                    let _ = rebuild(handle, rig);
+                    // Reset the drag origin so the block doesn't keep moving.
+                    state.drag = None;
+                }
             }
         } else {
-            // Click to select: use a raw interact on the same rect.
             let min = pos2(STRIP_X, STRIP_Y + i as f32 * (BLOCK_H + 8.0));
             let rect = Rect::from_min_size(min, vec2(BLOCK_W, BLOCK_H));
             if ui.interact(rect, ui.scope_id().with(("blockclick", channel, i)), Sense::click()).clicked() {
