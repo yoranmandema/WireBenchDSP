@@ -28,11 +28,17 @@ pub const MAX_DELAY_SAMPLES: usize = 60000;
 
 /// Pitch-shifter buffer length in samples.
 ///
-/// 2400 samples = 50 ms at 48 kHz.  The shifter's latency is half the buffer
-/// (the Hann window peaks at N/2), so this gives ~25 ms -- close to real time.
-/// A longer buffer would lower the latency further but smear the shift,
-/// because the two crossfaded read heads are only N/2 apart and the crossfade
-/// completes in N/|rate-1| samples.
+/// 2400 samples = 50 ms at 48 kHz.  The two crossfaded read heads sit between
+/// N/2 and N samples behind the write head, so the latency is ~25-50 ms
+/// depending on where in the crossfade the signal lands (the measured impulse
+/// peak is at ~N = 50 ms).  A shorter buffer lowers the latency but wraps the
+/// read head faster, which granulates the shift; a longer one smears it,
+/// because the two heads are only N/2 apart and the crossfade completes in
+/// N/|rate-1| samples.
+///
+/// The commercial reference this was measured against (Neural DSP Parallax X
+/// transpose, black-boxed over its AudioUnit) sits at ~12-20 ms, so this
+/// design is roughly 2-3x slower but musically the same idea.
 pub const PITCH_BUFFER_SAMPLES: usize = 2400;
 
 pub struct EffectChain {

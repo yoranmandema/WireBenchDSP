@@ -3,6 +3,23 @@
 version = 4
 
 [[package]]
+name = "dsp-graph"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "pedal-dsp",
+]
+
+[[package]]
+name = "host-sim"
+version = "0.1.0"
+dependencies = [
+ "dsp-graph",
+ "hound",
+ "pedal-dsp",
+]
+
+[[package]]
 name = "hound"
 version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

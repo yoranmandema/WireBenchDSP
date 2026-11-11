@@ -1,0 +1,15 @@
+[package]
+name = "host-sim"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Host simulator: WAV in -> graph -> WAV out, with latency and CPU measurements"
+
+[[bin]]
+name = "host-sim"
+path = "src/main.rs"
+
+[dependencies]
+dsp-graph = { path = "../graph" }
+pedal-dsp = { path = "../dsp" }
+hound = "3.5"

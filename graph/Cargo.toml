@@ -1,0 +1,12 @@
+[package]
+name = "dsp-graph"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Free-form audio graph: Block trait, compile pipeline, executor"
+
+[dependencies]
+pedal-dsp = { path = "../dsp" }
+
+[dev-dependencies]
+hound = "3.5"

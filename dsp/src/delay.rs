@@ -273,7 +273,13 @@ impl<const N: usize> PitchShifter<N> {
         self.buf[i] * (1.0 - frac) + self.buf[j] * frac
     }
 
-    /// Latency this shifter adds, in samples (the sweep centres on N/2).
+    /// Nominal latency this shifter adds, in samples.
+    ///
+    /// The two read heads sit between N/2 and N samples behind the write head
+    /// and the crossfade moves between them, so the *actual* latency is
+    /// time-varying (the measured impulse peak is at ~N).  This returns the
+    /// mid-point, which is the best single value for the delay-time
+    /// compensation in [`FeedbackDelay`].
     #[inline]
     pub fn latency_samples(&self) -> f32 {
         (N / 2) as f32
@@ -282,8 +288,6 @@ impl<const N: usize> PitchShifter<N> {
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {
         let n = N as f32;
-        let half = (N / 2) as f32;
-
         // Write one sample, advance the write head.
         self.buf[self.wp as usize] = x;
         self.wp += 1.0;
@@ -548,6 +552,22 @@ impl<const N: usize> Chorus<N> {
 mod tests {
     use super::*;
 
+    /// Magnitude of the DFT at one frequency, Hann-windowed so that comparing
+    /// neighbouring frequencies is meaningful.
+    fn dft_mag(s: &[f32], fs: f32, f: f32) -> f32 {
+        let n = s.len();
+        let mut re = 0.0f32;
+        let mut im = 0.0f32;
+        for (i, &x) in s.iter().enumerate() {
+            let w = 0.5
+                - 0.5 * libm::cosf(2.0 * core::f32::consts::PI * i as f32 / (n - 1) as f32);
+            let ph = -2.0 * core::f32::consts::PI * f * i as f32 / fs;
+            re += w * x * ph.cos();
+            im += w * x * ph.sin();
+        }
+        (re * re + im * im).sqrt() / n as f32
+    }
+
     #[test]
     fn delay_line_reads_back_samples() {
         let mut d = DelayLine::<16>::new();
@@ -591,5 +611,115 @@ mod tests {
             peak = peak.max(c.process(x).abs());
         }
         assert!(peak < 2.0, "chorus peak {peak}");
+    }
+
+    /// Frequency of the largest DFT magnitude in [lo, hi], and its magnitude.
+    fn peak_freq(s: &[f32], fs: f32, lo: f32, hi: f32) -> (f32, f32) {
+        let n = s.len();
+        let bin = fs / n as f32;
+        let k0 = (lo / bin).ceil().max(1.0) as usize;
+        let k1 = (hi / bin).floor() as usize;
+        let mut best = (0.0f32, 0.0f32);
+        for k in k0..=k1 {
+            let f = k as f32 * bin;
+            let m = dft_mag(s, fs, f);
+            if m > best.1 {
+                best = (f, m);
+            }
+        }
+        best
+    }
+
+    /// A sine in must come out at exactly the shifted frequency: the shifter
+    /// changes the read rate, it must not detune.
+    #[test]
+    fn pitch_shifter_hits_the_target_frequency() {
+        let fs = 48_000.0f32;
+        let f0 = 220.0f32;
+        let n = 16384usize;
+        let mut buf = vec![0.0f32; n];
+        for cents in [0.0f32, 300.0, 600.0, 1200.0, -600.0, -1200.0] {
+            let mut s = PitchShifter::<2400>::new(fs);
+            s.pitch_cents = cents;
+            s.set_pitch_glide_ms(0.0);
+            // Warm up the buffer, then capture a steady-state window.
+            let mut idx = 0usize;
+            for i in 0..(2400 + n) {
+                let x = (2.0 * core::f32::consts::PI * f0 * i as f32 / fs).sin();
+                let y = s.process(x);
+                if i >= 2400 {
+                    buf[idx] = y;
+                    idx += 1;
+                }
+            }
+            let expect = f0 * (2.0f32).powf(cents / 1200.0);
+            let (peak_f, peak_m) = peak_freq(&buf, fs, expect * 0.7, expect * 1.4);
+            let at_expect = dft_mag(&buf, fs, expect);
+            // The expected frequency must sit at (or very near) the spectral
+            // peak.  The crossfade spreads energy into sidebands, so compare
+            // against the peak rather than demanding a narrow lone tone.
+            assert!(
+                at_expect > peak_m * 0.5,
+                "cents {cents}: expected {expect:.1} Hz, peak {peak_f:.1} Hz (mag {peak_m:.4}), mag at expected {at_expect:.4}"
+            );
+        }
+    }
+
+    /// The shifter is a delay-line design, so its latency is tied to the buffer:
+    /// an impulse must come out around N samples later, not immediately.
+    #[test]
+    fn pitch_shifter_latency_is_buffer_bound() {
+        let fs = 48_000.0f32;
+        for cents in [0.0f32, 1200.0, -1200.0] {
+            let mut s = PitchShifter::<2400>::new(fs);
+            s.pitch_cents = cents;
+            s.set_pitch_glide_ms(0.0);
+            let mut peak_idx = 0usize;
+            let mut peak = 0.0f32;
+            for i in 0..4800 {
+                let x = if i == 0 { 1.0f32 } else { 0.0 };
+                let y = s.process(x);
+                if y.abs() > peak {
+                    peak = y.abs();
+                    peak_idx = i;
+                }
+            }
+            assert!(
+                peak_idx >= 1000 && peak_idx <= 2400,
+                "cents {cents}: impulse peak at {peak_idx} samples (expected ~1000-2400)"
+            );
+        }
+    }
+
+    /// With the shifter in the feedback path, the first echo must still land
+    /// near the requested delay (the compensation is approximate because the
+    /// shifter's latency moves with the crossfade, so allow a generous band).
+    #[test]
+    fn feedback_delay_echo_stays_near_the_set_delay() {
+        let fs = 48_000.0f32;
+        for cents in [0.0f32, 600.0, 1200.0, -1200.0] {
+            let mut d = FeedbackDelay::<48000, 2400>::new(fs, 300.0);
+            d.set_pitch_cents(cents);
+            d.set_pitch_mode(PitchMode::Target);
+            d.set_pitch_glide_ms(0.0);
+            d.delay_ms = 300.0;
+            d.feedback = 0.0;
+            d.mix = 1.0;
+            let mut peak_idx = 0usize;
+            let mut peak = 0.0f32;
+            for i in 0..48_000 {
+                let x = if i == 0 { 1.0f32 } else { 0.0 };
+                let y = d.process(x);
+                if y.abs() > peak {
+                    peak = y.abs();
+                    peak_idx = i;
+                }
+            }
+            let ms = peak_idx as f32 / fs * 1000.0;
+            assert!(
+                (250.0..=350.0).contains(&ms),
+                "cents {cents}: echo at {ms:.1} ms (expected ~300 ms)"
+            );
+        }
     }
 }

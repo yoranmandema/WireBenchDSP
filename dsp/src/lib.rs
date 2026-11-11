@@ -11,6 +11,9 @@
 //! - [`oversample`] — 2x/4x oversampling to kill aliasing from nonlinearities
 //! - [`waveshape`] — distortion / rectification / bit-crush
 //! - [`delay`]   — fractional delay lines, feedback delay, chorus
+//! - [`fft`]     — radix-2 FFT used by the phase vocoders
+//! - [`pitch_vocoder`] — timing-preserving pitch shifter (time-stretch + resample)
+//! - [`pitch_remap`] — simpler bin-remap pitch shifter (aliases at some frequencies)
 //! - [`envelope`] — ADSR and envelope follower
 //! - [`lfo`]     — modulation sources
 //! - [`reverb`]  — Freeverb (combs + allpasses)
@@ -26,9 +29,12 @@ pub mod chain;
 pub mod dc_blocker;
 pub mod delay;
 pub mod envelope;
+pub mod fft;
 pub mod fir;
 pub mod lfo;
 pub mod oversample;
+pub mod pitch_remap;
+pub mod pitch_vocoder;
 pub mod reverb;
 pub mod svf;
 pub mod util;
@@ -39,7 +45,10 @@ pub use chain::EffectChain;
 pub use dc_blocker::DcBlocker;
 pub use delay::{DelayLine, FeedbackDelay, PitchMode, PitchShifter};
 pub use envelope::{Adsr, EnvelopeFollower};
+pub use fft::Fft;
 pub use lfo::{Lfo, LfoShape};
+pub use pitch_remap::PitchRemap;
+pub use pitch_vocoder::{PitchVocoder, PITCH_VOCODER_SIZE};
 pub use oversample::{Downsampler2, Oversampler4, Upsampler2};
 pub use reverb::Freeverb;
 pub use svf::{Svf, SvfOutput};
