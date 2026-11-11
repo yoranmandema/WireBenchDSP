@@ -28,7 +28,7 @@ built.
 
 ---
 
-## 2. Hardware status — **decision not finalised**
+## 2. Hardware status — **Raspberry Pi 5**
 
 The user was leaning **Raspberry Pi 5** and already owns:
 - a **M-VAVE "Chocolate"** Bluetooth MIDI foot controller (4 buttons)
@@ -45,6 +45,9 @@ The user was leaning **Raspberry Pi 5** and already owns:
 | Open-source references | **PiPedal**, **Pi-MFX**, **OpenRig**, **coyopedal** — all permissively licensed; read them for architecture, don't vendor them. |
 | Bluetooth MIDI | **Will not work** on a Pi 5 for this use: the built-in BT shares the USB bus with Ethernet and adds jitter. Use the Chocolate over **USB-C wired** (it enumerates as a standard USB-MIDI device). |
 | STM32 path | Still viable and cheaper. `docs/ARCHITECTURE.md` has the full H723 + SGTL5000 design. The DSP library is portable, so nothing is lost by deciding late. |
+
+**STM32 H7 is dropped.** The Pi 5 is the target: NAM models are far beyond an
+H7, and the Pi's CPU headroom is the whole point.
 
 ### The architectural consequence (already applied)
 
@@ -117,6 +120,15 @@ host-sim/                             CLI simulator (no platform deps)
   src/main.rs                         rig builder, bench, palette, impulse, WAV
   src/blocks.rs                       re-exports dsp-graph blocks
 
+app/                                  pedal-app — the Mac/Pi pedal editor
+  src/main.rs                         cpal streams, device pick, eframe app
+  src/audio.rs                        engine: executor in the output callback,
+                                      lock-free cmd queue, riff/silence source
+  src/channels.rs                     Rig: channels of blocks, routing, to/from Doc
+  src/ui.rs                           egui channel strips, palette, inspector
+  src/store.rs                        preset directory, test riff
+presets/                              *.json, shared by app and host-sim
+
 firmware/                             STM32H723 firmware (separate workspace)
   src/main.rs, audio.rs, board.rs, codec.rs, controls.rs
 
@@ -138,71 +150,55 @@ docs/
 ## 4. Where it stands — **all tests green**
 
 ```
-cargo test --workspace     →  11 passed (dsp-graph)
-                              62 passed (pedal-dsp)
-                               2 passed, 1 ignored (examples)
-                              0 failed
+cargo test --workspace     →  99 passed, 0 failed
+                              (dsp 62, graph 20+5+4+5, examples 2, 1 ignored)
 ```
 
 ### What is built and verified
 
-**`dsp` crate** — a real, tested, no_std DSP library. The pitch work is the
-most recent and most interesting:
+**Hardware target: Raspberry Pi 5.** STM32 H7 is dropped. The current phase is
+**prove the concept on the Mac with a UI**, then move to the Pi.
 
-- **`PitchShifter`** (delay-line based) — measured pitch accuracy within
-  **±0.4 cents** over ±2400 cents at 48 kHz. Has three modes: instant jump,
-  **glide/portamento**, and a **continuous sweep rate (cents/sec)** that never
-  settles — the user's specific requirement for a Rainbow-Machine-style effect.
-  Shepard mode (endless rise, bounded spectrum) is implemented.
-- **`PitchVocoder`** (phase vocoder) — implemented this session, and **a real
-  bug was found and fixed** (see §5). Now accurate to **±1.6 cents**.
-- Plus biquads, SVF, FIR, oversampling, waveshaping, envelope, LFO, reverb,
-  DC blocker, FFT, bin-shift and pitch-remap experiment.
+**`dsp` crate** — a real, tested, no_std DSP library (biquads, SVF, FIR,
+oversampling, waveshaping, envelope, LFO, reverb, DC blocker, FFT, pitch
+shifters).
 
-**`graph` crate** — the free-form graph the user asked for:
+**`graph` crate** — the engine:
 
-- `Block` trait with typed audio ports, params, and `prepare/process/reset`.
-- `Graph` with `add`/`connect`/`remove`/`set_param_real`, validation
-  (missing inputs, cycles), and Kahn topological sort.
-- `Executor` — compiles the graph into a flat `Vec<Step>` over a pre-allocated
-  buffer pool. The audio callback walks the step list; **zero allocation** in
-  the audio path. The one `unsafe` boundary is the buffer-pool views, whose
-  invariant (a step's input and output slots are always distinct) is enforced
-  by the planner.
-- `Registry` — id → spec, builds blocks by id. Drives the UI palette.
-- Params are stored **normalised (0..1)** in the graph and **denormalised to
-  real units** (dB/Hz/ms/%) by the executor before reaching the block. Blocks
-  never see a curve. This was a real bug (see §5).
-- `IoInput`/`IoOutput` are the graph boundary; `MixSum` is the recombine node.
+- `Block` trait with typed audio ports, params, `prepare/process/reset`,
+  `latency_samples()`, and a `configure(key, value)` hook for resources.
+- `Graph` with validation (missing inputs, double-driven inputs, cycles) and
+  Kahn topological sort. I/O nodes are located **by type**, not by position.
+- `Executor` — compiles to a flat `Vec<Step>` over a pre-allocated buffer pool.
+  **Zero allocation in `run()` and in every block's `process()`**, enforced by
+  tests that install a counting allocator. `MAX_PORTS = 8` per side.
+- **Latency compensation is implemented.** `latency_samples()` → the executor
+  inserts delay lines on faster branches so parallel paths recombine in phase.
+  Verified with a latent test block (100-sample delay across a block boundary).
+- `Doc` — the preset document (JSON), with real-valued params and a `model`
+  path for NAM blocks. `Doc::build` compiles to a `Graph`.
+- Blocks: `IoInput`, `IoOutput`, `Gain`, `MixSum`, `Sum`, `Master` (limiter),
+  `Overdrive`, `Amp` (2-stage oversampled, 3 voices), `Cab`, `ToneStack`,
+  `Delay`, `PitchDelay`, `Reverb`, **`Nam`**.
 
-**`host-sim`** — runs on the Mac with no hardware:
+**`app` crate** — the Mac/Pi pedal editor (`cargo run -p pedal-app`):
 
-```
-cargo run --release -p host-sim -- --rig demo    --bench
-cargo run --release -p host-sim -- --rig parallel --bench
-cargo run --release -p host-sim -- --palette
-cargo run --release -p host-sim -- --rig demo --impulse
-cargo run --release -p host-sim -- --in input.wav --out output.wav --rig demo
-```
+- **Channel strips.** A channel is an ordered strip of blocks; drag to
+  reorder, click to select, `+ Block` palette, Delete to remove. The **Source**
+  row routes audio in: `In` and/or another channel. Up to 4 channels, each
+  with its own master volume and limiter, summed through one limiter at the
+  output.
+- cpal audio I/O on the Scarlett at 48 kHz; riff / live / silence source;
+  in/out meters; preset load/save to `presets/*.json`.
+- Every structural change rebuilds the executor on the UI thread and hands it
+  to the audio thread over a lock-free queue. The old executor is freed on the
+  UI thread, never in the callback.
+- `--selftest --rig <name>` renders 4 s of audio with no interface attached:
+  peak/RMS per preset, non-finite count, CPU. All six presets pass and sound
+  different.
 
-`host-sim` flags: `--rig <demo|parallel>`, `--bench`, `--impulse`, `--palette`,
-`--in <wav>`, `--out <wav>`.
-
-Two rigs are built in:
-- **`demo`** — in → drive → tone → (dry + delay + reverb) → out
-- **`parallel`** — in → (clean ∥ drive→tone) → mix → out, the bass
-  channel-split patch the user asked for
-
-Measured on the Mac (M-series), 64-frame blocks, 144 000 frames:
-
-| rig | peak | rms | clipped | non-finite | per-block | budget used |
-|---|---|---|---|---|---|---|
-| demo | 1.72 | 0.227 | 1573 | 0 | 1631 ns | 0.1% |
-| parallel | 1.69 | 0.235 | 3170 | 0 | 804 ns | 0.1% |
-
-**Both rigs clip** — the drive + reverb + delay sum exceeds full scale. This is
-a gain-staging gap, not a bug: there is no master volume/limiter block yet.
-**That is the first thing to fix** (see §6).
+**Presets** in `presets/`: 01-clean, 02-crunch, 03-two-amps, 04-rainbow,
+05-endless-rise, 06-nam-amp.
 
 ---
 
@@ -240,71 +236,62 @@ what caught both bugs. Keep using them.
 
 ## 6. Known issues and next steps (in priority order)
 
-### P0 — the graph is not yet a full product
+### P0 — the product
 
-1. **Master volume / limiter.** Both rigs clip. Add a `Master` block (gain +
-   soft limiter) and put it before `IoOutput`. Re-run the rigs; clipping should
-   drop to 0. *This is the most visible remaining defect.*
-2. **Latency compensation is designed but not implemented.** `EXECUTOR.md` §2.4
-   specifies the pass: each node reports `latency_samples()`; the executor
-   inserts delay lines on faster branches so parallel paths recombine in phase.
-   The `Block` trait has no `latency_samples()` yet. **Without this, any
-   parallel branch with different latency will comb-filter.** This matters
-   immediately because the user's headline feature is parallel branches.
+1. **A real `.nam` model to validate against.** The `Nam` block works (test
+   model, 5 tests) but no real capture has been run through it. This is the
+   one thing that decides whether the modelling path is correct.
+2. **Sample-rate mismatch is reported but not fixed.** A 44.1 kHz model fed
+   48 kHz produces silently wrong output. `Nam` records the mismatch; the UI
+   should show it, and the engine should resample or refuse.
 3. **Cycle handling is "reject" only.** `validate()` returns `Cycle`. The design
-   says a loop must contain exactly one delay-owning node; implement that
-   instead of rejecting all cycles.
-4. **Stereo.** Everything is mono. The plan is mono until after the amp, then
-   stereo for reverb/delay. `PortSpec` needs a channel count; the buffer plan
-   needs to allocate 2 slots per stereo buffer.
+   says a loop must contain exactly one delay-owning node.
+4. **Stereo.** Everything is mono. Plan: mono until after the amp, then stereo
+   for reverb/delay. `PortSpec` needs a channel count; the buffer plan needs
+   2 slots per stereo buffer.
+5. **Cab IR.** Convolution with a wav IR; `fir.rs` and `fft.rs` already exist.
+   The `Cab` block is a filter approximation until this lands.
 
-### P1 — the product layer
+### P1 — hardware (Pi 5)
 
-5. **Serialisation.** JSON round-trip for a whole document. No serde in the
-   platform-free crates yet — decide whether to add `serde` (it is `no_std`
-   compatible with `alloc`) or hand-roll. `DSP-BLOCKS-AND-SIMULATOR.md` has a
-   sketch of the format.
-6. **NAM integration.** The first real modelling node. NAM models are `.nam`
-   files; the loader and the inference loop are the work. This is the step that
-   makes it a *modelling* pedal rather than an effects box.
-7. **Cab IR.** Convolution with a wav IR; `fir.rs` and `fft.rs` already exist.
-8. **The UI.** Design says: web UI over a JSON API first, touchscreen later.
-   The same API drives both. The `live/` crate (cpal + egui) is the desktop
-   stand-in and is the fastest way to get knobs on screen.
+6. **Measure latency on the Pi 5.** Target < 10 ms round-trip, ideally < 5 ms.
+   The Mac numbers (4–8% of one core per rig) suggest the Pi will manage, but
+   the callback jitter is the real question.
+7. **Analogue front-end for the Pi.** I2S ADC + DAC (e.g. PCM3060 or a
+   combined codec) — not yet designed. The H723 design in `ANALOG-FRONTEND.md`
+   is the reference for the input conditioning.
 
-### P2 — hardware
+### P2 — polish
 
-9. **Measure latency on the Pi 5.** Until this is done the hardware decision is
-   not actually settled. Target: < 10 ms round-trip, ideally < 5 ms.
-10. **Decide Pi 5 vs STM32 H723.** The software is ready for either. The
-    decision should be driven by the latency measurement and by whether the
-    user wants a screen (Pi) or a purpose-built box (STM32).
-11. **Wiring/bench.** `docs/ANALOG-FRONTEND.md` and `docs/BUILD-AND-FLASH.md`
-    have the H723 design. The Pi path needs a different analogue front-end
-    (I2S ADC + DAC, e.g. PCM3060 or a combined codec) — not yet designed.
-
-### P3 — polish
-
-12. **Preset store, hot-swap, boot, read-only rootfs** (Pi path).
-13. **Control bindings.** The abstraction is "control bindings", not MIDI
-    channels: a binding maps a physical input to a parameter with a range and
-    curve. Same table drives GPIO, expression pedal, MIDI, or a web button.
-    The M-VAVE Chocolate should be used **wired USB-MIDI**, not Bluetooth.
+8. **Preset store, hot-swap, boot, read-only rootfs** (Pi path).
+9. **Control bindings.** A binding maps a physical input to a parameter with a
+   range and curve; the same table drives GPIO, expression pedal, MIDI, or a
+   web button. The M-VAVE Chocolate should be used **wired USB-MIDI**, not
+   Bluetooth.
+10. **Web UI** over a JSON API, for the Pi's touchscreen. The `Doc` format is
+    already the API's body.
 
 ---
 
 ## 7. Conventions the next session must know
 
 - **Params in the graph are normalised (0..1).** `set_param_real` denormalises;
-  `set_param_norm` sets raw. Blocks always receive real values. Never pass a
-  normalised value to a block.
+  blocks always receive real values. Never pass a normalised value to a block.
 - **`Unit::Percent` real values are 0–100**, and the block divides by 100.
-  `Unit::Ratio` real values are 0–1. This tripped us once already.
-- **`cargo test --workspace`** does **not** build `firmware/` or `live/` — they
-  are separate workspaces with their own `target/` dirs.
-- **`graph/` and `host-sim/` are uncommitted** (`git status` shows them as
-  `??`). The `dsp/` changes are partly uncommitted too. **Commit before
-  switching sessions** if you want the work safe.
+  `Unit::Ratio` real values are 0–1.
+- **`Unit::Choice(&[&str])`** is a discrete choice; the real value is the
+  option index, `min = 0`, `max = len - 1`.
+- **`cargo test --workspace`** builds `dsp`, `graph`, `host-sim`, `app`.
+  `firmware/` and `live/` are separate workspaces (the H723 path, now dormant).
+- **The UI edits a `Rig` (channels of blocks), not a `Graph`.** `Rig::to_doc`
+  lays channels out as a graph; `Rig::from_doc` reads a preset back. A
+  `util.master` block is the channel's output, never a strip block.
+- **A channel's Source row is the routing.** A channel fed by several sources
+  gets a `util.mix` split node; all channels sum through one `util.sum` and one
+  output limiter.
+- **The audio callback allocates nothing.** Parameter changes go to the
+  running executor by node/param index (`set_param_at`), so turning a knob
+  never recompiles the graph. Structural changes rebuild on the UI thread.
 - The repo has a `.gitignore`d `target/`; `output.wav` is a generated artifact.
 - No passwordless sudo on this Mac — privileged commands must be handed to the
   user.
@@ -320,35 +307,32 @@ cd ~/Documents/Repos/pedal-dsp
 cargo test --workspace
 cargo build --workspace --release
 
+# the pedal editor (Mac, needs a display and an audio interface)
+cargo run -p pedal-app
+cargo run -q -p pedal-app -- --selftest --rig 02-crunch
+
 # the simulator
-cargo run --release -p host-sim -- --rig demo     --bench
+cargo run --release -p host-sim -- --rig demo --bench
 cargo run --release -p host-sim -- --rig parallel --bench
-cargo run --release -p host-sim -- --palette
-cargo run --release -p host-sim -- --rig demo --impulse
-cargo run --release -p host-sim -- --in input.wav --out output.wav --rig demo
 
 # DSP probes
 cargo run --release -p pedal-dsp --example pitch_probe
-cargo run --release -p pedal-dsp --example vocoder_probe
-cargo run --release -p pedal-dsp --example wav_process -- input.wav output.wav [preset]
+cargo run --release -p pedal-dsp --example wav_process -- in.wav out.wav
 
-# firmware (separate workspace)
-cd firmware && cargo build --release
-
-# desktop live rig (separate workspace)
-cd live && cargo run --release
+# PEDAL_PRESETS overrides the preset directory.
+PEDAL_PRESETS=~/my-presets cargo run -p pedal-app
 ```
 
 ---
 
 ## 9. Open questions for the user
 
-1. **Pi 5 or STM32?** Still open. The latency measurement (P2.9) should decide it.
-2. **Screen?** A Pi with a touchscreen is the fastest route to a Quad-Cortex
-  -like UI. A STM32 box needs a separate display module and a UI protocol.
-3. **How much of the analogue front-end does the user want to build?** They are
-   an electronics beginner and asked for hand-holding. The Pi path needs an
-   I2S ADC/DAC board and a instrument-level input buffer; that is a
-   well-trodden but real electronics project.
-4. **NAM licensing.** NAM models are community-trained; confirm the user is
-   comfortable with that ecosystem before building the loader.
+1. **A `.nam` file.** Which amp did you capture, and where is the file? This
+   unblocks real validation of the modelling path.
+2. **Screen on the Pi?** A touchscreen is the fastest route to a
+   Quad-Cortex-like device; the web UI would drive it.
+3. **How much of the analogue front-end do you want to build?** You are a
+   beginner at electronics; the Pi path needs an I2S codec plus input
+   conditioning, which is a real design task.
+4. **NAM licensing.** NAM models are community-trained; confirm you are happy
+   to use them in a device you might sell.
