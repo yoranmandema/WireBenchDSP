@@ -682,6 +682,7 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<IoOutput>();
     r.add::<Gain>();
     r.add::<MixSum>();
+    r.add::<Sum>();
     r.add::<Master>();
     r.add::<Overdrive>();
     r.add::<Amp>();
@@ -691,4 +692,57 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<PitchDelay>();
     r.add::<Reverb>();
     r
+}
+
+/// A four-input summer. The output stage of a multi-channel rig: every
+/// channel master feeds one input, so the pedal's output is their sum.
+#[derive(Default)]
+pub struct Sum {
+    levels: [f32; 4],
+}
+
+impl Block for Sum {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "util.sum",
+            name: "Sum",
+            category: Category::Split,
+            inputs: vec![
+                PortSpec::audio("a"),
+                PortSpec::audio("b"),
+                PortSpec::audio("c"),
+                PortSpec::audio("d"),
+            ],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec { id: "a", name: "A", unit: Unit::Ratio, min: 0.0, max: 1.0, default: 1.0, curve: Curve::Linear },
+                ParamSpec { id: "b", name: "B", unit: Unit::Ratio, min: 0.0, max: 1.0, default: 1.0, curve: Curve::Linear },
+                ParamSpec { id: "c", name: "C", unit: Unit::Ratio, min: 0.0, max: 1.0, default: 1.0, curve: Curve::Linear },
+                ParamSpec { id: "d", name: "D", unit: Unit::Ratio, min: 0.0, max: 1.0, default: 1.0, curve: Curve::Linear },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+    fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        for i in 0..4 {
+            self.levels[i] = ctx.param(i);
+        }
+        let input = ctx.inputs;
+        let out = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let mut s = 0.0;
+            for (k, inp) in input.iter().enumerate() {
+                if k < 4 {
+                    s += inp.get(i).copied().unwrap_or(0.0) * self.levels[k];
+                }
+            }
+            out[i] = s;
+        }
+        Ok(())
+    }
+    fn reset(&mut self) {}
 }

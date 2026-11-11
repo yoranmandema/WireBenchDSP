@@ -31,11 +31,46 @@
       ]
     },
     {
+      "id": "amp__master",
+      "block": "util.master",
+      "pos": [
+        1080,
+        0
+      ],
+      "params": {
+        "volume": 0.0,
+        "ceiling": -1.0
+      }
+    },
+    {
+      "id": "dry",
+      "block": "util.gain",
+      "pos": [
+        555,
+        100
+      ],
+      "params": {
+        "gain": -3.0
+      }
+    },
+    {
+      "id": "dry__master",
+      "block": "util.master",
+      "pos": [
+        1080,
+        0
+      ],
+      "params": {
+        "volume": 0.0,
+        "ceiling": -1.0
+      }
+    },
+    {
       "id": "pitch",
       "block": "time.pitchdelay",
       "pos": [
         555,
-        80
+        260
       ],
       "params": {
         "time": 250.0,
@@ -44,6 +79,18 @@
         "rate": 150.0,
         "mode": 2,
         "mix": 100.0
+      }
+    },
+    {
+      "id": "pitch__master",
+      "block": "util.master",
+      "pos": [
+        1080,
+        0
+      ],
+      "params": {
+        "volume": 0.0,
+        "ceiling": -1.0
       }
     },
     {
@@ -70,12 +117,16 @@
       }
     },
     {
-      "id": "master",
+      "id": "mix__master",
       "block": "util.master",
       "pos": [
         1080,
-        170
-      ]
+        0
+      ],
+      "params": {
+        "volume": 0.0,
+        "ceiling": -1.0
+      }
     },
     {
       "id": "out",
@@ -113,13 +164,23 @@
         "out"
       ],
       "to": [
-        "mix",
-        "in_a"
+        "amp__master",
+        "in"
       ]
     },
     {
       "from": [
-        "cab",
+        "amp__master",
+        "out"
+      ],
+      "to": [
+        "dry",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "amp__master",
         "out"
       ],
       "to": [
@@ -129,7 +190,37 @@
     },
     {
       "from": [
+        "dry",
+        "out"
+      ],
+      "to": [
+        "dry__master",
+        "in"
+      ]
+    },
+    {
+      "from": [
         "pitch",
+        "out"
+      ],
+      "to": [
+        "pitch__master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "dry__master",
+        "out"
+      ],
+      "to": [
+        "mix",
+        "in_a"
+      ]
+    },
+    {
+      "from": [
+        "pitch__master",
         "out"
       ],
       "to": [
@@ -153,13 +244,43 @@
         "out"
       ],
       "to": [
-        "master",
+        "mix__master",
         "in"
       ]
     },
     {
       "from": [
-        "master",
+        "amp__master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "dry__master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "pitch__master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "mix__master",
         "out"
       ],
       "to": [

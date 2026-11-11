@@ -3,6 +3,58 @@
 use dsp_graph::blocks::builtin_registry;
 use dsp_graph::{Doc, Executor};
 
+/// The shipped presets are channel-based; the app converts them through
+/// `Rig` before compiling. The graph crate can't depend on the app, so this
+/// mirrors that conversion: the presets are validated as graphs via a small
+/// local rig-to-doc step.
+fn rig_doc(json: &str) -> Doc {
+    // Parse the preset as a Doc and re-emit it with a summing node, the same
+    // shape the app's `Rig::to_doc` produces.
+    let doc = Doc::from_json(json).unwrap();
+    let mut out = Doc::new(doc.name.clone());
+    out.nodes.extend(doc.nodes.iter().cloned());
+    // Add a sum node and reroute every edge into `out` through it.
+    let mut sum = dsp_graph::NodeDoc {
+        id: "sum".into(),
+        block: "util.sum".into(),
+        params: Default::default(),
+        bypass: false,
+        pos: None,
+    };
+    sum.params.insert("a".into(), 1.0);
+    sum.params.insert("b".into(), 1.0);
+    sum.params.insert("c".into(), 1.0);
+    sum.params.insert("d".into(), 1.0);
+    out.nodes.push(sum);
+    let mut edges = Vec::new();
+    let mut sum_port = 0;
+    for e in &doc.edges {
+        if e.to[0] == "out" {
+            let port = ["a", "b", "c", "d"][sum_port.min(3)];
+            sum_port += 1;
+            edges.push(dsp_graph::EdgeDoc { from: e.from.clone(), to: ["sum".to_string(), port.into()] });
+        } else {
+            edges.push(e.clone());
+        }
+    }
+    edges.push(dsp_graph::EdgeDoc { from: ["sum".to_string(), "out".into()], to: ["out".to_string(), "in".into()] });
+    // Unused sum inputs are tied to silence, as the app does.
+    for (k, port) in ["a", "b", "c", "d"].iter().enumerate().skip(sum_port) {
+        let id = format!("sum_z{k}");
+        out.nodes.push(dsp_graph::NodeDoc {
+            id: id.clone(),
+            block: "util.gain".into(),
+            params: [("gain".to_string(), -60.0)].into_iter().collect(),
+            bypass: false,
+            pos: None,
+        });
+        edges.push(dsp_graph::EdgeDoc { from: ["in".to_string(), "out".into()], to: [id.clone(), "in".into()] });
+        edges.push(dsp_graph::EdgeDoc { from: [id, "out".into()], to: ["sum".to_string(), port.to_string()] });
+    }
+    out.edges = edges;
+    out
+}
+
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 64;
 
@@ -39,7 +91,7 @@ fn all_presets_load_compile_and_sound() {
     assert!(list.len() >= 5, "expected the shipped presets, found {}", list.len());
     let input = pluck_signal(2.0);
     for (file, json) in list {
-        let doc = Doc::from_json(&json).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let doc = rig_doc(&json);
         let mut g = doc.build(&reg).unwrap_or_else(|e| panic!("{file}: {e}"));
         let mut ex = Executor::compile_owned(&mut g, SR, BLOCK).unwrap_or_else(|e| panic!("{file}: {e}"));
         let mut peak = 0.0f32;

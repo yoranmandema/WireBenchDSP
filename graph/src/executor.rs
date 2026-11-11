@@ -637,6 +637,7 @@ impl Executor {
                 block_index: self.block_index,
             };
             self.nodes[idx].process(&mut ctx)?;
+
         }
 
         self.block_index = self.block_index.wrapping_add(1);

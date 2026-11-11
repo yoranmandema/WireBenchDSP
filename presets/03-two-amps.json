@@ -61,6 +61,30 @@
       }
     },
     {
+      "id": "lead__master",
+      "block": "util.master",
+      "pos": [
+        1080,
+        0
+      ],
+      "params": {
+        "volume": 0.0,
+        "ceiling": -1.0
+      }
+    },
+    {
+      "id": "clean__master",
+      "block": "util.master",
+      "pos": [
+        1080,
+        0
+      ],
+      "params": {
+        "volume": 0.0,
+        "ceiling": -1.0
+      }
+    },
+    {
       "id": "mix",
       "block": "util.mix",
       "pos": [
@@ -84,18 +108,22 @@
       }
     },
     {
-      "id": "master",
+      "id": "mix__master",
       "block": "util.master",
       "pos": [
-        905,
-        170
-      ]
+        1080,
+        0
+      ],
+      "params": {
+        "volume": 0.0,
+        "ceiling": -1.0
+      }
     },
     {
       "id": "out",
       "block": "io.output",
       "pos": [
-        1080,
+        1255,
         170
       ]
     }
@@ -147,13 +175,33 @@
         "out"
       ],
       "to": [
+        "lead__master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "cab_clean",
+        "out"
+      ],
+      "to": [
+        "clean__master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "lead__master",
+        "out"
+      ],
+      "to": [
         "mix",
         "in_a"
       ]
     },
     {
       "from": [
-        "cab_clean",
+        "clean__master",
         "out"
       ],
       "to": [
@@ -177,13 +225,33 @@
         "out"
       ],
       "to": [
-        "master",
+        "mix__master",
         "in"
       ]
     },
     {
       "from": [
-        "master",
+        "lead__master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "clean__master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "mix__master",
         "out"
       ],
       "to": [
