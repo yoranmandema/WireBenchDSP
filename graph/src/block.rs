@@ -63,6 +63,14 @@ pub trait Block: Send {
     fn latency_samples(&self) -> u32 {
         0
     }
+
+    /// Configure the block from its preset data. Called at build time, before
+    /// [`prepare`](Self::prepare), never on the audio thread. The default
+    /// ignores the value; blocks that load resources (a NAM model, a cab IR)
+    /// override it.
+    fn configure(&mut self, _key: &str, _value: &str) -> Result<(), BlockError> {
+        Ok(())
+    }
 }
 
 /// A block that can be constructed by the registry.

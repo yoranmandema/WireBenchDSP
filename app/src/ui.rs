@@ -176,7 +176,7 @@ pub fn param_control(ui: &mut egui::Ui, spec: &ParamSpec, value: &mut f32) -> bo
 }
 
 /// The inspector for the selected block.
-pub fn inspector(ui: &mut egui::Ui, rig: &mut Rig, sel: &(String, String), spec: &BlockSpec, handle: &Handle) {
+pub fn inspector(ui: &mut egui::Ui, rig: &mut Rig, sel: &(String, String), spec: &BlockSpec, handle: &Handle, state: &mut UiState) {
     ui.heading(spec.name);
     ui.label(format!("{} · {}", spec.id, spec.category));
     ui.separator();
@@ -202,6 +202,29 @@ pub fn inspector(ui: &mut egui::Ui, rig: &mut Rig, sel: &(String, String), spec:
             }
             if bypass_changed {
                 handle.push(crate::audio::Cmd::SetBypass { node: idx, on: bypass }).ok();
+            }
+        }
+    }
+    // NAM blocks: load a `.nam` file.
+    if spec.id == "mod.nam" {
+        ui.separator();
+        ui.label(egui::RichText::new("Model").strong());
+        let current = rig.channel(&sel.0).and_then(|c| c.blocks.iter().find(|b| b.id == sel.1)).and_then(|b| b.model.clone());
+        match current {
+            Some(path) => ui.label(format!("{path}")),
+            None => ui.label(egui::RichText::new("no model loaded").weak()),
+        };
+        if ui.button("Load .nam…").clicked() {
+            if let Some(path) = rfd::FileDialog::new().add_filter("NAM model", &["nam"]).pick_file() {
+                let path = path.to_string_lossy().into_owned();
+                if let Some(ch) = rig.channel_mut(&sel.0) {
+                    if let Some(b) = ch.blocks.iter_mut().find(|b| b.id == sel.1) {
+                        b.model = Some(path);
+                    }
+                }
+                if let Err(e) = rebuild(handle, rig) {
+                    state.status = e;
+                }
             }
         }
     }

@@ -691,6 +691,7 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<Delay>();
     r.add::<PitchDelay>();
     r.add::<Reverb>();
+    r.add::<Nam>();
     r
 }
 
@@ -746,3 +747,172 @@ impl Block for Sum {
     }
     fn reset(&mut self) {}
 }
+
+// ---------------------------------------------------------------------------
+// NAM (Neural Amp Modeler)
+// ---------------------------------------------------------------------------
+
+use std::cell::RefCell;
+
+/// A Neural Amp Modeler model: the actual amp capture.
+///
+/// `nam-rs` does the inference (WaveNet / LSTM / A2 containers) with no
+/// allocation on the audio path. The model is loaded at compile time and held
+/// behind a `RefCell` because the `Block` trait's `process` takes `&mut self`
+/// but the model is built once and only its streaming state changes.
+///
+/// **The model must be fed at its own sample rate.** A `.nam` captured at
+/// 48 kHz fed 44.1 kHz produces silently wrong output. `prepare` records the
+/// mismatch and the executor reports it; the UI shows it.
+pub struct Nam {
+    model: RefCell<Option<nam_rs::Model>>,
+    nam: RefCell<Option<nam_rs::NamModel>>,
+    in_gain: f32,
+    out_level: f32,
+    mix: f32,
+    /// Model sample rate vs. the rate the block was prepared at.
+    rate_mismatch: RefCell<Option<(f64, f32)>>,
+    scratch: RefCell<Vec<f32>>,
+}
+
+impl Default for Nam {
+    fn default() -> Self {
+        Self {
+            model: RefCell::new(None),
+            nam: RefCell::new(None),
+            in_gain: 0.0,
+            out_level: 0.0,
+            mix: 1.0,
+            rate_mismatch: RefCell::new(None),
+            scratch: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl Nam {
+    /// Load a `.nam` file. Call this before `prepare`; the model is built at
+    /// prepare time (off the audio thread).
+    pub fn load(&self, path: &str) -> Result<(), String> {
+        let m = nam_rs::NamModel::from_file(path).map_err(|e| e.to_string())?;
+        *self.nam.borrow_mut() = Some(m);
+        Ok(())
+    }
+
+    /// Load from JSON text (used by tests and by the preset loader).
+    pub fn load_json(&self, json: &str) -> Result<(), String> {
+        let m = nam_rs::NamModel::from_json_str(json).map_err(|e| e.to_string())?;
+        *self.nam.borrow_mut() = Some(m);
+        Ok(())
+    }
+
+    /// Load a `.nam` file from disk. Convenience over reading +
+    /// [`Self::load_json`]; kept here so the block owns its file format.
+    pub fn load_file(&self, path: &str) -> Result<(), String> {
+        let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        self.load_json(&text)
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.nam.borrow().is_some()
+    }
+
+    /// The model's expected sample rate, if loaded.
+    pub fn expected_rate(&self) -> Option<f64> {
+        self.nam.borrow().as_ref().map(|m| m.expected_sample_rate())
+    }
+
+    /// The model's display name, if the file carries metadata.
+    pub fn display_name(&self) -> String {
+        self.nam
+            .borrow()
+            .as_ref()
+            .map(|m| {
+                let md = m.metadata_typed();
+                md.name.unwrap_or_else(|| "NAM model".into())
+            })
+            .unwrap_or_else(|| "NAM (no model)".into())
+    }
+}
+
+impl Block for Nam {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "mod.nam",
+            name: "NAM",
+            category: Category::Modelling,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec { id: "gain", name: "Input gain", unit: Unit::Decibels, min: -24.0, max: 24.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "level", name: "Output level", unit: Unit::Decibels, min: -30.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "mix", name: "Mix", unit: Unit::Percent, min: 0.0, max: 100.0, default: 100.0, curve: Curve::Linear },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, max_block: usize) -> Result<(), BlockError> {
+        self.rate_mismatch.borrow_mut().take();
+        let expected = match self.nam.borrow().as_ref() {
+            Some(n) => n.expected_sample_rate(),
+            None => {
+                // No model: the block passes audio through, and the UI says so.
+                return Ok(());
+            }
+        };
+        let nam = self.nam.borrow();
+        let nam = nam.as_ref().expect("checked above");
+        let model = nam_rs::Model::from_nam(nam).map_err(|e| BlockError::Resource(e.to_string()))?;
+        if (expected - sr as f64).abs() > 0.5 {
+            *self.rate_mismatch.borrow_mut() = Some((expected, sr));
+        }
+        self.scratch.borrow_mut().resize(max_block, 0.0);
+        *self.model.borrow_mut() = Some(model);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        self.in_gain = ctx.param(0);
+        self.out_level = ctx.param(1);
+        self.mix = ctx.param(2) / 100.0;
+        let g = pedal_dsp::util::db_to_lin(self.in_gain);
+        let out_gain = pedal_dsp::util::db_to_lin(self.out_level);
+        let input = ctx.inputs[0];
+        let out = &mut ctx.outputs[0][..];
+
+        let mut model = self.model.borrow_mut();
+        let Some(model) = model.as_mut() else {
+            // No model loaded: pass through, so the rest of the rig still works.
+            for i in 0..ctx.n {
+                out[i] = input[i] * g;
+            }
+            return Ok(());
+        };
+        let mut scratch = self.scratch.borrow_mut();
+        for i in 0..ctx.n {
+            scratch[i] = input[i] * g;
+        }
+        model.process_buffer(&mut scratch[..ctx.n]);
+        for i in 0..ctx.n {
+            let wet = scratch[i] * out_gain;
+            out[i] = pedal_dsp::util::mix(input[i] * g, wet, self.mix);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        if let Some(m) = self.model.borrow_mut().as_mut() {
+            m.reset();
+        }
+    }
+
+    fn configure(&mut self, key: &str, value: &str) -> Result<(), BlockError> {
+        if key == "model" {
+            self.load_file(value).map_err(BlockError::Resource)
+        } else {
+            Ok(())
+        }
+    }
+}
+

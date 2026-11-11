@@ -449,7 +449,7 @@ impl eframe::App for App {
                         .get(&self.rig.channel(channel).and_then(|c| c.blocks.iter().find(|b| &b.id == block)).map(|b| b.block.clone()).unwrap_or_default())
                         .cloned();
                     if let Some(spec) = spec {
-                        ui::inspector(ui, &mut self.rig, &(channel.clone(), block.clone()), &spec, &self.handle);
+                        ui::inspector(ui, &mut self.rig, &(channel.clone(), block.clone()), &spec, &self.handle, &mut self.state);
                     }
                 }
                 None => {

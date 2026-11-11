@@ -1,0 +1,113 @@
+{
+  "name": "NAM amp",
+  "nodes": [
+    {
+      "id": "in",
+      "block": "io.input",
+      "pos": [
+        30,
+        160
+      ]
+    },
+    {
+      "id": "nam",
+      "block": "mod.nam",
+      "pos": [
+        205,
+        160
+      ],
+      "params": {
+        "gain": 0.0,
+        "level": 0.0,
+        "mix": 100.0
+      }
+    },
+    {
+      "id": "cab",
+      "block": "cab.sim",
+      "pos": [
+        380,
+        160
+      ]
+    },
+    {
+      "id": "reverb",
+      "block": "time.reverb",
+      "pos": [
+        555,
+        160
+      ],
+      "params": {
+        "mix": 20.0
+      }
+    },
+    {
+      "id": "master",
+      "block": "util.master",
+      "pos": [
+        730,
+        160
+      ]
+    },
+    {
+      "id": "out",
+      "block": "io.output",
+      "pos": [
+        905,
+        160
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": [
+        "in",
+        "out"
+      ],
+      "to": [
+        "nam",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "nam",
+        "out"
+      ],
+      "to": [
+        "cab",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "cab",
+        "out"
+      ],
+      "to": [
+        "reverb",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "reverb",
+        "out"
+      ],
+      "to": [
+        "master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    }
+  ]
+}

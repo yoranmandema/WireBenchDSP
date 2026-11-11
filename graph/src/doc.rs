@@ -52,6 +52,9 @@ pub struct NodeDoc {
     /// Canvas position for the editor. Ignored by the engine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pos: Option<[f32; 2]>,
+    /// Path to a `.nam` model file (for `mod.nam` blocks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,11 +124,16 @@ impl Doc {
     pub fn build(&self, reg: &Registry) -> Result<Graph, DocError> {
         let mut g = Graph::new();
         for n in &self.nodes {
-            let block = reg.build(&n.block).ok_or_else(|| DocError::UnknownBlock {
+            let mut block = reg.build(&n.block).ok_or_else(|| DocError::UnknownBlock {
                 node: n.id.clone(),
                 block: n.block.clone(),
             })?;
             let spec = block.spec();
+            if let Some(path) = &n.model {
+                block
+                    .configure("model", path)
+                    .map_err(|e| DocError::Graph(e.to_string()))?;
+            }
             g.add(n.id.clone(), block).map_err(|_| DocError::DuplicateId(n.id.clone()))?;
             for (param, &value) in &n.params {
                 if spec.param_index(param).is_none() {
@@ -174,6 +182,7 @@ impl Doc {
             params: BTreeMap::new(),
             bypass: false,
             pos: Some(pos),
+            model: None,
         });
         id
     }

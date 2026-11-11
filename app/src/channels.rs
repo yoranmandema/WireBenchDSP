@@ -79,7 +79,7 @@ impl Rig {
             id = format!("{stem}{k}");
             k += 1;
         }
-        let n = NodeDoc { id: id.clone(), block: block.into(), params: BTreeMap::new(), bypass: false, pos: Some(pos) };
+        let n = NodeDoc { id: id.clone(), block: block.into(), params: BTreeMap::new(), bypass: false, pos: Some(pos), model: None, };
         self.channel_mut(channel).expect("channel").blocks.push(n);
         id
     }
@@ -128,11 +128,11 @@ impl Rig {
     /// Lay the rig out as a graph the executor can compile.
     pub fn to_doc(&self) -> Doc {
         let mut doc = Doc::new(self.name.clone());
-        doc.nodes.push(NodeDoc { id: "in".into(), block: "io.input".into(), params: BTreeMap::new(), bypass: false, pos: Some([60.0, 400.0]) });
-        doc.nodes.push(NodeDoc { id: "out".into(), block: "io.output".into(), params: BTreeMap::new(), bypass: false, pos: Some([1400.0, 400.0]) });
+        doc.nodes.push(NodeDoc { id: "in".into(), block: "io.input".into(), params: BTreeMap::new(), bypass: false, pos: Some([60.0, 400.0]), model: None, });
+        doc.nodes.push(NodeDoc { id: "out".into(), block: "io.output".into(), params: BTreeMap::new(), bypass: false, pos: Some([1400.0, 400.0]), model: None, });
         // One summing node so every channel master has exactly one wire into
         // the output node (which has a single input port).
-        let mut sum = NodeDoc { id: "sum".into(), block: "util.sum".into(), params: BTreeMap::new(), bypass: false, pos: Some([1250.0, 400.0]) };
+        let mut sum = NodeDoc { id: "sum".into(), block: "util.sum".into(), params: BTreeMap::new(), bypass: false, pos: Some([1250.0, 400.0]), model: None, };
         sum.params.insert("a".into(), 1.0);
         sum.params.insert("b".into(), 1.0);
         sum.params.insert("c".into(), 1.0);
@@ -147,8 +147,7 @@ impl Rig {
                     block: "util.mix".into(),
                     params: BTreeMap::new(),
                     bypass: false,
-                    pos: Some([240.0, y]),
-                });
+                    pos: Some([240.0, y]), model: None, });
             }
             for (i, b) in c.blocks.iter().enumerate() {
                 let mut b = b.clone();
@@ -160,8 +159,7 @@ impl Rig {
                 block: "util.master".into(),
                 params: BTreeMap::new(),
                 bypass: false,
-                pos: Some([400.0 + c.blocks.len() as f32 * 175.0, y]),
-            };
+                pos: Some([400.0 + c.blocks.len() as f32 * 175.0, y]), model: None, };
             master.params.insert("volume".into(), c.master_volume);
             master.params.insert("ceiling".into(), c.master_ceiling);
             doc.nodes.push(master);
@@ -219,8 +217,7 @@ impl Rig {
                 block: "util.gain".into(),
                 params: [("gain".to_string(), -60.0)].into_iter().collect(),
                 bypass: false,
-                pos: Some([1150.0, 200.0 + k as f32 * 60.0]),
-            });
+                pos: Some([1150.0, 200.0 + k as f32 * 60.0]), model: None, });
             doc.edges.push(EdgeDoc { from: ["in".to_string(), "out".into()], to: [id.clone(), "in".into()] });
             doc.edges.push(EdgeDoc { from: [id, "out".into()], to: ["sum".to_string(), port.to_string()] });
         }
@@ -231,8 +228,7 @@ impl Rig {
             block: "util.master".into(),
             params: BTreeMap::new(),
             bypass: false,
-            pos: Some([1320.0, 400.0]),
-        };
+            pos: Some([1320.0, 400.0]), model: None, };
         out_master.params.insert("volume".into(), 0.0);
         out_master.params.insert("ceiling".into(), -1.0);
         doc.nodes.push(out_master);
