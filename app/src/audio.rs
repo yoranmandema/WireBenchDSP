@@ -356,6 +356,8 @@ pub struct Handle {
     pub sample_rate: f32,
     /// 0 = riff, 1 = live input, 2 = silence.
     pub source: Arc<AtomicU8>,
+    /// Nodes whose sample rate doesn't match the host: (node id, expected, host).
+    pub rate_mismatches: Arc<Mutex<Vec<(String, f64, f32)>>>,
 }
 
 impl Handle {
@@ -399,6 +401,7 @@ pub fn new_engine(
         setup: Arc::new(Mutex::new(setup)),
         sample_rate: setup.sample_rate,
         source,
+        rate_mismatches: Arc::new(Mutex::new(Vec::new())),
     };
     (handle, cmd_rx, trash_tx, running)
 }

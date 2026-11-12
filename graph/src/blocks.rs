@@ -772,7 +772,14 @@ pub struct Nam {
     mix: f32,
     /// Model sample rate vs. the rate the block was prepared at.
     rate_mismatch: RefCell<Option<(f64, f32)>>,
+    /// `model_rate / host_rate` once prepared.
+    ratio: RefCell<f32>,
+    /// Resampler state (last four samples) for each direction.
+    up_state: RefCell<[f32; 4]>,
+    down_state: RefCell<[f32; 4]>,
     scratch: RefCell<Vec<f32>>,
+    /// Model-rate scratch, `scratch * ratio` frames.
+    scratch_hi: RefCell<Vec<f32>>,
 }
 
 impl Default for Nam {
@@ -784,7 +791,11 @@ impl Default for Nam {
             out_level: 0.0,
             mix: 1.0,
             rate_mismatch: RefCell::new(None),
+            ratio: RefCell::new(1.0),
+            up_state: RefCell::new([0.0; 4]),
+            down_state: RefCell::new([0.0; 4]),
             scratch: RefCell::new(Vec::new()),
+            scratch_hi: RefCell::new(Vec::new()),
         }
     }
 }
@@ -867,7 +878,11 @@ impl Block for Nam {
         if (expected - sr as f64).abs() > 0.5 {
             *self.rate_mismatch.borrow_mut() = Some((expected, sr));
         }
+        let ratio = (expected as f32 / sr).max(1.0 / 8.0).min(8.0);
+        *self.ratio.borrow_mut() = ratio;
+        let hi = pedal_dsp::resample_out_len(max_block, ratio);
         self.scratch.borrow_mut().resize(max_block, 0.0);
+        self.scratch_hi.borrow_mut().resize(hi, 0.0);
         *self.model.borrow_mut() = Some(model);
         Ok(())
     }
@@ -889,16 +904,40 @@ impl Block for Nam {
             }
             return Ok(());
         };
+        let ratio = *self.ratio.borrow();
         let mut scratch = self.scratch.borrow_mut();
+        let mut scratch_hi = self.scratch_hi.borrow_mut();
+        let mut up = self.up_state.borrow_mut();
+        let mut down = self.down_state.borrow_mut();
+
+        // Host rate → model rate → model → host rate.
         for i in 0..ctx.n {
             scratch[i] = input[i] * g;
         }
-        model.process_buffer(&mut scratch[..ctx.n]);
+        let hi_n = pedal_dsp::resample_out_len(ctx.n, ratio);
+        pedal_dsp::resample(&scratch[..ctx.n], &mut scratch_hi[..hi_n], ratio, &mut up);
+        model.process_buffer(&mut scratch_hi[..hi_n]);
+        pedal_dsp::resample(&scratch_hi[..hi_n], &mut scratch[..ctx.n], 1.0 / ratio, &mut down);
+
         for i in 0..ctx.n {
             let wet = scratch[i] * out_gain;
             out[i] = pedal_dsp::util::mix(input[i] * g, wet, self.mix);
         }
         Ok(())
+    }
+
+    fn rate_mismatch(&self) -> Option<(f64, f32)> {
+        *self.rate_mismatch.borrow()
+    }
+
+    fn latency_samples(&self) -> u32 {
+        // Cubic resampling is linear-phase with a 2-sample group delay; the
+        // model itself is causal. The executor compensates for this.
+        if (*self.ratio.borrow() - 1.0).abs() < 1e-6 {
+            0
+        } else {
+            2
+        }
     }
 
     fn reset(&mut self) {

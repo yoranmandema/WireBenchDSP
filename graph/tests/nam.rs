@@ -192,3 +192,95 @@ fn doc_build_configures_the_model_path() {
     assert!(peak > 0.0, "model from preset produced no output");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// --- sample-rate mismatch ----------------------------------------------------
+
+/// A 44.1 kHz model fed at 48 kHz must be reported and resampled, not run
+/// at the wrong rate.
+#[test]
+fn mismatch_is_reported_and_resampled() {
+    let json = ir_model().replace("48000.0", "44100.0");
+    let mut nam = Nam::default();
+    nam.load_json(&json).unwrap();
+    nam.prepare(SR, BLOCK).unwrap();
+    assert_eq!(nam.rate_mismatch(), Some((44_100.0, SR)));
+    // Resampling costs group delay, and the executor must compensate.
+    assert!(nam.latency_samples() > 0);
+
+    let mut g = Graph::new();
+    g.add("in", Box::new(dsp_graph::blocks::IoInput)).unwrap();
+    g.add("nam", Box::new(nam)).unwrap();
+    g.add("out", Box::new(dsp_graph::blocks::IoOutput)).unwrap();
+    g.connect("in", "out", "nam", "in").unwrap();
+    g.connect("nam", "out", "out", "in").unwrap();
+    let mut ex = Executor::compile_owned(&mut g, SR, BLOCK).unwrap();
+    assert_eq!(ex.total_latency(), 2, "the executor should account for the resampler");
+
+    let mut input = vec![0.0f32; BLOCK * 8];
+    for (i, s) in input.iter_mut().enumerate() {
+        *s = (i as f32 * 0.05).sin() * 0.5;
+    }
+    let mut peak = 0.0f32;
+    for chunk in input.chunks_exact(BLOCK) {
+        for &v in ex.run(chunk, BLOCK).unwrap() {
+            assert!(v.is_finite());
+            peak = peak.max(v.abs());
+        }
+    }
+    assert!(peak > 0.0, "resampled model produced no output");
+}
+
+#[test]
+fn matching_rate_needs_no_resampling() {
+    let mut nam = Nam::default();
+    nam.load_json(&ir_model()).unwrap();
+    nam.prepare(SR, BLOCK).unwrap();
+    assert_eq!(nam.rate_mismatch(), None);
+    assert_eq!(nam.latency_samples(), 0);
+}
+
+/// The resampler must pass a 1 kHz sine through at the right amplitude, and
+/// an up-then-down round trip must not distort a tone.
+#[test]
+fn resampler_round_trip_keeps_a_tone() {
+    use pedal_dsp::resample;
+    // 1 kHz at 48 kHz, upsampled to 96 kHz and back.
+    let n = 480;
+    let mut input = vec![0.0f32; n];
+    for (i, s) in input.iter_mut().enumerate() {
+        *s = (i as f32 * 2.0 * std::f32::consts::PI * 1000.0 / 48_000.0).sin();
+    }
+    let mut up_state = [0.0f32; 4];
+    let mut down_state = [0.0f32; 4];
+    let hi_n = resample::out_len(n, 2.0);
+    let mut hi = vec![0.0f32; hi_n];
+    resample(&input, &mut hi, 2.0, &mut up_state);
+    let mut back = vec![0.0f32; n];
+    resample(&hi, &mut back, 0.5, &mut down_state);
+    // Skip the filter's warm-up transient.
+    let skip = 8;
+    let mut err = 0.0f32;
+    for i in skip..n {
+        err = err.max((back[i] - input[i]).abs());
+    }
+    assert!(err < 0.02, "round-trip error {err} too large");
+}
+
+/// The executor collects the mismatch so the UI can warn.
+#[test]
+fn executor_reports_rate_mismatches() {
+    let json = ir_model().replace("48000.0", "44100.0");
+    let mut g = Graph::new();
+    g.add("in", Box::new(dsp_graph::blocks::IoInput)).unwrap();
+    let mut nam = Nam::default();
+    nam.load_json(&json).unwrap();
+    g.add("nam", Box::new(nam)).unwrap();
+    g.add("out", Box::new(dsp_graph::blocks::IoOutput)).unwrap();
+    g.connect("in", "out", "nam", "in").unwrap();
+    g.connect("nam", "out", "out", "in").unwrap();
+    let ex = Executor::compile_owned(&mut g, SR, BLOCK).unwrap();
+    let m = ex.rate_mismatches();
+    assert_eq!(m.len(), 1, "expected one mismatch");
+    assert_eq!(m[0].0, "nam");
+    assert!((m[0].1 - 44_100.0).abs() < 0.5);
+}

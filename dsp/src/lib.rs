@@ -36,6 +36,7 @@ pub mod oversample;
 pub mod pitch_remap;
 pub mod pitch_vocoder;
 pub mod reverb;
+pub mod resample;
 pub mod svf;
 pub mod util;
 pub mod waveshape;
@@ -51,6 +52,7 @@ pub use pitch_remap::PitchRemap;
 pub use pitch_vocoder::{PitchVocoder, PITCH_VOCODER_SIZE};
 pub use oversample::{Downsampler2, Oversampler4, Upsampler2};
 pub use reverb::Freeverb;
+pub use resample::{out_len as resample_out_len, resample};
 pub use svf::{Svf, SvfOutput};
 pub use waveshape::{Shaper, ShaperKind};
 

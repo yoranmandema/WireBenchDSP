@@ -172,6 +172,8 @@ pub struct Executor {
     ids: Vec<NodeId>,
     /// Per-node bypass flags, indexed by node position.
     bypass: Vec<bool>,
+    /// Nodes whose sample rate doesn't match the host: `(node id, expected, host)`.
+    rate_mismatches: Vec<(NodeId, f64, f32)>,
     /// Position of the `io.output` node.
     output_node: usize,
     pool: Pool,
@@ -288,6 +290,14 @@ impl Executor {
                 .prepare(sample_rate, max_block)
                 .map_err(|error| CompileError::Prepare { node: id.clone(), error })?;
             nodes.push(node.block);
+        }
+
+        // Sample-rate mismatches, for the UI.
+        let mut rate_mismatches = Vec::new();
+        for (id, block) in order.iter().zip(&nodes) {
+            if let Some((expected, host)) = block.rate_mismatch() {
+                rate_mismatches.push((id.clone(), expected, host));
+            }
         }
 
         // --- latency pass -------------------------------------------------
@@ -466,6 +476,7 @@ impl Executor {
             params_real,
             out_latency,
             bypass: vec![false; order.len()],
+            rate_mismatches: rate_mismatches,
             ids: order,
             output_node,
             pool,
@@ -569,6 +580,11 @@ impl Executor {
     /// compensation needed to keep parallel branches in phase.
     pub fn total_latency(&self) -> u32 {
         self.out_latency.get(self.output_node).copied().unwrap_or(0)
+    }
+
+    /// Nodes that need a different sample rate than the host runs at.
+    pub fn rate_mismatches(&self) -> &[(NodeId, f64, f32)] {
+        &self.rate_mismatches
     }
 
     /// The output latency of one node, in samples.

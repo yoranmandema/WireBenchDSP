@@ -205,6 +205,21 @@ pub fn inspector(ui: &mut egui::Ui, rig: &mut Rig, sel: &(String, String), spec:
             }
         }
     }
+    // Sample-rate mismatch warning.
+    let mismatch = handle
+        .rate_mismatches
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(id, _, _)| id == &sel.1)
+        .map(|(_, e, h)| (*e, *h));
+    if let Some((expected, host)) = mismatch {
+        ui.separator();
+        ui.colored_label(
+            Color32::from_rgb(240, 160, 60),
+            format!("⚠ {expected:.0} Hz model on a {host:.0} Hz host — resampling"),
+        );
+    }
     // NAM blocks: load a `.nam` file.
     if spec.id == "mod.nam" {
         ui.separator();
@@ -331,8 +346,14 @@ pub fn rebuild(handle: &Handle, rig: &Rig) -> Result<(), String> {
         .iter()
         .flat_map(|c| c.blocks.iter().filter(|b| b.bypass).map(move |b| (b.id.clone(), true)))
         .collect();
+    let mismatches: Vec<(String, f64, f32)> = ex
+        .rate_mismatches()
+        .iter()
+        .map(|(id, e, h)| (id.clone(), *e, *h))
+        .collect();
     handle.push(crate::audio::Cmd::Swap(ex, bypass)).map_err(|e| e.to_string())?;
     *handle.node_ids.lock().unwrap() = ids;
+    *handle.rate_mismatches.lock().unwrap() = mismatches;
     Ok(())
 }
 

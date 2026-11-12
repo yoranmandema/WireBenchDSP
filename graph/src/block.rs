@@ -64,6 +64,13 @@ pub trait Block: Send {
         0
     }
 
+    /// If this block needs a different sample rate than the host runs at,
+    /// return `(expected_hz, host_hz)`. The executor collects these and the UI
+    /// shows them. Default `None`.
+    fn rate_mismatch(&self) -> Option<(f64, f32)> {
+        None
+    }
+
     /// Configure the block from its preset data. Called at build time, before
     /// [`prepare`](Self::prepare), never on the audio thread. The default
     /// ignores the value; blocks that load resources (a NAM model, a cab IR)
