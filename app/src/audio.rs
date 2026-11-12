@@ -73,6 +73,33 @@ pub fn pick_channel(frame: &[f32], mode: ChannelMode) -> f32 {
     }
 }
 
+/// Convert a mono engine sample to a device sample. Implemented for the
+/// formats cpal can deliver.
+pub trait FromF32: Copy {
+    fn from_f32(v: f32) -> Self;
+}
+
+impl FromF32 for f32 {
+    fn from_f32(v: f32) -> Self {
+        v
+    }
+}
+impl FromF32 for i16 {
+    fn from_f32(v: f32) -> Self {
+        (v.clamp(-1.0, 1.0) * 32767.0) as i16
+    }
+}
+impl FromF32 for i32 {
+    fn from_f32(v: f32) -> Self {
+        (v.clamp(-1.0, 1.0) * 2_147_483_647.0) as i32
+    }
+}
+impl FromF32 for u16 {
+    fn from_f32(v: f32) -> Self {
+        ((v.clamp(-1.0, 1.0) + 1.0) * 32767.0) as u16
+    }
+}
+
 /// Mono sample in, interleaved frames out.
 #[inline]
 pub fn spread(s: f32, frame: &mut [f32]) {
@@ -222,6 +249,10 @@ impl AudioThread {
         self.source.load(Ordering::Relaxed)
     }
 
+    pub fn block(&self) -> usize {
+        self.block
+    }
+
     pub fn set_block(&mut self, block: usize) {
         self.block = block.min(MAX_BLOCK).max(1);
         self.scratch_in.resize(self.block, 0.0);
@@ -342,6 +373,47 @@ impl AudioThread {
         for i in 0..n {
             spread(self.scratch_mono[i], &mut self.scratch_out[i * ch..(i + 1) * ch]);
         }
+    }
+}
+
+/// Run one output callback: fill `data` (interleaved, `channels` wide) from
+/// the engine. Shared by the cpal closure and the tests, so the callback
+/// logic is the thing under test.
+///
+/// Devices routinely ask for more than one block (256, 512, 1024 frames);
+/// the buffer is processed in block-sized chunks. Anything left over is
+/// silence.
+pub fn run_callback<T: FromF32 + Copy>(
+    engine: &mut AudioThread,
+    ring: &Ring,
+    meters: &Meters,
+    data: &mut [T],
+    channels: usize,
+) {
+    let ch = channels.max(1);
+    let frames = data.len() / ch;
+    let mut done = 0usize;
+    while done < frames {
+        let n = (frames - done).min(engine.block());
+        if engine.source() == 1 {
+            let mut mono = [0.0f32; MAX_BLOCK];
+            let before = ring.available();
+            let starved = ring.pop(&mut mono[..n]);
+            if starved || before < n {
+                meters.xruns.fetch_add(1, Ordering::Relaxed);
+            }
+            engine.copy_input(&mono[..n]);
+        } else {
+            engine.fill_source(n);
+        }
+        let out = engine.render(n);
+        for (d, s) in data[done * ch..(done + n) * ch].iter_mut().zip(out.iter()) {
+            *d = T::from_f32(*s);
+        }
+        done += n;
+    }
+    for d in data[done * ch..].iter_mut() {
+        *d = T::from_f32(0.0);
     }
 }
 

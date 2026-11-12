@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Desktop pedal editor: channels, presets, live audio"
 
+[lib]
+name = "pedal_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pedal-app"
+path = "src/main.rs"
+
 [dependencies]
 pedal-dsp = { path = "../dsp" }
 dsp-graph = { path = "../graph" }

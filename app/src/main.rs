@@ -11,10 +11,8 @@
 //! over a lock-free queue; parameter changes go straight to the running
 //! executor by index.
 
-mod audio;
-mod channels;
-mod store;
-mod ui;
+use pedal_app::{audio, channels, store, ui};
+use audio::FromF32;
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -236,30 +234,6 @@ impl ToF32 for u16 {
     }
 }
 
-trait FromF32: cpal::SizedSample {
-    fn from_f32(v: f32) -> Self;
-}
-impl FromF32 for f32 {
-    fn from_f32(v: f32) -> Self {
-        v
-    }
-}
-impl FromF32 for i16 {
-    fn from_f32(v: f32) -> Self {
-        (v.clamp(-1.0, 1.0) * 32767.0) as i16
-    }
-}
-impl FromF32 for i32 {
-    fn from_f32(v: f32) -> Self {
-        (v.clamp(-1.0, 1.0) * 2_147_483_647.0) as i32
-    }
-}
-impl FromF32 for u16 {
-    fn from_f32(v: f32) -> Self {
-        ((v.clamp(-1.0, 1.0) + 1.0) * 32767.0) as u16
-    }
-}
-
 fn build_input<T: ToF32 + 'static>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
@@ -287,7 +261,7 @@ fn build_input<T: ToF32 + 'static>(
     )
 }
 
-fn build_output<T: FromF32 + 'static>(
+fn build_output<T: FromF32 + cpal::SizedSample + 'static>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     channels: usize,
@@ -310,27 +284,7 @@ fn build_output<T: FromF32 + 'static>(
     device.build_output_stream(
         config,
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            let frames = data.len() / channels.max(1);
-            let n = frames.min(BLOCK);
-            // Live input comes from the ring; the riff/silence fill themselves.
-            if engine.source() == 1 {
-                let mut mono = [0.0f32; BLOCK];
-                let before = ring.available();
-                let starved = ring.pop(&mut mono[..n]);
-                if starved || before < n {
-                    meters.xruns.fetch_add(1, Ordering::Relaxed);
-                }
-                engine.copy_input(&mono[..n]);
-            } else {
-                engine.fill_source(n);
-            }
-            let out = engine.render(n);
-            for (d, s) in data.iter_mut().take(n * channels).zip(out.iter()) {
-                *d = T::from_f32(*s);
-            }
-            for d in data.iter_mut().skip(n * channels) {
-                *d = T::from_f32(0.0);
-            }
+            audio::run_callback(&mut engine, &ring, &meters, data, channels);
         },
         |err| eprintln!("output callback error: {err}"),
         Some(Duration::from_millis(500)),
