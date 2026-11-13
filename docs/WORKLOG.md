@@ -7,9 +7,10 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**The Tauri shell is built and verified. Next: US-2.4–2.10 (UI features) —
-US-2.4–2.8 are implemented in `ui/`; verify them, then build US-2.9 (preset
-browser) and US-2.10 (prove the UI is off the audio path).**
+**US-2.4–2.9 are implemented and verified (top bar, rack, chain, editor,
+knob, preset browser). Next: US-2.10 — prove the UI never touches the audio
+path: kill or freeze the UI mid-play and show audio continues, and measure
+UI-to-sound round-trip latency under one audio block.**
 
 ## Goal
 
@@ -50,6 +51,14 @@ pedal-dsp/
   reads the snapshot, changes a param, and adds a block; the browser UI shows
   the same state and the knob editor drives the engine. `cargo test` passes;
   `pnpm build` produces `ui/dist`.
+- `ui/` preset browser (US-2.9): a modal listing every preset with load, save,
+  rename, and delete. The engine gained a `renamePreset` command, and
+  `savePreset` / `deletePreset` / `renamePreset` now return the full state
+  (matching the protocol's own rule), so the UI folds one snapshot into
+  `state.ts` instead of merging. Verified: `pnpm build`; 13/13 WebSocket
+  command checks against a scratch preset dir; 9/9 headless-Chrome checks of
+  the built UI (boot, list, highlight current, load rebuilds the chain,
+  close).
 - `shell/` — Tauri 2 desktop shell: hosts the Preact UI, spawns the engine
   process on launch, stops it on exit, and logs the engine to
   `/tmp/pedal-engine.log`. The CSP allows `ws://127.0.0.1:8737`. Verified:
@@ -60,11 +69,16 @@ pedal-dsp/
 
 ## Next step
 
-US-2.4–2.10: verify the implemented UI features (top bar, rack, chain, editor,
-knob), then build US-2.9 (preset browser) and US-2.10 (prove the UI never
-touches the audio path — kill the UI mid-play and show audio continues).
+US-2.10: prove the UI never touches the audio path. Run audio, kill or freeze
+the UI client, and show the engine keeps producing samples with no xruns;
+measure UI-to-sound round-trip latency and show it is under one audio block.
 
 ## Gotcha worth remembering
+
+**Port 8737 can be held by a stale engine from an earlier session.** Check
+`lsof -nP -iTCP:8737 -sTCP:LISTEN` before testing; a new engine exits silently
+when the bind fails, and tests then talk to the old binary (which may not know
+new commands). Kill the old PID first.
 
 **A Tauri debug build is always a dev build.** `tauri`'s build script sets
 `dev = !custom-protocol`, so `cargo build` (no features) makes the app load

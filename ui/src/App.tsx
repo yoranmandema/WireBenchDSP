@@ -4,6 +4,7 @@ import { TopBar } from "./components/TopBar";
 import { Rack } from "./components/Rack";
 import { Chain } from "./components/Chain";
 import { Editor } from "./components/Editor";
+import { PresetBrowser } from "./components/PresetBrowser";
 
 export function App() {
   useEffect(() => {
@@ -43,6 +44,7 @@ export function App() {
         <Chain />
       </div>
       <Editor />
+      <PresetBrowser />
     </div>
   );
 }

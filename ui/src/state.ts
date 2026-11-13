@@ -12,6 +12,8 @@ export const meters = signal<Meters>({ in: 0, out: 0, cpu: 0, xruns: 0 });
 export const ready = signal(false);
 export const error = signal<string | null>(null);
 export const selected = signal<{ channel: string; block: string } | null>(null);
+/** Whether the preset browser modal is open. */
+export const presetsOpen = signal(false);
 
 /** Connect and take the first snapshot. Safe to call once. */
 export async function init(): Promise<void> {
@@ -39,38 +41,59 @@ export async function init(): Promise<void> {
 // --- Actions ----------------------------------------------------------------
 // Mutating commands return the full new state, so there is nothing to merge.
 
+/** Fold a command response into the snapshot. */
+function apply(payload: unknown): void {
+  if (!payload || typeof payload !== "object") return;
+  const p = payload as Partial<State>;
+  if (p.registry && Array.isArray(p.channels)) {
+    state.value = p as State;
+    document.title = `Pedal - ${state.value.preset}`;
+  } else if (Array.isArray(p.presets) && state.value) {
+    state.value = { ...state.value, presets: p.presets };
+  }
+}
+
+const mutate = (cmd: string, args?: Record<string, unknown>) =>
+  bridge.request(cmd, args).then(apply);
+
 export const setParam = (channel: string, block: string, param: string, value: number) =>
-  bridge.request("setParam", { channel, block, param, value });
+  mutate("setParam", { channel, block, param, value });
 
 export const setMasterVolume = (channel: string, value: number) =>
-  bridge.request("setMasterVolume", { channel, value });
+  mutate("setMasterVolume", { channel, value });
 
 export const setBypass = (channel: string, block: string, bypass: boolean) =>
-  bridge.request("setBypass", { channel, block, bypass });
+  mutate("setBypass", { channel, block, bypass });
 
 export const addBlock = (channel: string, type: string, name: string) =>
-  bridge.request("addBlock", { channel, type, name });
+  mutate("addBlock", { channel, type, name });
 
 export const removeBlock = (channel: string, block: string) =>
-  bridge.request("removeBlock", { channel, block });
+  mutate("removeBlock", { channel, block });
 
 export const moveBlock = (channel: string, block: string, to: number) =>
-  bridge.request("moveBlock", { channel, block, to });
+  mutate("moveBlock", { channel, block, to });
 
-export const addChannel = () => bridge.request("addChannel");
+export const addChannel = () => mutate("addChannel");
 
-export const removeChannel = (channel: string) =>
-  bridge.request("removeChannel", { channel });
+export const removeChannel = (channel: string) => mutate("removeChannel", { channel });
 
 export const setSources = (channel: string, sources: string[]) =>
-  bridge.request("setSources", { channel, sources });
+  mutate("setSources", { channel, sources });
 
 export const setSource = (source: "riff" | "live" | "silence") =>
-  bridge.request("setSource", { source });
+  mutate("setSource", { source });
 
-export const loadPreset = (name: string) => bridge.request("loadPreset", { name });
+export const listPresets = () => mutate("listPresets");
 
-export const savePreset = (name: string) => bridge.request("savePreset", { name });
+export const loadPreset = (name: string) => mutate("loadPreset", { name });
+
+export const savePreset = (name: string) => mutate("savePreset", { name });
+
+export const deletePreset = (name: string) => mutate("deletePreset", { name });
+
+export const renamePreset = (from: string, to: string) =>
+  mutate("renamePreset", { from, to });
 
 export const select = (channel: string, block: string) => {
   selected.value = { channel, block };

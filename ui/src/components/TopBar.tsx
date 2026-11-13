@@ -1,4 +1,4 @@
-import { meters, state, loadPreset, setSource } from "../state";
+import { meters, presetsOpen, state, loadPreset, setSource } from "../state";
 
 const SLOTS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
@@ -38,6 +38,13 @@ export function TopBar() {
         </div>
         <button class="nav" onClick={() => step(1)} title="Next preset">
           ›
+        </button>
+        <button
+          class="nav presets-open"
+          onClick={() => (presetsOpen.value = true)}
+          title="Browse, save, rename, and delete presets"
+        >
+          ☰
         </button>
       </div>
 

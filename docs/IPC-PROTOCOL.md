@@ -132,8 +132,9 @@ All commands are `req` messages. Mutating commands return the full state in
 | `setSource` | `{source}` | riff / live / silence | full state |
 | `listPresets` | — | — | `{"presets": [...]}` |
 | `loadPreset` | `{name}` | load a preset | full state |
-| `savePreset` | `{name}` | save the current rig | `{"presets": [...]}` |
-| `deletePreset` | `{name}` | delete a preset | `{"presets": [...]}` |
+| `savePreset` | `{name}` | save the current rig | full state |
+| `deletePreset` | `{name}` | delete a preset | full state |
+| `renamePreset` | `{from, to}` | rename a preset | full state |
 
 Errors return `{ "ok": false, "error": "..." }`. A failed mutation never
 changes state, so the client can keep its current snapshot.

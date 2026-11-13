@@ -56,10 +56,7 @@ impl Store {
 
     /// Write a doc as `<dir>/<slug>.json`, avoiding clobbering.
     pub fn save(&mut self, name: &str, doc: &Doc) -> Result<PathBuf, String> {
-        let slug: String = name
-            .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-            .collect();
+        let slug = slugify(name);
         let mut path = self.dir.join(format!("{slug}.json"));
         let mut k = 2;
         while path.exists() {
@@ -71,6 +68,28 @@ impl Store {
         std::fs::write(&path, json).map_err(|e| e.to_string())?;
         Ok(path)
     }
+
+    /// Write a doc under an exact slug, refusing to overwrite. Used by rename,
+    /// where clobber-avoidance would silently produce a different preset name.
+    pub fn write_exact(&mut self, slug: &str, doc: &Doc) -> Result<PathBuf, String> {
+        if slug.is_empty() {
+            return Err("preset name is empty".to_string());
+        }
+        let path = self.dir.join(format!("{slug}.json"));
+        if path.exists() {
+            return Err(format!("preset already exists: {slug}"));
+        }
+        std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
+        std::fs::write(&path, doc.to_json()).map_err(|e| e.to_string())?;
+        Ok(path)
+    }
+}
+
+/// File-system-safe form of a preset name.
+pub fn slugify(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect()
 }
 
 pub fn preset_dir() -> PathBuf {

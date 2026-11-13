@@ -18,7 +18,7 @@ use dsp_graph::Registry;
 
 use crate::audio::{read_f32, Cmd, Handle};
 use crate::channels::{master_id, Rig, IN};
-use crate::store::Store;
+use crate::store::{slugify, Store};
 
 /// Loopback only. Nothing outside this machine can reach the engine.
 pub const PORT: u16 = 8737;
@@ -316,18 +316,18 @@ fn load_preset(sh: &Shared, name: &str) -> Result<(), String> {
     rebuild(sh)
 }
 
-fn save_preset(sh: &Shared, name: &str) -> Result<Vec<String>, String> {
+fn save_preset(sh: &Shared, name: &str) -> Result<(), String> {
     let doc = sh.rig.lock().unwrap().to_doc();
     {
         let mut store = sh.store.lock().unwrap();
         store.save(name, &doc).map_err(|e| e.to_string())?;
         store.reload();
     }
-    *sh.preset.lock().unwrap() = name.to_string();
-    Ok(sh.presets())
+    *sh.preset.lock().unwrap() = slugify(name);
+    Ok(())
 }
 
-fn delete_preset(sh: &Shared, name: &str) -> Result<Vec<String>, String> {
+fn delete_preset(sh: &Shared, name: &str) -> Result<(), String> {
     let path = {
         let store = sh.store.lock().unwrap();
         store.dir.join(format!("{name}.json"))
@@ -337,7 +337,43 @@ fn delete_preset(sh: &Shared, name: &str) -> Result<Vec<String>, String> {
         let mut store = sh.store.lock().unwrap();
         store.reload();
     }
-    Ok(sh.presets())
+    {
+        let mut preset = sh.preset.lock().unwrap();
+        if preset.as_str() == name {
+            preset.clear();
+        }
+    }
+    Ok(())
+}
+
+fn rename_preset(sh: &Shared, from: &str, to: &str) -> Result<(), String> {
+    let doc = {
+        let store = sh.store.lock().unwrap();
+        store
+            .presets
+            .iter()
+            .find(|(n, _)| n == from)
+            .map(|(_, d)| d.clone())
+            .ok_or_else(|| format!("no such preset: {from}"))?
+    };
+    let slug = slugify(to);
+    if slug == from {
+        return Ok(());
+    }
+    {
+        let mut store = sh.store.lock().unwrap();
+        store.write_exact(&slug, &doc)?;
+        let old = store.dir.join(format!("{from}.json"));
+        let _ = std::fs::remove_file(old);
+        store.reload();
+    }
+    {
+        let mut preset = sh.preset.lock().unwrap();
+        if preset.as_str() == from {
+            *preset = slug;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +388,7 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
     match cmd {
         "getState" | "setParam" | "setMasterVolume" | "setBypass" | "addBlock"
         | "removeBlock" | "moveBlock" | "addChannel" | "removeChannel" | "setSources"
-        | "loadPreset" | "setSource" => {
+        | "loadPreset" | "setSource" | "savePreset" | "deletePreset" | "renamePreset" => {
             match cmd {
                 "getState" => {}
                 "setParam" => {
@@ -399,13 +435,20 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                     };
                     sh.source.store(v, Ordering::Relaxed);
                 }
+                "savePreset" => {
+                    save_preset(sh, &s("name").ok_or("name")?)?;
+                }
+                "deletePreset" => {
+                    delete_preset(sh, &s("name").ok_or("name")?)?;
+                }
+                "renamePreset" => {
+                    rename_preset(sh, &s("from").ok_or("from")?, &s("to").ok_or("to")?)?;
+                }
                 _ => unreachable!(),
             }
             Ok(snapshot(sh))
         }
         "listPresets" => Ok(json!({ "presets": sh.presets() })),
-        "savePreset" => Ok(json!({ "presets": save_preset(sh, &s("name").ok_or("name")?)? })),
-        "deletePreset" => Ok(json!({ "presets": delete_preset(sh, &s("name").ok_or("name")?)? })),
         other => Err(format!("unknown command: {other}")),
     }
 }
