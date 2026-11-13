@@ -1,12 +1,13 @@
 //! The pedal editor UI (egui): channel strips.
 //!
-//! A channel is a vertical strip of blocks. Drag a block up or down to
-//! reorder it, click to select it (params in the inspector), use the `+` to
-//! add a block, `×` to remove it. The **source** row at the top of each strip
-//! routes audio in: tick `In` and/or another channel. Every change rebuilds
-//! the executor on the UI thread and hands it to the audio thread; parameter
-//! changes go straight to the running executor by index, so turning a knob
-//! never recompiles anything.
+//! Channels are stacked **vertically**, one per row, and the blocks inside a
+//! channel run **horizontally**, left to right — so a row reads as a signal
+//! path. Drag a block sideways to reorder it, click to select it (params in
+//! the inspector), use the `+` to add a block, `×` to remove it. The channel
+//! header routes audio in: tick `In` and/or another channel. Every change
+//! rebuilds the executor on the UI thread and hands it to the audio thread;
+//! parameter changes go straight to the running executor by index, so turning
+//! a knob never recompiles anything.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -47,7 +48,7 @@ pub struct UiState {
     pub source: Source,
     /// Channel whose `+ Block` palette is open.
     pub add_for: Option<String>,
-    /// A block drag in progress: (channel, block id, drag-start y, accumulated offset).
+    /// A block drag in progress: (channel, block id, drag-start x, accumulated offset).
     pub drag: Option<(String, String, f32, f32)>,
 }
 
@@ -67,8 +68,8 @@ impl Default for UiState {
 
 pub const BLOCK_W: f32 = 148.0;
 pub const BLOCK_H: f32 = 56.0;
-pub const STRIP_X: f32 = 16.0;
-pub const STRIP_Y: f32 = 150.0;
+/// Gap between two blocks in a strip.
+pub const BLOCK_GAP: f32 = 8.0;
 
 fn category_color(c: Category) -> Color32 {
     match c {
@@ -86,10 +87,11 @@ fn category_color(c: Category) -> Color32 {
     }
 }
 
-/// One block card. Returns the accumulated drag offset in blocks, if any.
-pub fn draw_block(ui: &mut egui::Ui, channel: &str, index: usize, spec: &BlockSpec, block: &dsp_graph::NodeDoc, selected: bool, drag_start: Option<f32>) -> Option<f32> {
-    let min = pos2(STRIP_X, STRIP_Y + index as f32 * (BLOCK_H + 8.0));
-    let rect = Rect::from_min_size(min, vec2(BLOCK_W, BLOCK_H));
+/// Paint one block card into `rect`. Interaction belongs to the caller, which
+/// allocates the rect — that way a strip can lay blocks out with the normal
+/// egui layout (and scroll) instead of absolute coordinates.
+fn paint_block(ui: &mut egui::Ui, rect: Rect, spec: &BlockSpec, block: &dsp_graph::NodeDoc, selected: bool) {
+    let min = rect.min;
     let painter = ui.painter();
     let fill = if block.bypass { Color32::from_rgb(48, 48, 52) } else { Color32::from_rgb(45, 48, 55) };
     let border = if selected { Color32::from_rgb(240, 200, 90) } else { Color32::from_rgb(90, 95, 105) };
@@ -117,14 +119,21 @@ pub fn draw_block(ui: &mut egui::Ui, channel: &str, index: usize, spec: &BlockSp
         FontId::proportional(9.0),
         Color32::from_rgb(180, 185, 195),
     );
-    let resp = ui.interact(rect, ui.scope_id().with(("block", channel, index)), Sense::click_and_drag());
-    if let Some(start) = drag_start {
-        if resp.dragged() {
-            let total = resp.interact_pointer_pos().map(|p| p.y - start).unwrap_or(0.0);
-            return Some((total / (BLOCK_H + 8.0)).round());
+}
+
+/// One source checkbox. Returns true when it toggled.
+fn source_toggle(ui: &mut egui::Ui, id: &str, label: &str, srcs: &mut Vec<String>) -> bool {
+    let on = srcs.iter().any(|s| s == id);
+    let mut on2 = on;
+    if ui.checkbox(&mut on2, label).changed() {
+        if on2 {
+            srcs.push(id.to_string());
+        } else {
+            srcs.retain(|s| s != id);
         }
+        return true;
     }
-    None
+    false
 }
 
 fn short_value(p: &ParamSpec, v: f32) -> String {
@@ -244,7 +253,7 @@ pub fn inspector(ui: &mut egui::Ui, rig: &mut Rig, sel: &(String, String), spec:
         }
     }
     ui.separator();
-    ui.label(egui::RichText::new("Drag a block up or down to reorder the strip.").weak());
+    ui.label(egui::RichText::new("Drag a block left or right to reorder the strip.").weak());
 }
 
 /// The block palette, grouped by category. Returns the picked block's
@@ -360,7 +369,8 @@ pub fn rebuild(handle: &Handle, rig: &Rig) -> Result<(), String> {
     Ok(())
 }
 
-/// One channel strip: source row, blocks, add/remove.
+/// One channel: a header row (name, volume, source routing, remove) above a
+/// horizontally scrolling strip of blocks that read as a signal path.
 pub fn channel_strip(
     ui: &mut egui::Ui,
     handle: &Handle,
@@ -373,55 +383,40 @@ pub fn channel_strip(
     let name = ch.name.clone();
     let sources = ch.sources.clone();
     let blocks: Vec<dsp_graph::NodeDoc> = ch.blocks.clone();
+    let other_ids: Vec<String> =
+        rig.channels.iter().filter(|c| c.id != channel).map(|c| c.id.clone()).collect();
 
-    ui.horizontal(|ui| {
+    // --- header ---------------------------------------------------------
+    ui.horizontal_wrapped(|ui| {
         ui.label(egui::RichText::new(&name).strong());
         ui.separator();
-        if ui.button("✕").on_hover_text("Remove channel").clicked() {
-            rig.remove_channel(channel);
-            state.dirty = true;
-            let _ = rebuild(handle, rig);
-            return;
-        }
-    });
-    // Channel output volume. The master node lives in the compiled graph, so
-    // this sends a param change by node id.
-    if let Some(ch) = rig.channel_mut(channel) {
-        let mut vol = ch.master_volume;
-        if ui.add(egui::Slider::new(&mut vol, -60.0..=12.0).text("Volume")).changed() {
-            ch.master_volume = vol;
-            if let Some(idx) = handle.node_index(&master_id(channel)) {
-                handle.push(crate::audio::Cmd::SetParam { node: idx, param: 0, value: vol }).ok();
+        // Channel output volume. The master node lives in the compiled graph,
+        // so this sends a param change by node id.
+        if let Some(ch) = rig.channel_mut(channel) {
+            let mut vol = ch.master_volume;
+            if ui
+                .add_sized(
+                    [110.0, 20.0],
+                    egui::Slider::new(&mut vol, -60.0..=12.0).text("Volume"),
+                )
+                .changed()
+            {
+                ch.master_volume = vol;
+                if let Some(idx) = handle.node_index(&master_id(channel)) {
+                    handle.push(crate::audio::Cmd::SetParam { node: idx, param: 0, value: vol }).ok();
+                }
             }
         }
-    }
-    ui.label("Source");
-    ui.horizontal_wrapped(|ui| {
+        ui.separator();
+        ui.label("Source");
         let mut srcs = sources.clone();
         let mut changed = false;
-        let on = srcs.iter().any(|s| s == IN);
-        let mut on2 = on;
-        if ui.checkbox(&mut on2, "In").changed() {
+        if source_toggle(ui, IN, "In", &mut srcs) {
             changed = true;
-            if on2 {
-                srcs.push(IN.into());
-            } else {
-                srcs.retain(|s| s != IN);
-            }
         }
-        for other in rig.channels.iter().map(|c| c.id.clone()) {
-            if other == channel {
-                continue;
-            }
-            let on = srcs.iter().any(|s| s == &other);
-            let mut on2 = on;
-            if ui.checkbox(&mut on2, other.trim_start_matches("ch")).changed() {
+        for other in &other_ids {
+            if source_toggle(ui, other, other.trim_start_matches("ch"), &mut srcs) {
                 changed = true;
-                if on2 {
-                    srcs.push(other.clone());
-                } else {
-                    srcs.retain(|s| s != &other);
-                }
             }
         }
         if changed {
@@ -431,46 +426,62 @@ pub fn channel_strip(
             state.dirty = true;
             let _ = rebuild(handle, rig);
         }
+        ui.separator();
+        if ui.button("✕").on_hover_text("Remove channel").clicked() {
+            rig.remove_channel(channel);
+            state.dirty = true;
+            let _ = rebuild(handle, rig);
+        }
     });
-    ui.separator();
 
-    let drag_channel = state.drag.as_ref().map(|(c, _, _, _)| c.clone());
-    let drag_start = state.drag.as_ref().and_then(|(_, _, s, _)| {
-        ui.input(|i| i.pointer.interact_pos().map(|p| p.y - *s))
-    });
-    for (i, block) in blocks.iter().enumerate() {
-        let spec = registry.get(&block.block).cloned().unwrap_or_else(|| empty_spec(&block.block));
-        let selected = state.selected.as_ref().map(|(c, b)| c == channel && b == &block.id).unwrap_or(false);
-        let this_drag = if drag_channel.as_deref() == Some(channel) { drag_start } else { None };
-        // Begin a drag when this block is dragged and none is in progress.
-        if this_drag.is_none() && state.drag.is_none() {
-            let min = pos2(STRIP_X, STRIP_Y + i as f32 * (BLOCK_H + 8.0));
-            let rect = Rect::from_min_size(min, vec2(BLOCK_W, BLOCK_H));
-            let r = ui.interact(rect, ui.scope_id().with(("blockdrag", channel, i)), Sense::click_and_drag());
-            if r.drag_started() {
-                let y = ui.input(|i| i.pointer.interact_pos().map(|p| p.y)).unwrap_or(0.0);
-                state.drag = Some((channel.to_string(), block.id.clone(), y, 0.0));
-            }
-        }
-        if let Some(steps) = draw_block(ui, channel, i, &spec, block, selected, this_drag) {
-            if steps != 0.0 {
-                let to = (i as f32 + steps).max(0.0) as usize;
-                if to != i {
-                    rig.move_block(channel, &block.id, to);
-                    state.dirty = true;
-                    let _ = rebuild(handle, rig);
-                    // Reset the drag origin so the block doesn't keep moving.
-                    state.drag = None;
+    // --- the strip: blocks run left to right ----------------------------
+    egui::ScrollArea::horizontal()
+        .id_salt(("strip", channel))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (i, block) in blocks.iter().enumerate() {
+                    let spec = registry.get(&block.block).cloned().unwrap_or_else(|| empty_spec(&block.block));
+                    let selected = state
+                        .selected
+                        .as_ref()
+                        .map(|(c, b)| c == channel && b == &block.id)
+                        .unwrap_or(false);
+                    // Re-read the drag state each iteration: a move mid-loop
+                    // clears it, and the remaining blocks must not inherit it.
+                    let this_drag = match state.drag.as_ref() {
+                        Some((c, _, s, _)) if c == channel => {
+                            ui.input(|i| i.pointer.interact_pos().map(|p| p.x - *s))
+                        }
+                        _ => None,
+                    };
+                    let (rect, resp) =
+                        ui.allocate_exact_size(vec2(BLOCK_W, BLOCK_H), Sense::click_and_drag());
+                    paint_block(ui, rect, &spec, block, selected);
+                    if let Some(start) = this_drag {
+                        if resp.dragged() {
+                            let total = resp.interact_pointer_pos().map(|p| p.x - start).unwrap_or(0.0);
+                            let steps = (total / (BLOCK_W + BLOCK_GAP)).round();
+                            if steps != 0.0 {
+                                let to = (i as f32 + steps).max(0.0) as usize;
+                                if to != i {
+                                    rig.move_block(channel, &block.id, to);
+                                    state.dirty = true;
+                                    let _ = rebuild(handle, rig);
+                                    // Reset the drag origin so the block doesn't keep moving.
+                                    state.drag = None;
+                                }
+                            }
+                        }
+                    } else if resp.drag_started() {
+                        let x = ui.input(|i| i.pointer.interact_pos().map(|p| p.x)).unwrap_or(0.0);
+                        state.drag = Some((channel.to_string(), block.id.clone(), x, 0.0));
+                    } else if resp.clicked() {
+                        state.selected = Some((channel.to_string(), block.id.clone()));
+                    }
+                    ui.add_space(BLOCK_GAP);
                 }
-            }
-        } else {
-            let min = pos2(STRIP_X, STRIP_Y + i as f32 * (BLOCK_H + 8.0));
-            let rect = Rect::from_min_size(min, vec2(BLOCK_W, BLOCK_H));
-            if ui.interact(rect, ui.scope_id().with(("blockclick", channel, i)), Sense::click()).clicked() {
-                state.selected = Some((channel.to_string(), block.id.clone()));
-            }
-        }
-    }
+            });
+        });
 
     if state.add_for.as_deref() == Some(channel) {
         ui.label(egui::RichText::new("Add block").strong());

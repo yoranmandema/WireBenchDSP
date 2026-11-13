@@ -431,17 +431,16 @@ impl eframe::App for App {
             }
         });
         egui::containers::CentralPanel::default().show(ui, |ui| {
+            // Channels are rows, top to bottom; each strip scrolls sideways.
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let ids: Vec<String> = self.rig.channels.iter().map(|c| c.id.clone()).collect();
-                    for id in ids {
-                        egui::Frame::group(ui.style()).show(ui, |ui| {
-                            ui.set_min_width(ui::BLOCK_W + 32.0);
-                            ui::channel_strip(ui, &self.handle, &mut self.rig, &mut self.state, &id, &self.handle.registry);
-                        });
-                        ui.separator();
-                    }
-                });
+                let ids: Vec<String> = self.rig.channels.iter().map(|c| c.id.clone()).collect();
+                for id in ids {
+                    egui::Frame::group(ui.style()).show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui::channel_strip(ui, &self.handle, &mut self.rig, &mut self.state, &id, &self.handle.registry);
+                    });
+                    ui.add_space(8.0);
+                }
             });
         });
         // Continuous repaint: the meters move.
