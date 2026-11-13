@@ -535,6 +535,19 @@ async fn meters_loop(sh: Arc<Shared>) {
 pub async fn serve(sh: Arc<Shared>) -> Result<(), String> {
     let listener = TcpListener::bind(("127.0.0.1", PORT)).await.map_err(|e| e.to_string())?;
     eprintln!("pedal-engine: ipc listening on ws://127.0.0.1:{PORT}");
+    serve_listener(sh, listener).await
+}
+
+/// Serve on an already-bound listener.
+///
+/// Split out from [`serve`] so a test can bind an ephemeral port instead of
+/// the production [`PORT`] (which a stale engine from an earlier session may
+/// still hold).
+pub async fn serve_listener(sh: Arc<Shared>, listener: TcpListener) -> Result<(), String> {
+    eprintln!(
+        "pedal-engine: ipc listening on {}",
+        listener.local_addr().map_err(|e| e.to_string())?
+    );
     tokio::spawn(meters_loop(sh.clone()));
     loop {
         let (stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
