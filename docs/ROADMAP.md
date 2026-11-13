@@ -33,9 +33,9 @@ visual target in `docs/ui-mock-neuraldsp.html`.
 
 | Story | Title | Status |
 |---|---|---|
-| US-2.1 | Architecture spike: served page vs webview | done (`docs/UI-ARCHITECTURE.md`) |
-| US-2.2 | Serve the frontend from the Rust host | ready |
-| US-2.3 | WebSocket link: params and meters | ready |
+| US-2.1 | Architecture spike: webview shell vs served page | done (`docs/UI-ARCHITECTURE.md`) |
+| US-2.2 | Native webview shell (Tauri) rendering a Preact page | ready |
+| US-2.3 | IPC bridge: params and meters | ready |
 | US-2.4 | Top bar: preset name, slots, meters | ready |
 | US-2.5 | Left rack: amp, cab, FX selection | ready |
 | US-2.6 | Centre chain with In/Out bookends | ready |
@@ -43,9 +43,11 @@ visual target in `docs/ui-mock-neuraldsp.html`.
 | US-2.8 | Rotary knob component | ready |
 | US-2.9 | Preset browser | ready |
 | US-2.10 | UI never touches the audio path | ready |
+| US-2.11 | Engine/UI process split | ready |
 
 Dependencies: 2.2 → 2.3 → {2.4, 2.5, 2.6, 2.7, 2.9}; 2.6 → 2.7 → 2.8; 2.10
-should be settled early, before anything is built on the transport.
+and 2.11 should be settled early, before anything is built on the transport or
+the process layout.
 
 ---
 
@@ -56,9 +58,9 @@ desktop.
 
 | Story | Title | Status |
 |---|---|---|
-| US-3.1 | Pi 5 headless service | ready (needs 2.2) |
+| US-3.1 | Pi 5 native fullscreen window on the touchscreen | ready (needs 2.2) |
 | US-3.2 | Pi 5 audio I/O | ready |
-| US-3.3 | Desktop native shell | ready (needs 2.2) |
+| US-3.3 | Desktop app bundle | ready (needs 2.2) |
 | US-3.4 | Touchscreen layout | ready (needs 2.6) |
 
 ---
@@ -71,7 +73,7 @@ Ship the same engine as a DAW plugin. The plugin gets a native skin; see
 | Story | Title | Status |
 |---|---|---|
 | US-4.1 | VST3 wrapper | ready |
-| US-4.2 | Native plugin UI | ready (needs 4.1) |
+| US-4.2 | Spike: webview inside the VST3 plugin | ready (needs 4.1) |
 | US-4.3 | DAW automation and preset recall | ready (needs 4.2) |
 
 ---
