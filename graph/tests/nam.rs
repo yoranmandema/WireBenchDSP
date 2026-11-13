@@ -193,6 +193,53 @@ fn doc_build_configures_the_model_path() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A preset carrying a *relative* model path must resolve it against the
+/// preset's own directory, not the process CWD — otherwise presets do not
+/// survive being moved between machines (Mac today, Pi later).
+#[test]
+fn relative_model_path_resolves_against_the_preset_directory() {
+    let dir = std::env::temp_dir().join(format!("pedal-rel-model-{}", std::process::id()));
+    let sub = dir.join("presets");
+    let models = dir.join("models");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::write(models.join("tiny.nam"), ir_model()).unwrap();
+
+    let json = serde_json::json!({
+        "name": "relative model",
+        "nodes": [
+            {"id": "in", "block": "io.input"},
+            {"id": "nam", "block": "mod.nam", "model": "../models/tiny.nam"},
+            {"id": "out", "block": "io.output"}
+        ],
+        "edges": [
+            {"from": ["in", "out"], "to": ["nam", "in"]},
+            {"from": ["nam", "out"], "to": ["out", "in"]}
+        ]
+    })
+    .to_string();
+    let doc = dsp_graph::Doc::from_json(&json).unwrap();
+    let reg = builtin_registry();
+
+    // From the preset directory: resolves.
+    let mut g = doc.build_in(&reg, &sub).unwrap();
+    let mut ex = Executor::compile_owned(&mut g, SR, BLOCK).unwrap();
+    let mut peak = 0.0f32;
+    for i in 0..BLOCK {
+        let s = (i as f32 * 0.07).sin() * 0.5;
+        peak = peak.max(ex.run(&[s], 1).unwrap()[0].abs());
+    }
+    assert!(peak > 0.0, "relative path did not load the model");
+
+    // Absolute paths are used verbatim.
+    let abs = models.join("tiny.nam").to_string_lossy().into_owned();
+    let json = json.replace("../models/tiny.nam", &abs);
+    let doc = dsp_graph::Doc::from_json(&json).unwrap();
+    assert!(doc.build_in(&reg, std::path::Path::new("/nonexistent")).is_ok());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // --- sample-rate mismatch ----------------------------------------------------
 
 /// A 44.1 kHz model fed at 48 kHz must be reported and resampled, not run

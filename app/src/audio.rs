@@ -426,6 +426,9 @@ pub struct Handle {
     pub trash_rx: Arc<Mutex<Consumer<Executor>>>,
     pub setup: Arc<Mutex<Setup>>,
     pub sample_rate: f32,
+    /// Directory the current preset was loaded from. Relative `model` paths in
+    /// a preset resolve against it, so presets stay movable.
+    pub preset_dir: std::path::PathBuf,
     /// 0 = riff, 1 = live input, 2 = silence.
     pub source: Arc<AtomicU8>,
     /// Nodes whose sample rate doesn't match the host: (node id, expected, host).
@@ -472,6 +475,7 @@ pub fn new_engine(
         trash_rx: Arc::new(Mutex::new(trash_rx)),
         setup: Arc::new(Mutex::new(setup)),
         sample_rate: setup.sample_rate,
+        preset_dir: std::path::PathBuf::new(),
         source,
         rate_mismatches: Arc::new(Mutex::new(Vec::new())),
     };

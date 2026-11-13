@@ -1,0 +1,96 @@
+{
+  "name": "NAM OD808 + cab",
+  "nodes": [
+    {
+      "id": "in",
+      "block": "io.input",
+      "pos": [
+        30,
+        160
+      ]
+    },
+    {
+      "id": "nam",
+      "block": "mod.nam",
+      "pos": [
+        205,
+        160
+      ],
+      "params": {
+        "gain": 0.0,
+        "level": 0.0,
+        "mix": 100.0
+      },
+      "model": "../models/MES DRECF RD Gain2 BAL O808 CAB.nam"
+    },
+    {
+      "id": "reverb",
+      "block": "time.reverb",
+      "pos": [
+        380,
+        160
+      ],
+      "params": {
+        "mix": 18.0
+      }
+    },
+    {
+      "id": "master",
+      "block": "util.master",
+      "pos": [
+        555,
+        160
+      ]
+    },
+    {
+      "id": "out",
+      "block": "io.output",
+      "pos": [
+        730,
+        160
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": [
+        "in",
+        "out"
+      ],
+      "to": [
+        "nam",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "nam",
+        "out"
+      ],
+      "to": [
+        "reverb",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "reverb",
+        "out"
+      ],
+      "to": [
+        "master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    }
+  ]
+}

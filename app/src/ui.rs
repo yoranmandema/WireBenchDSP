@@ -337,7 +337,9 @@ pub fn top_bar(ui: &mut egui::Ui, handle: &Handle, store: &mut Store, rig: &mut 
 /// Rebuild the executor from the rig. UI thread only.
 pub fn rebuild(handle: &Handle, rig: &Rig) -> Result<(), String> {
     let doc = rig.to_doc();
-    let mut g = doc.build(&handle.registry).map_err(|e| e.to_string())?;
+    let mut g = doc
+        .build_in(&handle.registry, &handle.preset_dir)
+        .map_err(|e| e.to_string())?;
     let block = handle.block();
     let ex = dsp_graph::Executor::compile_owned(&mut g, handle.sample_rate, block).map_err(|e| e.to_string())?;
     let ids = ex.node_ids().to_vec();

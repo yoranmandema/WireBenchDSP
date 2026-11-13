@@ -121,7 +121,17 @@ impl Doc {
     /// Build a fresh, uncompiled [`Graph`]: instantiate every block through
     /// the registry, apply params and wire edges. Validation (missing inputs,
     /// loops, …) happens at compile time.
+    ///
+    /// Relative `model` paths resolve against the current directory. Use
+    /// [`Doc::build_in`] to resolve against the preset's own directory, so a
+    /// preset can carry `../models/foo.nam` and still work after the folder is
+    /// moved (Mac today, Pi later).
     pub fn build(&self, reg: &Registry) -> Result<Graph, DocError> {
+        self.build_in(reg, std::path::Path::new("."))
+    }
+
+    /// As [`Doc::build`], but relative `model` paths resolve against `base`.
+    pub fn build_in(&self, reg: &Registry, base: &std::path::Path) -> Result<Graph, DocError> {
         let mut g = Graph::new();
         for n in &self.nodes {
             let mut block = reg.build(&n.block).ok_or_else(|| DocError::UnknownBlock {
@@ -130,8 +140,15 @@ impl Doc {
             })?;
             let spec = block.spec();
             if let Some(path) = &n.model {
+                // Absolute paths are used as-is; relative ones are relative to
+                // the preset, not to wherever the app was launched from.
+                let resolved = if std::path::Path::new(path).is_absolute() {
+                    path.clone()
+                } else {
+                    base.join(path).to_string_lossy().into_owned()
+                };
                 block
-                    .configure("model", path)
+                    .configure("model", &resolved)
                     .map_err(|e| DocError::Graph(e.to_string()))?;
             }
             g.add(n.id.clone(), block).map_err(|_| DocError::DuplicateId(n.id.clone()))?;

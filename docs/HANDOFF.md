@@ -176,7 +176,10 @@ shifters).
   inserts delay lines on faster branches so parallel paths recombine in phase.
   Verified with a latent test block (100-sample delay across a block boundary).
 - `Doc` — the preset document (JSON), with real-valued params and a `model`
-  path for NAM blocks. `Doc::build` compiles to a `Graph`.
+  path for NAM blocks. `Doc::build` compiles to a `Graph`; `Doc::build_in`
+  additionally resolves **relative** model paths against the preset's own
+  directory, so a preset carrying `../models/foo.nam` still works after the
+  folder is moved to another machine. Absolute paths pass through unchanged.
 - Blocks: `IoInput`, `IoOutput`, `Gain`, `MixSum`, `Sum`, `Master` (limiter),
   `Overdrive`, `Amp` (2-stage oversampled, 3 voices), `Cab`, `ToneStack`,
   `Delay`, `PitchDelay`, `Reverb`, **`Nam`**.

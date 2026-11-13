@@ -77,10 +77,19 @@ fn main() {
     };
     let source = Arc::new(AtomicU8::new(0));
     let (handle, cmd_rx, trash_tx, running) = audio::new_engine(setup, source.clone());
+    // Relative model paths in presets resolve against the preset directory.
+    let handle = {
+        let mut h = handle;
+        h.preset_dir = store.dir.clone();
+        h
+    };
     let meters = handle.meters.clone();
     // Compile the initial rig before the streams start.
     let block = handle.block();
-    let mut g = rig.to_doc().build(&handle.registry).expect("initial rig builds");
+    let mut g = rig
+        .to_doc()
+        .build_in(&handle.registry, &handle.preset_dir)
+        .expect("initial rig builds");
     let ex = dsp_graph::Executor::compile_owned(&mut g, rate as f32, block).expect("initial rig compiles");
     *handle.node_ids.lock().unwrap() = ex.node_ids().to_vec();
     handle.push(Cmd::Swap(ex, Vec::new())).expect("initial swap");
@@ -322,7 +331,10 @@ fn selftest_run(handle: Handle, meters: Arc<Meters>, rate: f32, out_channels: us
     // The self-test drives the engine directly, so install the executor here
     // rather than sending it over the queue (the queue is empty).
     {
-        let mut g = rig.to_doc().build(&handle.registry).expect("selftest rig builds");
+        let mut g = rig
+            .to_doc()
+            .build_in(&handle.registry, &handle.preset_dir)
+            .expect("selftest rig builds");
         let ex = dsp_graph::Executor::compile_owned(&mut g, rate, BLOCK).expect("selftest rig compiles");
         engine.set_executor(ex);
     }
