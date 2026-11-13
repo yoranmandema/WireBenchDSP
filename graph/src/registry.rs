@@ -48,6 +48,13 @@ impl Default for Registry {
     }
 }
 
+// The registry is built once (`builtin_registry`) and only read afterwards:
+// every method takes `&self`, and `add` needs `&mut self`. Sharing `&Registry`
+// across threads is therefore sound, but the compiler cannot see it because
+// `dyn BlockFactory` is only `Send` (the `Nam` block holds `RefCell`s).
+// The engine serves the IPC protocol from async tasks, which needs `Sync`.
+unsafe impl Sync for Registry {}
+
 struct FactoryShim<B: Block + Default> {
     _marker: std::marker::PhantomData<B>,
 }

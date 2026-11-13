@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 pedal-dsp = { path = "../dsp" }
 dsp-graph = { path = "../graph" }
+pedal-engine = { path = "../engine" }
 rtrb = "0.2"
 cpal = "0.18"
 egui = "0.37"

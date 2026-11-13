@@ -1,4 +1,4 @@
-//! The pedal app: channels, presets, live audio.
+//! The pedal development app: the egui editor over the shared engine.
 //!
 //! ```text
 //!   preset dir ──▶ Rig ──▶ Doc ──▶ Graph ──▶ Executor ──▶ audio thread
@@ -6,28 +6,23 @@
 //!                   └────────── params / bypass ◀───────────┘
 //! ```
 //!
-//! The UI edits a [`Rig`] (channels of blocks). Every structural change
-//! rebuilds the executor on the UI thread and hands it to the audio thread
-//! over a lock-free queue; parameter changes go straight to the running
-//! executor by index.
-
-use pedal_app::{audio, channels, store, ui};
-use audio::FromF32;
+//! The engine (state, audio, device selection) lives in `pedal-engine`; this
+//! crate is the UI. The production UI is the Preact app in `ui/`, which talks
+//! to the engine process over IPC.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use pedal_app::{audio, channels, store, ui};
 
 use audio::{AudioThread, ChannelMode, Cmd, Handle, Meters, Setup};
 use channels::Rig;
 use store::Store;
 use ui::{rebuild, UiState};
 
-const RING_CAPACITY: usize = 8192;
-const LATENCY_FRAMES: usize = 1024;
-const BLOCK: usize = 64;
+const LATENCY_FRAMES: usize = pedal_engine::host::LATENCY_FRAMES;
+const BLOCK: usize = pedal_engine::host::BLOCK;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -54,30 +49,16 @@ fn main() {
         .unwrap_or_else(|| channels::Rig::single("Untitled", vec![]).to_doc());
     let rig = Rig::from_doc(&doc);
 
-    let host = cpal::default_host();
-    let (in_dev, in_name) = pick_input(&host);
-    let (out_dev, out_name) = pick_output(&host, &in_name);
-    let in_default = in_dev.default_input_config().expect("no input config");
-    let out_default = out_dev.default_output_config().expect("no output config");
-    let rate = pick_rate(&in_dev, &out_dev, in_default.sample_rate(), out_default.sample_rate());
-    let out_channels = out_default.channels().max(1) as usize;
-    let in_channels = in_default.channels().max(1) as usize;
-
-    let mut in_cfg: cpal::StreamConfig = in_default.into();
-    in_cfg.sample_rate = rate;
-    let mut out_cfg: cpal::StreamConfig = out_default.into();
-    out_cfg.sample_rate = rate;
-
+    let devices = pedal_engine::host::pick();
     let setup = Setup {
-        sample_rate: rate as f32,
-        out_channels,
+        sample_rate: devices.rate as f32,
+        out_channels: devices.out_channels,
         block: BLOCK,
-        channel_mode: ChannelMode::First(2.min(in_channels)),
+        channel_mode: ChannelMode::First(2.min(devices.in_channels)),
         latency_frames: LATENCY_FRAMES,
     };
     let source = Arc::new(AtomicU8::new(0));
     let (handle, cmd_rx, trash_tx, running) = audio::new_engine(setup, source.clone());
-    // Relative model paths in presets resolve against the preset directory.
     let handle = {
         let mut h = handle;
         h.preset_dir = store.dir.clone();
@@ -86,51 +67,23 @@ fn main() {
     let meters = handle.meters.clone();
     // Compile the initial rig before the streams start.
     let block = handle.block();
-    let mut g = rig
-        .to_doc()
-        .build_in(&handle.registry, &handle.preset_dir)
-        .expect("initial rig builds");
-    let ex = dsp_graph::Executor::compile_owned(&mut g, rate as f32, block).expect("initial rig compiles");
-    *handle.node_ids.lock().unwrap() = ex.node_ids().to_vec();
-    handle.push(Cmd::Swap(ex, Vec::new())).expect("initial swap");
+    {
+        let mut g = rig
+            .to_doc()
+            .build_in(&handle.registry, &handle.preset_dir)
+            .expect("initial rig builds");
+        let ex = dsp_graph::Executor::compile_owned(&mut g, setup.sample_rate, block)
+            .expect("initial rig compiles");
+        *handle.node_ids.lock().unwrap() = ex.node_ids().to_vec();
+        handle.push(Cmd::Swap(ex, Vec::new())).expect("initial swap");
+    }
     handle.set_source(0); // riff
 
     if selftest {
-        selftest_run(handle, meters, rate as f32, out_channels, &rig)
+        selftest_run(handle, meters, setup.sample_rate, devices.out_channels, &rig)
     }
 
-    // --- input stream ---
-    let ring = Arc::new(audio::Ring::new(RING_CAPACITY));
-    let ring_in = ring.clone();
-    let in_format = in_default.sample_format();
-    let in_stream = match in_format {
-        cpal::SampleFormat::F32 => build_input::<f32>(&in_dev, in_cfg, in_channels, ring_in, meters.clone()),
-        cpal::SampleFormat::I16 => build_input::<i16>(&in_dev, in_cfg, in_channels, ring_in, meters.clone()),
-        cpal::SampleFormat::I32 => build_input::<i32>(&in_dev, in_cfg, in_channels, ring_in, meters.clone()),
-        cpal::SampleFormat::U16 => build_input::<u16>(&in_dev, in_cfg, in_channels, ring_in, meters.clone()),
-        other => panic!("unsupported input format {other:?}"),
-    }
-    .expect("failed to build input stream");
-    in_stream.play().expect("failed to start input");
-    std::mem::forget(in_stream);
-
-    // --- output stream ---
-    let ring_out = ring.clone();
-    let out_format = out_default.sample_format();
-    let out_stream = match out_format {
-        cpal::SampleFormat::F32 => build_output::<f32>(&out_dev, out_cfg, out_channels, ring_out, cmd_rx, trash_tx, running.clone(), meters.clone(), source.clone()),
-        cpal::SampleFormat::I16 => build_output::<i16>(&out_dev, out_cfg, out_channels, ring_out, cmd_rx, trash_tx, running.clone(), meters.clone(), source.clone()),
-        cpal::SampleFormat::I32 => build_output::<i32>(&out_dev, out_cfg, out_channels, ring_out, cmd_rx, trash_tx, running.clone(), meters.clone(), source.clone()),
-        cpal::SampleFormat::U16 => build_output::<u16>(&out_dev, out_cfg, out_channels, ring_out, cmd_rx, trash_tx, running.clone(), meters.clone(), source.clone()),
-        other => panic!("unsupported output format {other:?}"),
-    }
-    .expect("failed to build output stream");
-    out_stream.play().expect("failed to start output");
-    std::mem::forget(out_stream);
-    ring.trim_to(LATENCY_FRAMES);
-
-    eprintln!("input : {in_name} @ {rate} Hz, {in_channels} ch");
-    eprintln!("output: {out_name} @ {rate} Hz, {out_channels} ch");
+    pedal_engine::host::start(&devices, cmd_rx, trash_tx, running, meters.clone(), source);
 
     if headless {
         eprintln!("headless: running for 60 s");
@@ -140,7 +93,7 @@ fn main() {
 
     let mut state = UiState::default();
     state.doc_name = preset_name.clone();
-    state.status = format!("{preset_name} · {rate} Hz");
+    state.status = format!("{preset_name} · {} Hz", devices.rate);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 760.0])
@@ -150,154 +103,9 @@ fn main() {
     eframe::run_native(
         "Pedal",
         options,
-        Box::new(move |_cc| {
-            Ok(Box::new(App::new(handle, store, rig, state)))
-        }),
+        Box::new(move |_cc| Ok(Box::new(App::new(handle, store, rig, state)))),
     )
     .expect("eframe failed");
-}
-
-// ---------------------------------------------------------------------------
-// Device selection
-// ---------------------------------------------------------------------------
-
-fn device_name(d: &cpal::Device) -> String {
-    d.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "unknown".into())
-}
-
-fn pick_input(host: &cpal::Host) -> (cpal::Device, String) {
-    let devices: Vec<_> = host.input_devices().expect("no input devices").collect();
-    if devices.is_empty() {
-        panic!("no audio input devices");
-    }
-    for (i, d) in devices.iter().enumerate() {
-        eprintln!("  in [{i}] {}", device_name(d));
-    }
-    let pick = devices
-        .iter()
-        .position(|d| device_name(d).contains("Scarlett"))
-        .or_else(|| devices.iter().position(|d| device_name(d).to_lowercase().contains("usb")))
-        .unwrap_or(0);
-    let name = device_name(&devices[pick]);
-    eprintln!("using input: {name}");
-    (devices[pick].clone(), name)
-}
-
-fn pick_output(host: &cpal::Host, prefer: &str) -> (cpal::Device, String) {
-    let devices: Vec<_> = host.output_devices().expect("no output devices").collect();
-    if devices.is_empty() {
-        panic!("no audio output devices");
-    }
-    for (i, d) in devices.iter().enumerate() {
-        eprintln!("  out [{i}] {}", device_name(d));
-    }
-    let pick = devices
-        .iter()
-        .position(|d| device_name(d) == prefer)
-        .or_else(|| devices.iter().position(|d| device_name(d).contains("MacBook") || device_name(d).contains("Built-in")))
-        .unwrap_or(0);
-    let name = device_name(&devices[pick]);
-    eprintln!("using output: {name}");
-    (devices[pick].clone(), name)
-}
-
-fn pick_rate(in_dev: &cpal::Device, out_dev: &cpal::Device, in_rate: u32, out_rate: u32) -> u32 {
-    for r in [48_000, 44_100] {
-        let i_ok = in_dev.supported_input_configs().map(|mut c| c.any(|c| c.min_sample_rate() <= r && r <= c.max_sample_rate())).unwrap_or(false);
-        let o_ok = out_dev.supported_output_configs().map(|mut c| c.any(|c| c.min_sample_rate() <= r && r <= c.max_sample_rate())).unwrap_or(false);
-        if i_ok && o_ok {
-            return r;
-        }
-    }
-    if in_rate == out_rate {
-        return in_rate;
-    }
-    in_rate
-}
-
-// ---------------------------------------------------------------------------
-// Streams
-// ---------------------------------------------------------------------------
-
-trait ToF32: cpal::SizedSample {
-    fn to_f32(&self) -> f32;
-}
-impl ToF32 for f32 {
-    fn to_f32(&self) -> f32 {
-        *self
-    }
-}
-impl ToF32 for i16 {
-    fn to_f32(&self) -> f32 {
-        *self as f32 / 32768.0
-    }
-}
-impl ToF32 for i32 {
-    fn to_f32(&self) -> f32 {
-        *self as f32 / 2_147_483_648.0
-    }
-}
-impl ToF32 for u16 {
-    fn to_f32(&self) -> f32 {
-        (*self as f32 / 32768.0) - 1.0
-    }
-}
-
-fn build_input<T: ToF32 + 'static>(
-    device: &cpal::Device,
-    config: cpal::StreamConfig,
-    channels: usize,
-    ring: Arc<audio::Ring>,
-    meters: Arc<Meters>,
-) -> Result<cpal::Stream, cpal::Error> {
-    device.build_input_stream(
-        config,
-        move |data: &[T], _: &cpal::InputCallbackInfo| {
-            let ch = channels.max(1);
-            let mut peak = 0.0f32;
-            for frame in data.chunks(ch) {
-                let mut s = 0.0f32;
-                for v in frame.iter().take(2.min(ch)) {
-                    s += v.to_f32();
-                }
-                peak = peak.max(s.abs());
-                ring.push(s);
-            }
-            meters.in_peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
-        },
-        |err| eprintln!("input callback error: {err}"),
-        Some(Duration::from_millis(500)),
-    )
-}
-
-fn build_output<T: FromF32 + cpal::SizedSample + 'static>(
-    device: &cpal::Device,
-    config: cpal::StreamConfig,
-    channels: usize,
-    ring: Arc<audio::Ring>,
-    cmd_rx: rtrb::Consumer<Cmd>,
-    trash_tx: rtrb::Producer<dsp_graph::Executor>,
-    running: Arc<std::sync::atomic::AtomicBool>,
-    meters: Arc<Meters>,
-    source: Arc<AtomicU8>,
-) -> Result<cpal::Stream, cpal::Error> {
-    let setup = Setup {
-        sample_rate: config.sample_rate as f32,
-        out_channels: channels,
-        block: BLOCK,
-        channel_mode: ChannelMode::First(2),
-        latency_frames: LATENCY_FRAMES,
-    };
-    let mut engine = AudioThread::new(setup, meters.clone(), cmd_rx, trash_tx, running, source);
-    engine.set_block(BLOCK);
-    device.build_output_stream(
-        config,
-        move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-            audio::run_callback(&mut engine, &ring, &meters, data, channels);
-        },
-        |err| eprintln!("output callback error: {err}"),
-        Some(Duration::from_millis(500)),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -328,8 +136,6 @@ fn selftest_run(handle: Handle, meters: Arc<Meters>, rate: f32, out_channels: us
         handle.source.clone(),
     );
     engine.set_block(BLOCK);
-    // The self-test drives the engine directly, so install the executor here
-    // rather than sending it over the queue (the queue is empty).
     {
         let mut g = rig
             .to_doc()

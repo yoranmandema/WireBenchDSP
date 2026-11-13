@@ -2,3 +2,4 @@ target/
 **/*.rs.bk
 presets/*-local.json
 output.wav
+docs/.heartbeat
