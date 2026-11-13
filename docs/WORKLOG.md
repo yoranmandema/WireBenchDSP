@@ -55,6 +55,9 @@ Build the `ui/` crate: Vite + Preact + TypeScript, matching
 `docs/IPC-PROTOCOL.md`. Then the `shell/` Tauri wrapper (US-2.2) and the first
 real bridge wiring (US-2.3: one param, one meter).
 
+`ui/` is already scaffolded in the working tree but is **not committed** —
+another session is writing it. Verify it (`pnpm build`) before building on it.
+
 ## Rules
 
 - `touch docs/.heartbeat` at the start of every work turn. The stall watchdog
