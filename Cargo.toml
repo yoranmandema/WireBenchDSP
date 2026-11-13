@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["dsp", "graph", "host-sim", "app", "engine"]
+members = ["dsp", "graph", "host-sim", "app", "engine", "shell"]
 exclude = ["firmware", "live"]
 
 [profile.release]

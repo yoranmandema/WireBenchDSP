@@ -418,6 +418,7 @@ async fn handle_client(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStr
     let (mut sink, mut stream) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     sh.clients.lock().unwrap().push(tx.clone());
+    eprintln!("pedal-engine: client connected ({} total)", sh.clients.lock().unwrap().len());
 
     // Greet with a full snapshot so a reconnecting UI never has to ask.
     if sink.send(Message::Text(state_event(&sh).into())).await.is_err() {
@@ -432,9 +433,10 @@ async fn handle_client(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStr
                 let reply = match serde_json::from_str::<Value>(&text) {
                     Ok(req) => {
                         let id = req.get("id").cloned().unwrap_or(Value::Null);
-                        let cmd = req.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
+                        let cmd = req.get("cmd").and_then(|v| v.as_str()).unwrap_or("").to_string();
                         let args = req.get("args").cloned().unwrap_or(json!({}));
-                        match apply(&sh, cmd, &args) {
+                        eprintln!("pedal-engine: <- {cmd}");
+                        match apply(&sh, &cmd, &args) {
                             Ok(payload) => {
                                 if cmd != "getState" {
                                     // The answer already carries the new state;
