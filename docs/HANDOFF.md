@@ -238,12 +238,16 @@ what caught both bugs. Keep using them.
 
 ### P0 — the product
 
-1. **A real `.nam` model to validate against.** The `Nam` block works (test
-   model, 5 tests) but no real capture has been run through it. This is the
-   one thing that decides whether the modelling path is correct.
-2. **Sample-rate mismatch is reported but not fixed.** A 44.1 kHz model fed
-   48 kHz produces silently wrong output. `Nam` records the mismatch; the UI
-   should show it, and the engine should resample or refuse.
+1. **A real `.nam` model to validate against. DONE.** `MES DRECF RD Gain2 BAL
+   O808 CAB.nam` (a `SlimmableContainer`, 2 WaveNet submodels, 48 kHz) loads,
+   compiles, and renders clean audio: 3 s at 44.1/48/96 kHz, no non-finite
+   samples, deterministic across runs, output 3.89× dry RMS. See
+   `graph/examples/nam_check.rs` and `nam_render.rs`. The remaining unknown is
+   only whether it *sounds* right — that needs ears, not tests.
+2. **Sample-rate mismatch is now handled.** `Nam` resamples host↔model rate
+   (cubic, measured −71 dB mirror) and the executor surfaces the mismatch to
+   the UI, which shows a warning. Still worth confirming the resampled path
+   sounds right on a model whose rate differs from the host.
 3. **Cycle handling is "reject" only.** `validate()` returns `Cycle`. The design
    says a loop must contain exactly one delay-owning node.
 4. **Stereo.** Everything is mono. Plan: mono until after the amp, then stereo
