@@ -56,22 +56,47 @@ Tauri is the faster path (scaffolding, IPC, window management). `wry`+`tao` is
 what Tauri itself is built on, and is the lighter option if the Pi build needs
 trimming — the frontend is shared either way.
 
-## Why the VST is different
+## The plugin shell
 
-`nih-plug-webview` embeds a wry webview in a `nih_plug` editor and does exactly
-what we want. But it is explicitly **work in progress, not production-ready**:
-tested on macOS, Windows hoped-for, no Linux.
+The UI codebase is shared regardless of which shell hosts the plugin; only the
+bridge differs. So the question is the shell, not the webview.
 
-The mature references are C++:
+| Shell | Language | Formats | Licence | Webview |
+|---|---|---|---|---|
+| **JUCE 8/9** | C++ | VST3, AUv2/v3, AAX, CLAP, LV2, standalone | AGPLv3 or paid (free under $20k/yr revenue) | Good; Linux backend buggy |
+| **iPlug2** | C++ | VST2/3, AUv2/v3, AAX, WAM, standalone | zlib-like (permissive) | Mature, with Svelte/React examples |
+| **nih-plug** | Rust | VST3, CLAP, standalone | ISC, but VST3 bindings are GPLv3 | Experimental (WIP) |
+| **nice-plug** | Rust | VST3, CLAP, standalone | ISC, MIT/Apache bindings | Unproven |
 
-- **iPlug2** — a first-class `IWebViewEditorDelegate` with examples for raw
-  HTML/CSS/JS, Svelte + Vite, and React + Vite. This is the proven pattern.
-- **JUCE** — a first-class `WebBrowserComponent`.
+Notes that matter:
 
-So the technique is well established; in Rust it is early. Plan for a spike
-that proves the webview-in-plugin path on macOS before committing to it, and
-keep a native `egui` skin as the fallback. The fallback is a rendering layer
-over the same parameter state, not a second engine.
+- **JUCE 8 added a real webview UI path.** `WebBrowserComponent::Options`
+  has `withResourceProvider` (serve HTML/JS/CSS straight from C++ memory, like
+  Tauri's embedded assets), `withNativeFunction`, and `withEventListener`. So
+  the premise holds: JUCE is realistically implementable.
+- **JUCE's Linux webview is genuinely poor.** It cannot be hidden reliably,
+  `ResourceProvider` requests are not routed without native integration, and a
+  failed page load can crash the browser subprocess. This does not matter if
+  JUCE only ever hosts the plugin (macOS/Windows), but it rules JUCE out as
+  the Pi's standalone shell — which is what Tauri is for.
+- **JUCE's licence is the real cost.** AGPLv3, or paid above $20k/year. For a
+  project that might become a product, iPlug2's zlib-like licence is much
+  safer.
+- **The C++ cost is the same for JUCE and iPlug2.** Either way the plugin
+  shell is C++ and the Rust DSP core sits behind a C ABI. That boundary is
+  thin (one function call per block), but it means a C++ toolchain, CMake, and
+  an FFI layer.
+- **nih-plug is in maintenance mode since May 2026.** Its community fork
+  `nice-plug` is the active project and fixes the VST3 GPLv3 binding, but its
+  webview story is unproven.
+
+**Recommendation:** spike **iPlug2** first — permissive licence, mature
+webview path, wide format coverage. Consider JUCE only if its ecosystem or a
+specific format matters enough to accept the licence. Avoid nih-plug/nice-plug
+for the webview path until it has shipped in a real plugin.
+
+Whichever shell is chosen, keep a native UI as the fallback. It is a rendering
+layer over the same parameter state, not a second engine.
 
 ## The invariant that makes this safe
 
@@ -88,16 +113,35 @@ So:
 This is the separation the current egui app already has (`Cmd` channel + atomic
 executor handoff); only the transport changes.
 
-## Process separation
+## Process separation — decided: split
 
-A webview app puts the UI in a separate OS process from the Rust backend on
-Linux (WebKitWebProcess), but the backend and the audio thread share one
-process. **A backend crash takes audio down with it.**
+The engine and the UI run as **separate processes**. The UI never touches the
+audio path, and a UI crash or restart cannot silence the guitar.
 
-For a floor pedal, consider splitting the engine into its own process and
-letting the UI talk to it. That costs an IPC layer, but it means a UI bug
-cannot silence the guitar, and the UI can be restarted without dropping audio.
-Decide this before building the shell.
+```
+┌──────────────────────┐        IPC (params / state)      ┌──────────────────┐
+│  UI process          │  ────────────────────────────►  │  Engine process  │
+│  Tauri webview       │  ◄────────────────────────────  │  audio thread    │
+│  dies, restarts      │        meters / state           │  DSP core        │
+└──────────────────────┘                                 └──────────────────┘
+                                                                     │
+                                                              audio interface
+```
+
+- **Transport:** a local socket (Unix domain on macOS/Linux, loopback TCP
+  elsewhere). JSON or bincode. Localhost only.
+- **Engine process:** owns the audio interface and the DSP core, exposes
+  parameters, presets, and meters.
+- **UI process:** renders, sends commands, displays meters. It can be killed
+  and restarted without a dropout.
+
+This is the same shape as PiPedal. It costs an IPC layer and a state-sync
+protocol, but it is what makes the pedal robust and lets the UI be replaced
+later (webview today, something else later) without touching the engine.
+
+The VST is the exception: a plugin cannot spawn processes, so the engine runs
+in-process there. The engine is a library either way, so this costs nothing
+extra — only the transport differs.
 
 ## What does not change
 
@@ -124,24 +168,32 @@ the engine behaves, even after the web UI becomes the product UI.
 - **WebKitGTK on the Pi.** Known rendering bugs; workarounds exist
   (`WEBKIT_DISABLE_DMABUF_RENDERER=1`, `WEBKIT_DISABLE_COMPOSITING_MODE=1`).
   Keep the UI CSS-based and avoid WebGL-heavy views.
-- **VST webview maturity.** `nih-plug-webview` is experimental. Spike it
-  before committing; keep a native skin as the fallback.
-- **UI/engine process separation.** A shared process means a UI crash can kill
-  audio. Decide the split early — it is expensive to add later.
-- **Two UIs to keep in sync** (web + native VST). Mitigated by shared design
-  tokens and by the native skin being a rendering layer over the same state.
+- **IPC state sync.** Splitting the engine and UI means the UI must resync when
+  it reconnects. Keep the protocol a full-state snapshot plus deltas, not just
+  deltas, so a reconnecting UI can always catch up.
+- **Plugin shell maturity.** `nih-plug-webview` is experimental and
+  `nih-plug` is in maintenance mode. Spike iPlug2 (or JUCE) before committing.
+- **C++ and an FFI boundary.** Choosing iPlug2 or JUCE means a C++ toolchain,
+  CMake, and a C ABI between the plugin shell and the Rust core.
+- **JUCE licensing.** AGPLv3 or paid above $20k/year. iPlug2 avoids this.
+- **Two UIs to keep in sync** (web + native VST fallback). Mitigated by shared
+  design tokens and by the native skin being a rendering layer over the same
+  state.
 - **Touch on a 7" display.** Test with real touch, not a mouse; hover-only
   affordances do not exist on a pedal.
 
 ## First steps
 
 1. **US-2.1** — this document (done).
-2. **US-2.2** — spike: a Tauri shell rendering a trivial Preact page, on the
-   Mac first. Prove the shell and the IPC.
-3. **US-2.3** — IPC bridge with one parameter and one meter.
-4. **US-2.10** — prove the UI is off the audio path before building anything
+2. **US-2.11** — decide the engine/UI IPC protocol and state-sync shape. This
+   is the foundation for every shell, so settle it before building the UI.
+3. **US-2.2** — spike: a Tauri shell rendering a trivial Preact page on the
+   Mac, talking to a stub engine process. Prove the shell, the IPC, and the
+   reconnect path.
+4. **US-2.3** — real IPC bridge with one parameter and one meter.
+5. **US-2.10** — prove the UI is off the audio path before building anything
    else on top of it.
-5. **US-4.1s** — separately, spike `nih-plug-webview` to find out whether the
-   VST path is viable now.
+6. **US-4.4** — separately, spike the plugin shell (iPlug2 first) to find out
+   whether the webview-in-plugin path is viable now.
 
 The mock at `docs/ui-mock-neuraldsp.html` is the visual target.

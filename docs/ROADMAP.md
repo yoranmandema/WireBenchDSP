@@ -43,11 +43,12 @@ visual target in `docs/ui-mock-neuraldsp.html`.
 | US-2.8 | Rotary knob component | ready |
 | US-2.9 | Preset browser | ready |
 | US-2.10 | UI never touches the audio path | ready |
-| US-2.11 | Engine/UI process split | ready |
+| US-2.11 | Engine/UI process split | ready — decided: split |
 
 Dependencies: 2.2 → 2.3 → {2.4, 2.5, 2.6, 2.7, 2.9}; 2.6 → 2.7 → 2.8; 2.10
 and 2.11 should be settled early, before anything is built on the transport or
-the process layout.
+the process layout. 2.11 is the foundation: the IPC protocol and reconnect
+behaviour are shared by every shell.
 
 ---
 
@@ -67,12 +68,14 @@ desktop.
 
 ## E4 · VST3 plugin
 
-Ship the same engine as a DAW plugin. The plugin gets a native skin; see
-`docs/UI-ARCHITECTURE.md` for why a web view is not the plan.
+Ship the same engine as a DAW plugin. The plugin shell is still an open
+question — see `docs/UI-ARCHITECTURE.md` for the JUCE / iPlug2 / nice-plug
+comparison. A native UI stays as the fallback either way.
 
 | Story | Title | Status |
 |---|---|---|
 | US-4.1 | VST3 wrapper | ready |
+| US-4.4 | Spike: plugin shell (iPlug2 vs JUCE vs nice-plug) | ready (needs 4.1) |
 | US-4.2 | Spike: webview inside the VST3 plugin | ready (needs 4.1) |
 | US-4.3 | DAW automation and preset recall | ready (needs 4.2) |
 
