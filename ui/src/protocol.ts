@@ -1,0 +1,115 @@
+// Wire types for docs/IPC-PROTOCOL.md. Shared by every shell.
+
+export type Category =
+  | "I/O"
+  | "Split/Merge"
+  | "Dynamics"
+  | "Tone"
+  | "Distortion"
+  | "Modulation"
+  | "Pitch"
+  | "Time"
+  | "Modelling"
+  | "Utility"
+  | "Control";
+
+export interface ParamSpec {
+  id: string;
+  name: string;
+  kind: "number" | "choice";
+  min: number;
+  max: number;
+  default: number;
+  unit: string;
+  choices?: string[];
+}
+
+export interface BlockSpec {
+  name: string;
+  category: Category;
+  params: ParamSpec[];
+}
+
+export interface Block {
+  id: string;
+  type: string;
+  name: string;
+  bypass: boolean;
+  params: Record<string, number>;
+}
+
+export interface Channel {
+  id: string;
+  name: string;
+  volume: number;
+  sources: string[];
+  blocks: Block[];
+}
+
+export interface State {
+  preset: string;
+  presets: string[];
+  source: "riff" | "live" | "silence";
+  registry: Record<string, BlockSpec>;
+  channels: Channel[];
+}
+
+export interface Meters {
+  in: number;
+  out: number;
+  cpu: number;
+  xruns: number;
+}
+
+// --- Messages --------------------------------------------------------------
+
+export interface Request {
+  type: "req";
+  id: number;
+  cmd: string;
+  args?: Record<string, unknown>;
+}
+
+export interface Response {
+  type: "res";
+  id: number;
+  ok: boolean;
+  payload?: unknown;
+  error?: string;
+}
+
+export interface StateEvent {
+  type: "event";
+  event: "state";
+  payload: State;
+}
+
+export interface MetersEvent {
+  type: "event";
+  event: "meters";
+  payload: Meters;
+}
+
+export interface ErrorEvent {
+  type: "event";
+  event: "error";
+  payload: { message: string };
+}
+
+export type ServerMessage = Response | StateEvent | MetersEvent | ErrorEvent;
+
+export function isState(msg: ServerMessage): msg is StateEvent {
+  return msg.type === "event" && msg.event === "state";
+}
+
+export function isMeters(msg: ServerMessage): msg is MetersEvent {
+  return msg.type === "event" && msg.event === "meters";
+}
+
+export function isResponse(msg: ServerMessage): msg is Response {
+  return msg.type === "res";
+}
+
+export function asState(payload: unknown): State {
+  return payload as State;
+}
