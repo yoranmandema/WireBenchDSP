@@ -128,9 +128,28 @@ fn doc_rejects_unknown_param_and_block() {
     assert!(e.contains("unknown block type"), "{e}");
 }
 
+/// A small explicit doc, so this test does not depend on which preset sorts
+/// first (a new preset used to silently change the ids generated here).
+const EDIT_DOC: &str = r#"{
+  "name": "edit test",
+  "nodes": [
+    {"id": "in", "block": "io.input"},
+    {"id": "amp", "block": "amp.basic"},
+    {"id": "cab", "block": "cab.sim"},
+    {"id": "master", "block": "util.master"},
+    {"id": "out", "block": "io.output"}
+  ],
+  "edges": [
+    {"from": ["in", "out"], "to": ["amp", "in"]},
+    {"from": ["amp", "out"], "to": ["cab", "in"]},
+    {"from": ["cab", "out"], "to": ["master", "in"]},
+    {"from": ["master", "out"], "to": ["out", "in"]}
+  ]
+}"#;
+
 #[test]
 fn doc_editing_helpers() {
-    let mut d = Doc::from_json(&presets()[0].1).unwrap();
+    let mut d = Doc::from_json(EDIT_DOC).unwrap();
     let id = d.add_node("amp.basic", [0.0, 0.0]);
     assert_eq!(id, "amp2");
     // in -> amp2 is fine; amp2 -> in would loop only if in were downstream.

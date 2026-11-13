@@ -1,0 +1,55 @@
+{
+  "name": "Blank",
+  "nodes": [
+    {
+      "id": "in",
+      "block": "io.input",
+      "pos": [
+        60,
+        400
+      ]
+    },
+    {
+      "id": "ch1__master",
+      "block": "util.master",
+      "pos": [
+        400,
+        240
+      ],
+      "params": {
+        "volume": 0.0,
+        "ceiling": -1.0
+      }
+    },
+    {
+      "id": "out",
+      "block": "io.output",
+      "pos": [
+        1400,
+        400
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": [
+        "in",
+        "out"
+      ],
+      "to": [
+        "ch1__master",
+        "in"
+      ]
+    },
+    {
+      "from": [
+        "ch1__master",
+        "out"
+      ],
+      "to": [
+        "out",
+        "in"
+      ]
+    }
+  ]
+}

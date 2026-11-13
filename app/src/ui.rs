@@ -247,8 +247,9 @@ pub fn inspector(ui: &mut egui::Ui, rig: &mut Rig, sel: &(String, String), spec:
     ui.label(egui::RichText::new("Drag a block up or down to reorder the strip.").weak());
 }
 
-/// The block palette, grouped by category.
-pub fn palette(ui: &mut egui::Ui, registry: &dsp_graph::Registry) -> Option<String> {
+/// The block palette, grouped by category. Returns the picked block's
+/// (id, display name).
+pub fn palette(ui: &mut egui::Ui, registry: &dsp_graph::Registry) -> Option<(String, String)> {
     let mut picked = None;
     let mut cats: Vec<(Category, Vec<&BlockSpec>)> = Vec::new();
     for spec in registry.specs() {
@@ -263,8 +264,8 @@ pub fn palette(ui: &mut egui::Ui, registry: &dsp_graph::Registry) -> Option<Stri
     for (cat, specs) in cats {
         ui.label(egui::RichText::new(cat.to_string()).strong());
         for spec in specs {
-            if ui.button(format!("{}  ({})", spec.name, spec.id)).clicked() {
-                picked = Some(spec.id.to_string());
+            if ui.button(spec.name.clone()).on_hover_text(spec.id.clone()).clicked() {
+                picked = Some((spec.id.to_string(), spec.name.to_string()));
             }
         }
         ui.separator();
@@ -473,8 +474,8 @@ pub fn channel_strip(
 
     if state.add_for.as_deref() == Some(channel) {
         ui.label(egui::RichText::new("Add block").strong());
-        if let Some(picked) = palette(ui, registry) {
-            let id = rig.add_block(channel, &picked, [0.0, 0.0]);
+        if let Some((picked, name)) = palette(ui, registry) {
+            let id = rig.add_block_as(channel, &picked, &name, [0.0, 0.0]);
             state.selected = Some((channel.to_string(), id));
             state.add_for = None;
             state.dirty = true;

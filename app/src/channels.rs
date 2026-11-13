@@ -50,6 +50,11 @@ pub fn master_id(ch: &str) -> String {
     format!("{ch}__master")
 }
 
+/// Id of the pedal's global output limiter. Reserved: `Rig::from_doc` uses it
+/// to tell the output node apart from a channel master, which is also a
+/// `util.master`.
+pub const OUT_MASTER_ID: &str = "out__master";
+
 impl Rig {
     pub fn single(name: &str, blocks: Vec<NodeDoc>) -> Self {
         let mut c = Channel::new("ch1", "Channel 1");
@@ -73,6 +78,15 @@ impl Rig {
     /// Add a block to a channel's strip. Returns its id.
     pub fn add_block(&mut self, channel: &str, block: &str, pos: [f32; 2]) -> String {
         let stem = block.rsplit('.').next().unwrap_or(block).to_string();
+        self.add_block_as(channel, block, &stem, pos)
+    }
+
+    /// As [`Rig::add_block`], but the node is named after the block's display
+    /// name rather than the block type's last segment. Picking "Amp" from the
+    /// palette should not produce a node called "basic".
+    pub fn add_block_as(&mut self, channel: &str, block: &str, name: &str, pos: [f32; 2]) -> String {
+        let stem = name.trim().to_lowercase();
+        let stem = if stem.is_empty() { block.rsplit('.').next().unwrap_or(block).to_string() } else { stem };
         let mut id = stem.clone();
         let mut k = 2;
         while self.id_taken(&id) {
@@ -125,11 +139,32 @@ impl Rig {
     pub fn split_id(ch: &str) -> String {
         format!("{ch}__split")
     }
+    /// The output node: volume 0 dB, −1 dB ceiling. Shared by the normal path
+    /// and the zero-channel bypass.
+    fn out_master() -> NodeDoc {
+        NodeDoc {
+            id: OUT_MASTER_ID.into(),
+            block: "util.master".into(),
+            params: [("volume".to_string(), 0.0), ("ceiling".to_string(), -1.0)].into_iter().collect(),
+            bypass: false,
+            pos: Some([1320.0, 400.0]), model: None, }
+    }
+
     /// Lay the rig out as a graph the executor can compile.
     pub fn to_doc(&self) -> Doc {
         let mut doc = Doc::new(self.name.clone());
         doc.nodes.push(NodeDoc { id: "in".into(), block: "io.input".into(), params: BTreeMap::new(), bypass: false, pos: Some([60.0, 400.0]), model: None, });
         doc.nodes.push(NodeDoc { id: "out".into(), block: "io.output".into(), params: BTreeMap::new(), bypass: false, pos: Some([1400.0, 400.0]), model: None, });
+        // A pedalboard with no channels at all is a *bypass*, not a dead pedal.
+        // The summer below needs a channel master to feed it, so without this
+        // the sum's inputs would all be tied to silence and the pedal would
+        // output nothing until a block was added.
+        if self.channels.is_empty() {
+            doc.nodes.push(Self::out_master());
+            doc.edges.push(EdgeDoc { from: ["in".to_string(), "out".into()], to: ["out__master".to_string(), "in".into()] });
+            doc.edges.push(EdgeDoc { from: ["out__master".to_string(), "out".into()], to: ["out".to_string(), "in".into()] });
+            return doc;
+        }
         // One summing node so every channel master has exactly one wire into
         // the output node (which has a single input port).
         let mut sum = NodeDoc { id: "sum".into(), block: "util.sum".into(), params: BTreeMap::new(), bypass: false, pos: Some([1250.0, 400.0]), model: None, };
@@ -204,7 +239,12 @@ impl Rig {
             } else {
                 c.blocks.last().map(|b| b.id.clone()).unwrap_or_else(|| head.clone())
             };
-            doc.edges.push(EdgeDoc { from: [last, "out".into()], to: [master_id(&c.id), "in".into()] });
+            // An empty channel's head *is* the master, so the routing edge
+            // above already feeds it; adding another edge here would be a
+            // self-loop (and a second driver on the master's input).
+            if last != master_id(&c.id) {
+                doc.edges.push(EdgeDoc { from: [last, "out".into()], to: [master_id(&c.id), "in".into()] });
+            }
             let port = ["a", "b", "c", "d"][ci.min(3)];
             doc.edges.push(EdgeDoc { from: [master_id(&c.id), "out".into()], to: ["sum".to_string(), port.into()] });
         }
@@ -223,15 +263,7 @@ impl Rig {
         }
         // One limiter on the summed output: each channel has its own master,
         // but their sum can still exceed full scale.
-        let mut out_master = NodeDoc {
-            id: "out__master".into(),
-            block: "util.master".into(),
-            params: BTreeMap::new(),
-            bypass: false,
-            pos: Some([1320.0, 400.0]), model: None, };
-        out_master.params.insert("volume".into(), 0.0);
-        out_master.params.insert("ceiling".into(), -1.0);
-        doc.nodes.push(out_master);
+        doc.nodes.push(Self::out_master());
         doc.edges.push(EdgeDoc { from: ["sum".to_string(), "out".into()], to: ["out__master".to_string(), "in".into()] });
         doc.edges.push(EdgeDoc { from: ["out__master".to_string(), "out".into()], to: ["out".to_string(), "in".into()] });
         doc
@@ -246,8 +278,18 @@ impl Rig {
     /// channel's first block, and its inputs are the channel's sources.
     pub fn from_doc(doc: &Doc) -> Self {
         let mut rig = Rig { name: doc.name.clone(), channels: Vec::new() };
+        // Channel masters are the `util.master` nodes that are not the global
+        // output limiter. Hand-written presets wire their masters straight to
+        // `out` (there is no summer), while the app's own docs wire them to
+        // `sum` and reserve `out__master` for the limiter — so the reserved id
+        // is the one thing both shapes agree on.
         let masters: Vec<String> = {
-            let mut v: Vec<String> = doc.nodes.iter().filter(|n| n.block == "util.master").map(|n| n.id.clone()).collect();
+            let mut v: Vec<String> = doc
+                .nodes
+                .iter()
+                .filter(|n| n.block == "util.master" && n.id != OUT_MASTER_ID)
+                .map(|n| n.id.clone())
+                .collect();
             v.sort();
             v
         };
