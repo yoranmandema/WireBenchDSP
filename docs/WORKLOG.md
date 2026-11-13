@@ -64,14 +64,30 @@ US-2.4–2.10: verify the implemented UI features (top bar, rack, chain, editor,
 knob), then build US-2.9 (preset browser) and US-2.10 (prove the UI never
 touches the audio path — kill the UI mid-play and show audio continues).
 
+## Gotcha worth remembering
+
+**A Tauri debug build is always a dev build.** `tauri`'s build script sets
+`dev = !custom-protocol`, so `cargo build` (no features) makes the app load
+`devUrl` (the Vite dev server) and show a blank window when it is not running.
+A self-contained app needs:
+
+```bash
+cargo build -p pedal-shell --features custom-protocol   # or cargo tauri build
+```
+
+Do not debug a blank Tauri window through `System Events` — a bare binary is
+not in the accessibility database, so it reports 0 windows even when the window
+exists. Use `CGWindowListCopyWindowInfo`, or check whether the engine log shows
+a client connection.
+
 ## How to run
 
 ```bash
-# engine
+# engine alone
 ./target/debug/pedal-engine --rig 04-rainbow
 
-# desktop shell (spawns the engine itself; debug build uses the Vite dev server)
-cd ui && pnpm dev          # http://localhost:5173
+# self-contained desktop app (spawns the engine itself, embeds the UI)
+cargo build -p pedal-shell --features custom-protocol
 ./target/debug/pedal-shell
 
 # UI in dev (Vite proxies /engine to the engine)

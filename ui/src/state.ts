@@ -15,10 +15,13 @@ export const selected = signal<{ channel: string; block: string } | null>(null);
 
 /** Connect and take the first snapshot. Safe to call once. */
 export async function init(): Promise<void> {
+  // The title doubles as a headless diagnostic: `window.title()` reads it.
+  document.title = "Pedal (connecting)";
   bridge.subscribe((msg) => {
     if (isState(msg)) {
       state.value = msg.payload;
       ready.value = true;
+      document.title = `Pedal - ${msg.payload.preset}`;
     } else if (isMeters(msg)) {
       meters.value = msg.payload;
     }
@@ -26,8 +29,10 @@ export async function init(): Promise<void> {
   try {
     state.value = asState(await bridge.request("getState"));
     ready.value = true;
+    document.title = `Pedal - ${state.value.preset}`;
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
+    document.title = "Pedal (offline)";
   }
 }
 

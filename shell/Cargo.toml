@@ -15,3 +15,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[features]
+# Tauri sets `dev = !custom-protocol`: a debug build is always a *dev* build
+# that loads `devUrl` (the Vite dev server). Enabling this feature bakes the
+# built UI into the binary so the app is self-contained. `cargo tauri build`
+# passes it for you; for a manual build use `--features custom-protocol`.
+custom-protocol = ["tauri/custom-protocol"]
