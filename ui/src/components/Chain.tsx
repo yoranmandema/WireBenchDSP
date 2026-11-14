@@ -1,4 +1,5 @@
-import { useState } from "preact/hooks";
+import { Fragment } from "preact";
+import { useRef, useState } from "preact/hooks";
 import {
   addBlock,
   moveBlock,
@@ -11,19 +12,85 @@ import {
   state,
 } from "../state";
 
-const DRAG_MIME = "application/x-pedal-block";
+/** Live state of a pointer-driven block drag. */
+interface Drag {
+  /** Block being dragged. */
+  id: string;
+  /** Index it started at, in the channel's block array. */
+  from: number;
+  /** Slot it would land in, counting the gaps between cards (0..len). */
+  insert: number;
+  /** Pointer position, for the floating ghost. */
+  x: number;
+  y: number;
+}
 
 /** One channel row: header above a horizontally scrolling strip of blocks. */
 function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
   const s = state.value!;
-  const [dragOver, setDragOver] = useState<number | null>(null);
+  const [drag, setDrag] = useState<Drag | null>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  // Pending press (not yet past the drag threshold) and the click/drag verdict.
+  const pending = useRef<{ id: string; from: number; x: number; y: number } | null>(null);
+  const dragged = useRef(false);
 
-  const drop = (to: number) => {
-    const raw = (window as unknown as { __drag?: string }).__drag;
-    setDragOver(null);
-    if (!raw) return;
-    const from = channel.blocks.findIndex((b) => b.id === raw);
-    if (from >= 0 && from !== to) void moveBlock(channel.id, raw, to);
+  /** Slot under the pointer: the first card whose midpoint is to the right. */
+  function slotAt(clientX: number): number {
+    const els = Array.from(strip.current?.querySelectorAll(".block-card") ?? []) as HTMLElement[];
+    for (const el of els) {
+      const r = el.getBoundingClientRect();
+      if (clientX < r.left + r.width / 2) return Number(el.dataset.slot);
+    }
+    return channel.blocks.length;
+  }
+
+  const down = (e: PointerEvent, blockId: string, index: number) => {
+    if (e.button !== 0) return;
+    // The bypass/remove buttons are controls, not drag handles.
+    if ((e.target as Element).closest("button")) return;
+    dragged.current = false;
+    pending.current = { id: blockId, from: index, x: e.clientX, y: e.clientY };
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+
+  const move = (e: PointerEvent) => {
+    if (drag) {
+      const insert = slotAt(e.clientX);
+      if (insert === drag.insert && e.clientX === drag.x && e.clientY === drag.y) return;
+      setDrag({ ...drag, insert, x: e.clientX, y: e.clientY });
+      return;
+    }
+    const p = pending.current;
+    if (!p) return;
+    const dx = Math.abs(e.clientX - p.x);
+    const dy = Math.abs(e.clientY - p.y);
+    if (dx < 4 && dy < 4) return; // still a click
+    dragged.current = true;
+    pending.current = null;
+    setDrag({
+      id: p.id,
+      from: p.from,
+      // The move that crosses the threshold is already a target position.
+      insert: slotAt(e.clientX),
+      x: e.clientX,
+      y: e.clientY,
+    });
+  };
+
+  const up = () => {
+    const d = drag;
+    pending.current = null;
+    setDrag(null);
+    if (!d || !dragged.current) return; // plain click: onClick selects
+    // `moveBlock` indexes the array *after* the removal, so shift the target
+    // down one slot when the block leaves a position left of its landing slot.
+    const to = Math.min(d.insert > d.from ? d.insert - 1 : d.insert, channel.blocks.length - 1);
+    if (to !== d.from) void moveBlock(channel.id, d.id, to);
+  };
+
+  const cancel = () => {
+    pending.current = null;
+    setDrag(null);
   };
 
   return (
@@ -61,49 +128,62 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
         )}
       </div>
 
-      <div class="strip">
+      <div class="strip" ref={strip}>
         <div class="io">In</div>
         {channel.blocks.map((b, i) => (
-          <div
-            key={b.id}
-            class={`block-card${b.bypass ? " bypass" : ""}${dragOver === i ? " over" : ""}`}
-            draggable
-            onDragStart={(e) => {
-              (e as unknown as DragEvent).dataTransfer?.setData(DRAG_MIME, b.id);
-              (window as unknown as { __drag?: string }).__drag = b.id;
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(i);
-            }}
-            onDrop={() => drop(i)}
-            onClick={() => select(channel.id, b.id)}
-            title={`${b.name} — drag to reorder`}
-          >
-            <span class="block-name">{b.name}</span>
-            <span class="block-type">{b.type}</span>
-            <button
-              class={`bypass${b.bypass ? " on" : ""}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                void setBypass(channel.id, b.id, !b.bypass);
+          <Fragment key={b.id}>
+            {/* Always-mounted slot so the cards themselves are never added or
+                removed mid-drag (that would break pointer capture). */}
+            <div
+              class={`block-placeholder${drag && drag.insert === i && drag.insert !== drag.from ? " active" : ""}`}
+            />
+            <div
+              class={`block-card${b.bypass ? " bypass" : ""}${drag?.id === b.id ? " dragging" : ""}`}
+              data-slot={i}
+              style={drag?.id === b.id ? { opacity: 0.35 } : undefined}
+              onPointerDown={(e) => down(e, b.id, i)}
+              onPointerMove={move}
+              onPointerUp={up}
+              onPointerCancel={cancel}
+              onClick={() => {
+                // A drag ends with a synthetic click on the same card; swallow
+                // that one, but never swallow clicks after it.
+                if (dragged.current) {
+                  dragged.current = false;
+                  return;
+                }
+                select(channel.id, b.id);
               }}
-              title="Bypass"
+              title={`${b.name} — drag to reorder, click to edit`}
             >
-              B
-            </button>
-            <button
-              class="remove"
-              onClick={(e) => {
-                e.stopPropagation();
-                void removeBlock(channel.id, b.id);
-              }}
-              title="Remove block"
-            >
-              x
-            </button>
-          </div>
+              <span class="block-name">{b.name}</span>
+              <span class="block-type">{b.type}</span>
+              <button
+                class={`bypass${b.bypass ? " on" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void setBypass(channel.id, b.id, !b.bypass);
+                }}
+                title="Bypass"
+              >
+                B
+              </button>
+              <button
+                class="remove"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void removeBlock(channel.id, b.id);
+                }}
+                title="Remove block"
+              >
+                x
+              </button>
+            </div>
+          </Fragment>
         ))}
+        <div
+          class={`block-placeholder${drag && drag.insert === channel.blocks.length && drag.insert !== drag.from ? " active" : ""}`}
+        />
         {channel.blocks.length === 0 && (
           <div class="strip-empty">Empty channel — add a block from the rack</div>
         )}
@@ -119,6 +199,13 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
         </button>
         <div class="io">Out</div>
       </div>
+
+      {/* Ghost of the dragged card, following the pointer. */}
+      {drag && (
+        <div class="drag-ghost" style={{ left: `${drag.x}px`, top: `${drag.y}px` }}>
+          {channel.blocks.find((b) => b.id === drag.id)?.name}
+        </div>
+      )}
     </div>
   );
 }
@@ -135,7 +222,9 @@ export function Chain() {
           <ChannelRow key={c.id} channel={c} />
         ))}
       </div>
-      <p class="hint">Drag a block sideways to reorder it. Click a block to edit it below.</p>
+      <p class="hint">
+        Drag a block sideways to reorder it — the dashed slot shows where it will land. Click a block to edit it below.
+      </p>
     </div>
   );
 }

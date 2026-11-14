@@ -11,6 +11,11 @@ interface KnobProps {
   onChange: (v: number) => void;
 }
 
+/** Geometry of the indicator ring around the knob face. */
+const RING_R = 30; // ring centreline radius, px (the face itself is r=27)
+const RING_W = 4; // ring thickness
+const START = 135; // SVG degrees clockwise from 3 o'clock == 225deg on a clock face
+
 /** A rotary knob. Drag vertically, double-click to reset. */
 export function Knob({
   name,
@@ -49,14 +54,43 @@ export function Knob({
     <div class="knob-unit">
       <div
         class={`knob${dragging ? " dragging" : ""}`}
-        style={{ "--angle": `${angle}deg`, "--sweep": `${t * 270}deg` }}
+        style={{ "--angle": `${angle}deg` }}
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}
         onPointerCancel={up}
         onDblClick={() => defaultValue !== undefined && onChange(defaultValue)}
         title={`${name}: ${display} — drag, double-click to reset`}
-      />
+      >
+        {/* The ring is SVG, not a masked conic gradient: exact geometry, and it
+            renders identically in every webview. pathLength=100 makes the dash
+            numbers percentages of the circumference; 75 = the 270deg window. */}
+        <svg class="knob-arc" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+          <circle
+            cx="32"
+            cy="32"
+            r={RING_R}
+            fill="none"
+            stroke="#2f323b"
+            stroke-width={RING_W}
+            pathLength={100}
+            stroke-dasharray="75 100"
+            transform={`rotate(${START} 32 32)`}
+          />
+          <circle
+            cx="32"
+            cy="32"
+            r={RING_R}
+            fill="none"
+            stroke="var(--amber)"
+            stroke-width={RING_W}
+            stroke-linecap="round"
+            pathLength={100}
+            stroke-dasharray={`${t * 75} 100`}
+            transform={`rotate(${START} 32 32)`}
+          />
+        </svg>
+      </div>
       <div class="knob-name">{name}</div>
       <div class="knob-value">{display}</div>
     </div>

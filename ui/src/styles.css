@@ -406,15 +406,57 @@ input {
   cursor: grab;
   position: relative;
   user-select: none;
+  /* Pointer drags are JS-driven; stop the browser from scrolling instead. */
+  touch-action: none;
 }
 
 .block-card:hover {
   border-color: #4a4d59;
 }
 
-.block-card.over {
-  border-color: var(--amber);
-  box-shadow: 0 0 0 1px var(--amber);
+/* The dragged card's original slot is dimmed; the pointer carries a ghost. */
+.block-card.dragging {
+  cursor: grabbing;
+  border-style: dashed;
+  border-color: #4a4d59;
+}
+
+/* Same footprint as a card, so the strip makes room for the drop. Always
+   mounted (collapsed) so the dragged card's DOM node stays put. */
+.block-placeholder {
+  flex: none;
+  width: 0;
+  margin-right: -8px; /* cancel the flex gap while collapsed */
+  height: 62px;
+  border-radius: 7px;
+  border: 1px dashed transparent;
+  overflow: hidden;
+  transition: width 110ms ease, margin-right 110ms ease, border-color 110ms ease,
+    background-color 110ms ease;
+}
+
+.block-placeholder.active {
+  width: 116px;
+  margin-right: 0;
+  border-color: var(--amber-dim);
+  background: rgba(232, 163, 61, 0.08);
+}
+
+/* Floating copy that follows the pointer while dragging. */
+.drag-ghost {
+  position: fixed;
+  z-index: 40;
+  transform: translate(-50%, -50%) scale(1.04);
+  padding: 8px 14px;
+  border-radius: 7px;
+  background: linear-gradient(#3a3e49, #23252c);
+  border: 1px solid var(--amber);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.6);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .block-card.bypass {
@@ -583,32 +625,27 @@ input {
   touch-action: none;
 }
 
-.knob::before {
-  content: "";
+/* The indicator ring is an inline SVG (see Knob.tsx), centred on the face. */
+.knob-arc {
   position: absolute;
-  inset: -5px;
-  border-radius: 50%;
-  background: conic-gradient(
-    from 135deg,
-    var(--amber) 0deg var(--sweep, 90deg),
-    #2f323b var(--sweep, 90deg) 315deg,
-    transparent 315deg 360deg
-  );
-  -webkit-mask: radial-gradient(circle, transparent 62%, #000 63%);
-  mask: radial-gradient(circle, transparent 62%, #000 63%);
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .knob::after {
   content: "";
   position: absolute;
   left: 50%;
-  top: 7px;
+  top: 5px;
   width: 3px;
-  height: 15px;
+  height: 18px;
   border-radius: 2px;
   background: #f4f6fa;
   box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
-  transform-origin: 50% 20px;
+  /* Rotate about the knob's centre (27px, 27px), not the tick's own box. */
+  transform-origin: 50% 22px;
   transform: translateX(-50%) rotate(var(--angle, 0deg));
 }
 
