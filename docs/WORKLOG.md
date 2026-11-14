@@ -7,13 +7,10 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-3.3 is complete: the `.app` and the `.dmg` both build and are verified.
-The DMG's Finder cosmetic pass is skipped in headless sessions via `CI=true`
-(`shell/build-bundle.sh`). The US-2.11 transport question is settled:
-WebSocket over loopback TCP on every platform — a webview cannot open a Unix
-domain socket. The card's acceptance and `docs/UI-ARCHITECTURE.md` now match
-`docs/IPC-PROTOCOL.md` and the code. Next: reconcile the kanban board with the
-worklog, then verify US-5.2 (the pitch-shifting delay).**
+**US-5.2 is verified: `graph/tests/pitch_delay.rs` renders a sine burst through
+the real `PitchDelay` block and confirms successive repeats rise in pitch. The
+kanban board is reconciled with the worklog (US-1.4–1.6, US-2.1–2.11, US-3.3
+marked done). Next: verify US-5.3 — the continuous sweep rate.**
 
 ## Goal
 
@@ -119,16 +116,23 @@ pedal-dsp/
   impossible for this UI. Verified: the only remaining "Unix domain" mentions
   in `docs/` are the ones explaining why it is not used.
 
+- Kanban reconciliation: US-1.4–1.6, US-2.1–2.11, and US-3.3 are verified done
+  in the worklog but still showed `ready`/`todo` on the board; marked done.
+- US-5.2 (`graph/tests/pitch_delay.rs`): renders a 20 ms 220 Hz burst through a
+  lone `PitchDelay` block (300 ms, 70% feedback, +600 cents, Target mode, 100%
+  wet). The shifter sits in the feedback path, so each repeat is shifted again:
+  the Hann-windowed DFT peak of each repeat lands at 220 → 311 → 440 → 622 Hz,
+  within 15% of the expected `f0·2^(k·cents/1200)` and strictly increasing.
+  Verified: `cargo test -p dsp-graph --test pitch_delay` passes; the full
+  `cargo test --workspace` passes.
+
 ## Next step
 
-US-3.3, its three follow-ups, and the US-2.11 transport decision are done.
-
-**Reconcile the kanban board with the worklog.** US-1.4–1.6, US-2.1–2.11, and
-US-3.3 are verified done but still show `ready`/`todo` on the board; mark them
-done (`hermes kanban complete ...`). Then verify **US-5.2 — the pitch-shifting
-delay**: render output and confirm successive repeats rise in pitch. The
-`PitchDelay` block already has Sweep/Shepard modes and a cents/sec rate
-(US-5.3), but nothing yet checks that the repeats actually climb.
+**Verify US-5.3 — the continuous sweep rate.** The `PitchDelay` block already
+has Sweep/Shepard modes and a cents/sec rate, but nothing checks that the pitch
+keeps climbing while the gate is held, or that the rate maps to cents/sec.
+Render in Sweep mode and confirm the measured pitch rises monotonically over
+time, and that doubling `rate` doubles the climb.
 
 ## Gotcha worth remembering
 
