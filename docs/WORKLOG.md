@@ -9,9 +9,11 @@ spawned worker — reads this before touching the code.
 
 **US-3.3 is complete: the `.app` and the `.dmg` both build and are verified.
 The DMG's Finder cosmetic pass is skipped in headless sessions via `CI=true`
-(`shell/build-bundle.sh`). Next: settle the US-2.11 transport question — its
-card asks for a Unix domain socket, but a webview can only open a WebSocket
-over TCP.**
+(`shell/build-bundle.sh`). The US-2.11 transport question is settled:
+WebSocket over loopback TCP on every platform — a webview cannot open a Unix
+domain socket. The card's acceptance and `docs/UI-ARCHITECTURE.md` now match
+`docs/IPC-PROTOCOL.md` and the code. Next: reconcile the kanban board with the
+worklog, then verify US-5.2 (the pitch-shifting delay).**
 
 ## Goal
 
@@ -109,18 +111,24 @@ pedal-dsp/
   `/Applications`; launching the app *from the mounted volume* spawns the
   bundled engine and the embedded UI connects (`client connected`,
   `<- getState`).
+- US-2.11 transport settled: the card's acceptance and `docs/UI-ARCHITECTURE.md`
+  now say WebSocket over loopback TCP on every platform, matching
+  `docs/IPC-PROTOCOL.md` and the code (`TcpListener::bind(("127.0.0.1", 8737))`
+  in `engine/src/server.rs`, `WebSocketBridge` → `ws://127.0.0.1:8737` in
+  `ui/src/bridge.ts`). A webview cannot open a Unix domain socket, so UDS is
+  impossible for this UI. Verified: the only remaining "Unix domain" mentions
+  in `docs/` are the ones explaining why it is not used.
 
 ## Next step
 
-US-3.3 and all three follow-ups are done.
+US-3.3, its three follow-ups, and the US-2.11 transport decision are done.
 
-**Settle the US-2.11 transport contradiction before building anything else on
-the transport.** Its card's acceptance says "a Unix domain socket on
-macOS/Linux, loopback TCP elsewhere", but a webview can only open a WebSocket
-over TCP, and `docs/IPC-PROTOCOL.md` already commits to loopback TCP. The
-webview constraint decides it: keep loopback TCP on every platform and amend
-the card's acceptance to match. That is a decision for the user to confirm,
-not an implementation — do not build on the transport until it is settled.
+**Reconcile the kanban board with the worklog.** US-1.4–1.6, US-2.1–2.11, and
+US-3.3 are verified done but still show `ready`/`todo` on the board; mark them
+done (`hermes kanban complete ...`). Then verify **US-5.2 — the pitch-shifting
+delay**: render output and confirm successive repeats rise in pitch. The
+`PitchDelay` block already has Sweep/Shepard modes and a cents/sec rate
+(US-5.3), but nothing yet checks that the repeats actually climb.
 
 ## Gotcha worth remembering
 

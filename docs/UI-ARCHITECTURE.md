@@ -128,8 +128,8 @@ audio path, and a UI crash or restart cannot silence the guitar.
                                                               audio interface
 ```
 
-- **Transport:** a local socket (Unix domain on macOS/Linux, loopback TCP
-  elsewhere). JSON or bincode. Localhost only.
+- **Transport:** WebSocket over loopback TCP on every platform — a webview
+  cannot open a Unix domain socket. JSON. Localhost only.
 - **Engine process:** owns the audio interface and the DSP core, exposes
   parameters, presets, and meters.
 - **UI process:** renders, sends commands, displays meters. It can be killed
@@ -185,8 +185,8 @@ the engine behaves, even after the web UI becomes the product UI.
 ## First steps
 
 1. **US-2.1** — this document (done).
-2. **US-2.11** — decide the engine/UI IPC protocol and state-sync shape. This
-   is the foundation for every shell, so settle it before building the UI.
+2. **US-2.11** — the engine/UI IPC protocol and state-sync shape. Settled:
+   WebSocket over loopback TCP (`docs/IPC-PROTOCOL.md`).
 3. **US-2.2** — spike: a Tauri shell rendering a trivial Preact page on the
    Mac, talking to a stub engine process. Prove the shell, the IPC, and the
    reconnect path.

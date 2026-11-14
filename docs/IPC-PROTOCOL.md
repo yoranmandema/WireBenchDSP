@@ -19,6 +19,8 @@ are identical everywhere.
 - **WebSocket**, text frames, one JSON object per frame.
 - **Endpoint:** `ws://127.0.0.1:8737/` (loopback only).
 - The engine binds `127.0.0.1`; no external interface.
+- A webview cannot open a Unix domain socket, so the transport is loopback TCP
+  on every platform — including macOS and Linux.
 - Binary frames are not used.
 
 A frame is always a single JSON object. No batching, no arrays of messages.
