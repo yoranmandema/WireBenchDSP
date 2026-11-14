@@ -2,6 +2,8 @@
 
 #include "IPlug_include_in_plug_hdr.h"
 
+#include <vector>
+
 const int kNumPresets = 1;
 
 enum EParams
@@ -37,4 +39,8 @@ private:
   PedalCore* mCore = nullptr;
   double mSampleRate = 48000.0;
   bool mPresetLoaded = false;
+  /* iPlug2's `sample` is double by default; the C ABI is float. Converted
+   * through this pre-allocated interleaved buffer so the audio path never
+   * allocates. Sized for the worst case: stereo in and out. */
+  std::vector<float> mIO;
 };

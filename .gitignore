@@ -3,3 +3,5 @@ target/
 presets/*-local.json
 output.wav
 docs/.heartbeat
+plugin/build/
+plugin/build

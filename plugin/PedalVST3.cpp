@@ -69,7 +69,6 @@ PedalVST3::PedalVST3(const InstanceInfo& info)
 
   mLayoutFunc = [&](IGraphics* pGraphics) {
     pGraphics->AttachCornerResizer(EUIResizerMode::Scale, false);
-    pGraphics->SetEraseable(true);
     pGraphics->AttachPanelBackground(COLOR_GRAY);
     pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
 
@@ -113,6 +112,9 @@ void PedalVST3::OnReset()
     pedal_core_set_sample_rate(mCore, (float) sr);
 
   mSampleRate = sr;
+
+  /* Stereo in and out, plus slack for the mono case. */
+  mIO.assign((size_t) kMaxBlock * 2, 0.f);
 
   if (!mPresetLoaded)
   {
@@ -162,7 +164,37 @@ void PedalVST3::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
 
   const int chans = (nIn >= 2 && nOut >= 2) ? 2 : 1;
 
-  pedal_core_process(mCore, inputs[0], outputs[0], (uint32_t) nFrames, (uint32_t) chans);
+  /* double (iPlug2) -> interleaved float (C ABI) */
+  if (chans == 2)
+  {
+    for (int s = 0; s < nFrames; s++)
+    {
+      mIO[(size_t) s * 2]     = (float) inputs[0][s];
+      mIO[(size_t) s * 2 + 1] = (float) inputs[1][s];
+    }
+  }
+  else
+  {
+    for (int s = 0; s < nFrames; s++)
+      mIO[s] = (float) inputs[0][s];
+  }
+
+  pedal_core_process(mCore, mIO.data(), mIO.data(), (uint32_t) nFrames, (uint32_t) chans);
+
+  /* interleaved float -> double, per host channel */
+  if (chans == 2)
+  {
+    for (int s = 0; s < nFrames; s++)
+    {
+      outputs[0][s] = (sample) mIO[(size_t) s * 2];
+      outputs[1][s] = (sample) mIO[(size_t) s * 2 + 1];
+    }
+  }
+  else
+  {
+    for (int s = 0; s < nFrames; s++)
+      outputs[0][s] = (sample) mIO[s];
+  }
 
   /* If the host gave us more outputs than the graph has channels, mute the rest. */
   for (int c = chans; c < nOut; c++)

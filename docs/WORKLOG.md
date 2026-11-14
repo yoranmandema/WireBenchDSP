@@ -296,8 +296,10 @@ explicit form `{ "script": "pnpm build", "cwd": "../ui" }`, which resolves
 against the tauri dir.
 
 **`cargo tauri` is not installed on this host.** The official JS wrapper is:
-`npx --yes @tauri-apps/cli build` (tauri-cli 2.12.4). It warns that the
-identifier `com.pedal.app` ends with `.app`.
+`npx --yes @tauri-apps/cli build` (tauri-cli 2.12.4). The identifier is
+`app.pedal` — an earlier `com.pedal.app` tripped Tauri's "ends with `.app`"
+warning. Changing it also moves the saved-state directory, so macOS forgets a
+previously restored window frame.
 
 **A GUI app launched from a cron/background session gets no window** — only a
 long-lived shell had windows. To verify a bundle, run its binary directly and

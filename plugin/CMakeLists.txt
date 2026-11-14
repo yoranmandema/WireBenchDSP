@@ -36,6 +36,9 @@ iplug_add_plugin(${PROJECT_NAME}
     ${PEDAL_FFI_LIB}
 )
 
+# The C ABI header lives in ffi/.
+target_include_directories(PedalVST3-vst3 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../ffi/include")
+
 # If the bundle resource lookup fails (e.g. running from a build tree), fall
 # back to the source tree copy of the same preset.
 target_compile_definitions(PedalVST3-vst3 PRIVATE
