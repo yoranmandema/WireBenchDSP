@@ -7,10 +7,12 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-5.2 is verified: `graph/tests/pitch_delay.rs` renders a sine burst through
-the real `PitchDelay` block and confirms successive repeats rise in pitch. The
-kanban board is reconciled with the worklog (US-1.4–1.6, US-2.1–2.11, US-3.3
-marked done). Next: verify US-5.3 — the continuous sweep rate.**
+**US-5.3 is verified: `graph/tests/pitch_sweep.rs` renders the real
+`PitchDelay` block in Sweep mode and confirms the pitch keeps climbing at the
+set cents/sec, that doubling `rate` doubles the climb, and that Target mode
+ignores the rate. The kanban board is reconciled with the worklog (US-1.4–1.6,
+US-2.1–2.11, US-3.3, US-5.2, US-5.3 marked done). Next: verify US-5.1 — the
+NAM block's output against a Python reference render.**
 
 ## Goal
 
@@ -125,14 +127,39 @@ pedal-dsp/
   within 15% of the expected `f0·2^(k·cents/1200)` and strictly increasing.
   Verified: `cargo test -p dsp-graph --test pitch_delay` passes; the full
   `cargo test --workspace` passes.
+- US-5.3 (`graph/tests/pitch_sweep.rs`): the continuous sweep rate, through the
+  real `PitchDelay` block. (1) `sweep_climbs_continuously_and_never_settles`
+  renders a continuous 220 Hz sine with `feedback = 0` (a single pass, so the
+  instantaneous pitch is measurable) in Sweep mode at 200 cents/s; the
+  magnitude-squared spectral centroid lands at +102 / +196 / +300 cents at
+  0.5 / 1.0 / 1.5 s — matching `rate·t` and strictly increasing, so it never
+  settles. (2) `doubling_rate_doubles_the_climb`: the climb over 1.0 s is
+  196 cents at 200 cents/s and 396 at 400 (ratio 2.0). (3)
+  `target_mode_ignores_the_rate`: Target mode with `rate = 1200` holds +600
+  cents and does not drift — the contrast that rules out a move-to-target
+  glide. (4) `sweep_repeats_climb_in_the_feedback_loop`: a 20 ms burst with
+  60% feedback gives repeats that rise monotonically and sit above the
+  equivalent Target repeats (the sweep compounds across repeats). The shifter's
+  crossfade spreads the spectrum into sidebands, so a plain peak pick is
+  unreliable on a swept signal; the tests use the spectral centroid for the
+  continuous case and a fine-grid (1 Hz) peak for the burst case. Verified:
+  `cargo test -p dsp-graph --test pitch_sweep` passes (4 tests); the full
+  `cargo test --workspace` passes (124 tests).
 
 ## Next step
 
-**Verify US-5.3 — the continuous sweep rate.** The `PitchDelay` block already
-has Sweep/Shepard modes and a cents/sec rate, but nothing checks that the pitch
-keeps climbing while the gate is held, or that the rate maps to cents/sec.
-Render in Sweep mode and confirm the measured pitch rises monotonically over
-time, and that doubling `rate` doubles the climb.
+**Verify US-5.1 — the NAM block against a Python reference render.** The card's
+acceptance is "Output matches a Python reference render of the same model".
+`graph/tests/nam.rs` covers parsing, the registry, real-time safety (no
+allocation in `process`), sample-rate mismatch/resampling, and preset path
+resolution — but it only checks that the output is non-silent and finite, not
+that it matches a reference. The remaining work: render a real `.nam` (the user
+has an OD808 amp-cab model) through the `Nam` block and through the Python `nam`
+package (or an equivalent reference implementation), and compare sample by
+sample. Check whether a Python environment with `nam` is available on this host
+first (`python3 -c "import nam"`); if not, record that as the blocker and fall
+back to a self-contained reference (e.g. a hand-computed WaveNet pass for the
+existing tiny test vector, checked against the Rust output).
 
 ## Gotcha worth remembering
 

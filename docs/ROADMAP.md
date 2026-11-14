@@ -88,8 +88,8 @@ The sound: real model playback and the pitch-shifting delay.
 | Story | Title | Status |
 |---|---|---|
 | US-5.1 | Run a .nam model in real time | ready |
-| US-5.2 | Pitch-shifting delay | ready |
-| US-5.3 | Continuous sweep rate (cents/sec) | ready (needs 5.2) |
+| US-5.2 | Pitch-shifting delay | done |
+| US-5.3 | Continuous sweep rate (cents/sec) | done |
 | US-5.4 | Pi 5 CPU headroom and latency | ready |
 
 ---
