@@ -43,7 +43,7 @@ async fn main() {
         channel_mode: pedal_engine::audio::ChannelMode::First(2),
         latency_frames: LATENCY_FRAMES,
     };
-    let source = Arc::new(AtomicU8::new(0));
+    let source = Arc::new(AtomicU8::new(2)); // silence by default; the riff is opt-in
     let (mut handle, cmd_rx, trash_tx, running) = new_engine(setup, source.clone());
     handle.preset_dir = store.dir.clone();
     let meters = handle.meters.clone();
@@ -68,7 +68,7 @@ async fn main() {
         *handle.node_ids.lock().unwrap() = ex.node_ids().to_vec();
         handle.push(Cmd::Swap(ex, Vec::new())).expect("initial swap");
     }
-    handle.set_source(0); // riff
+    handle.set_source(2); // silence
 
     // The streams own the command queue from here on.
     host::start(&devices, cmd_rx, trash_tx, running, meters, source.clone());

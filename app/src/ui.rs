@@ -59,7 +59,7 @@ impl Default for UiState {
             doc_name: String::new(),
             dirty: false,
             status: String::new(),
-            source: Source::Riff,
+            source: Source::Silence,
             add_for: None,
             drag: None,
         }

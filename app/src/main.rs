@@ -57,7 +57,7 @@ fn main() {
         channel_mode: ChannelMode::First(2.min(devices.in_channels)),
         latency_frames: LATENCY_FRAMES,
     };
-    let source = Arc::new(AtomicU8::new(0));
+    let source = Arc::new(AtomicU8::new(2)); // silence by default; the riff is opt-in
     let (handle, cmd_rx, trash_tx, running) = audio::new_engine(setup, source.clone());
     let handle = {
         let mut h = handle;
@@ -77,7 +77,7 @@ fn main() {
         *handle.node_ids.lock().unwrap() = ex.node_ids().to_vec();
         handle.push(Cmd::Swap(ex, Vec::new())).expect("initial swap");
     }
-    handle.set_source(0); // riff
+    handle.set_source(2); // silence
 
     if selftest {
         selftest_run(handle, meters, setup.sample_rate, devices.out_channels, &rig)
