@@ -573,6 +573,19 @@ impl Executor {
         self.params_real[idx].get(pidx).copied()
     }
 
+    /// Read a parameter's current normalised value (0..1). Hosts that expose
+    /// parameters as automation (VST3, CLAP) work in normalised space.
+    pub fn param_norm(&self, node_id: &str, param: &str) -> Option<f32> {
+        let idx = self.node_index(node_id)?;
+        let pidx = self.specs[idx].param_index(param)?;
+        self.params_norm[idx].get(pidx).copied()
+    }
+
+    /// Static specs in executor order, parallel to [`node_ids`](Self::node_ids).
+    pub fn specs(&self) -> &[BlockSpec] {
+        &self.specs
+    }
+
     /// The graph's total output latency in samples.
     ///
     /// This is the delay between the input and the output of the whole graph.

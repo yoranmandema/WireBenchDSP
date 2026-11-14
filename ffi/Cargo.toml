@@ -1,0 +1,16 @@
+[package]
+name = "pedal-ffi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "C ABI between the Rust DSP core and the native plugin shell"
+
+[lib]
+name = "pedal_ffi"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+dsp-graph = { path = "../graph" }
+
+[dev-dependencies]
+serde_json = "1"

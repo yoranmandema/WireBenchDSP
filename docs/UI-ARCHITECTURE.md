@@ -98,6 +98,10 @@ for the webview path until it has shipped in a real plugin.
 Whichever shell is chosen, keep a native UI as the fallback. It is a rendering
 layer over the same parameter state, not a second engine.
 
+**The C ABI is already built.** `ffi/` (`pedal-ffi`) compiles the executor to a
+`staticlib` and ships `ffi/include/pedal_ffi.h`; the shell only calls
+`pedal_core_*`. `ffi/test-c.sh` links a C harness against the real staticlib.
+
 ## The invariant that makes this safe
 
 **The UI never touches the audio path.**

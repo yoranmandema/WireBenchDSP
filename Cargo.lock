@@ -3568,6 +3568,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pedal-ffi"
+version = "0.1.0"
+dependencies = [
+ "dsp-graph",
+ "serde_json",
+]
+
+[[package]]
 name = "pedal-shell"
 version = "0.1.0"
 dependencies = [

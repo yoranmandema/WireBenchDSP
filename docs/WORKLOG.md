@@ -7,17 +7,17 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-5.1 is fully verified against a self-contained Python reference, for both
-the tiny WaveNet and the user's real OD808 model. `graph/tests/nam_reference.py`
-now parses a real `.nam` (WaveNet or SlimmableContainer) and runs the same
-forward pass in pure Python; `graph/examples/nam_real_reference.rs` dumps the
-Rust block's input/output for the real model. On 8192 samples of the real
-`models/MES DRECF RD Gain2 BAL O808 CAB.nam` (v0.7.0 SlimmableContainer, full
-submodel), the two agree sample by sample: max abs error 6.19e-07, rms
-6.65e-08 — float32 rounding, well inside 1e-5. The tiny model still matches at
-9.24e-07 over 512 samples. The Python `nam` package is not available on this
-host (PyPI `nam` is Google's Neural Additive Models; NAM's own needs torch), so
-the reference reimplements the forward pass from the weights.**
+**US-4.1's C ABI boundary is in place and verified from a real C program.
+`ffi/` (`pedal-ffi`) exposes the `dsp-graph` executor through a flat C
+interface — `pedal_core_new` / `load_preset[_file]` / `set_sample_rate` /
+`set_param_norm|real` / `get_param_norm|real` / `set_bypass` / `process` /
+`reset` / `latency` / `foreach_node` / `foreach_param` — built as a
+`staticlib` with `ffi/include/pedal_ffi.h` for the C++ shell to include.
+`Executor` gained two read-only accessors (`param_norm`, `specs`) for it. The
+graph is mono, so a stereo host passes interleaved stereo and gets the mono
+signal duplicated to both channels; the deinterleave uses a scratch buffer
+allocated in `pedal_core_new`, so `process` never allocates, and a block
+larger than the declared `max_block` is refused rather than clamped.**
 
 ## Goal
 
@@ -35,11 +35,12 @@ Three shells, one HTML/Preact frontend:
 pedal-dsp/
   dsp/       no_std DSP primitives          (exists)
   graph/     block graph + executor        (exists)
+  ffi/       C ABI to the executor          (staticlib + header, for the plugin)
   app/       egui dev tool                 (thin; re-exports the engine)
   engine/    engine process + library      (audio, channels, store, host, server)
   ui/        Preact + TypeScript + Vite    (shared by every shell)
   shell/     Tauri desktop shell           (done)
-  plugin/    iPlug2 plugin (C++)            (later)
+  plugin/    iPlug2 plugin (C++)            (later; links ffi/)
 ```
 
 ## Done
@@ -205,16 +206,41 @@ pedal-dsp/
   samples; `cargo test --workspace` passes. Grouped convolutions, FiLM,
   post-stack heads and `condition_dsp` are rejected with a clear error rather
   than silently mis-run.
+- US-4.1 step 1 — the C ABI boundary (`ffi/`, crate `pedal-ffi`): the executor
+  behind a flat C interface, built as a `staticlib` with a header the C++ shell
+  includes. `Executor` gained `param_norm` and `specs` (read-only) for it.
+  `pedal_core_process` is mono in the graph, so a stereo host's interleaved
+  input is deinterleaved into a pre-allocated scratch buffer and the mono
+  output is duplicated to both channels — no allocation on the audio path, and
+  an over-long block is refused instead of clamped. Verified: `cargo test -p
+  pedal-ffi` (7 tests) — sample-exact parity between the ABI and a direct
+  `Executor` run on the same preset (max abs error < 1e-6), param round trips in
+  normalised and real space, bypass/reset, node/param enumeration, rate change
+  recompiles the rig, and error paths return instead of panicking;
+  `ffi/test-c.sh` compiles a C harness against the real staticlib and runs a
+  220 Hz sine through `presets/04-rainbow.json` (7 nodes, peak 0.044, rms 0.025
+  over 1024 frames, param 0.0000 → 0.2500), and also passes on `00-blank.json`
+  and `06-nam-amp.json` (the latter loads the real `.nam`); `cargo test
+  --workspace` passes.
 
 ## Next step
 
-**The Pi deployment path is ready.** Connect the Pi 5, then follow
-`docs/PI-DEPLOY.md`: `engine/cross-build.sh` (or a native `cargo build` on the
-Pi), copy the binary, and run `pedal-engine --headless --bench 10` to smoke test
-it and get the first US-5.4 CPU number. US-3.2 then follows by attaching the
-interface and running without `--headless`. Until the Pi is reachable, the Pi
-stories (US-3.1, US-3.2, US-3.4, US-5.4) stay blocked on hardware, and the next
-host-doable card is **US-4.1 (VST3 wrapper)** — the last remaining shell.
+**US-4.1 continues with the iPlug2 shell.** The C ABI (`ffi/`) is done and
+verified from C, so the next step is to scaffold `plugin/` with iPlug2, link
+`target/release/libpedal_ffi.a`, and produce a `.vst3` that loads in a host.
+Concretely: clone iPlug2, add a single VST3 target whose `process` calls
+`pedal_core_process` and whose editor is the native fallback UI, then build the
+bundle and load it in a headless VST3 host (Ableton Live 12 Suite is installed
+on this machine, but launching it from cron would disturb the user — use the
+SDK validator or a small host that discards output instead). Acceptance is
+still "loads in a DAW and produces sound"; the C harness already proves the
+second half of that against the real DSP.
+
+The Pi deployment path is also still ready: connect the Pi 5 and follow
+`docs/PI-DEPLOY.md` (`engine/cross-build.sh`, copy the binary, run
+`pedal-engine --headless --bench 10` for the first US-5.4 CPU number; US-3.2
+follows by attaching the interface). Until the Pi is reachable, US-3.1, US-3.2,
+US-3.4 and US-5.4 stay blocked on hardware.
 
 ## Gotcha worth remembering
 
@@ -289,6 +315,9 @@ cargo run -p dsp-graph --example nam_real_reference -- \
   "models/MES DRECF RD Gain2 BAL O808 CAB.nam" /tmp/nam-real
 python3 graph/tests/nam_reference.py --model \
   "models/MES DRECF RD Gain2 BAL O808 CAB.nam" /tmp/nam-real
+
+# the C ABI the VST3 shell links (C harness against the real staticlib)
+./ffi/test-c.sh presets/04-rainbow.json
 
 # self-contained desktop app + .dmg installer (spawns the engine, embeds the UI)
 # CI=true skips the Finder cosmetic pass, which cannot run headless
