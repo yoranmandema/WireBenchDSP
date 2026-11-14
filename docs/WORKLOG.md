@@ -7,10 +7,10 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-3.3 is implemented and verified: the release `.app` bundle embeds the UI,
-and the embedded UI drives the engine the shell spawns.
-Next: give the app microphone permission (`NSMicrophoneUsageDescription`) so the
-engine can open live input, then ship the engine inside the bundle.**
+**US-3.3 is implemented and verified, and both follow-ups are done: the release
+`.app` embeds the UI, declares `NSMicrophoneUsageDescription`, and ships the
+engine beside the shell (`externalBin`), so the bundle is self-contained.
+Next: the `.dmg` installer target, which currently fails on this host.**
 
 ## Goal
 
@@ -87,21 +87,25 @@ pedal-dsp/
   on `ws://127.0.0.1:8737`, and the embedded UI connects and sends `getState`
   (see `/tmp/pedal-engine.log`). `engine_path()` now also looks next to the
   executable, so a bundle that ships the engine beside the shell works.
+- Microphone permission + self-contained bundle (follow-ups 1–2, commit
+  `0fe028c`): `shell/Info.plist` adds `NSMicrophoneUsageDescription` (Tauri
+  auto-merges an `Info.plist` next to `tauri.conf.json`), and
+  `bundle.externalBin` ships `target/release/pedal-engine` inside
+  `Pedal.app/Contents/MacOS/`. `beforeBuildCommand` now also builds the release
+  engine and copies the `-<host-triple>`-suffixed binary Tauri expects for
+  cross-compilation. Verified: `npx @tauri-apps/cli build --bundles app` exits
+  0; the fresh bundle has `Contents/MacOS/pedal-engine` and the mic key in
+  `Info.plist`; launching the bundle's binary spawns that engine and the
+  embedded UI connects (`client connected`, `<- getState`).
 
 ## Next step
 
-US-3.3 is done. Three follow-ups, in order:
+US-3.3 is done, and follow-ups 1–2 are done and committed (`0fe028c`). One
+follow-up remains:
 
-1. **Microphone permission (blocks live input on macOS).** tccd refuses the
-   engine's input request: "Refusing authorization request for service
-   kTCCServiceMicrophone ... without NSMicrophoneUsageDescription key". Add the
-   key to the bundle's Info.plist (`bundle.macOS.infoPlist`) and rebuild.
-2. **Ship the engine inside the bundle.** `engine_path()` still falls back to
-   the workspace `target/<profile>/pedal-engine`, so a `.app` moved off the
-   build machine cannot start. Tauri `externalBin` needs a
-   `-<target_triple>`-suffixed copy at build time (see gotcha).
-3. The `.dmg` target fails on this host (`bundle_dmg.sh` → Finder AppleEvent
-   timeout). The `.app` itself is unaffected.
+3. **The `.dmg` installer target fails on this host** (`bundle_dmg.sh` →
+   Finder AppleEvent timeout). The `.app` itself is unaffected; build with
+   `npx @tauri-apps/cli build --bundles app` to skip the installer step.
 
 Open question for US-2.11: its card asks for a Unix domain socket on
 macOS/Linux, but a webview can only open a WebSocket over TCP, and
@@ -152,6 +156,11 @@ long-lived shell had windows. To verify a bundle, run its binary directly and
 watch `/tmp/pedal-engine.log` for `client connected` followed by
 `<- getState`; that pair is the embedded UI's `init()` running.
 
+**`bundle.targets = "all"` makes `tauri build` exit non-zero on the `.dmg`
+failure** even though the `.app` is already written by then. Build with
+`npx @tauri-apps/cli build --bundles app` to get the `.app` without the
+installer step.
+
 ## How to run
 
 ```bash
@@ -159,7 +168,8 @@ watch `/tmp/pedal-engine.log` for `client connected` followed by
 ./target/debug/pedal-engine --rig 04-rainbow
 
 # self-contained desktop app bundle (spawns the engine itself, embeds the UI)
-cd shell && npx --yes @tauri-apps/cli build
+# --bundles app skips the .dmg installer, which fails on this host
+cd shell && npx --yes @tauri-apps/cli build --bundles app
 open ../target/release/bundle/macos/Pedal.app
 
 # debug build: still loads the Vite devUrl, so run `pnpm --dir ui dev` first
