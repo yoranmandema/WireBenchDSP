@@ -38,7 +38,7 @@ pedal-dsp/
   app/       egui dev tool                 (thin; re-exports the engine)
   engine/    engine process + library      (audio, channels, store, host, server)
   ui/        Preact + TypeScript + Vite    (shared by every shell)
-  shell/     Tauri desktop shell           (NEXT)
+  shell/     Tauri desktop shell           (done)
   plugin/    iPlug2 plugin (C++)            (later)
 ```
 
@@ -123,6 +123,31 @@ pedal-dsp/
   impossible for this UI. Verified: the only remaining "Unix domain" mentions
   in `docs/` are the ones explaining why it is not used.
 
+- Pi deployment prep: the engine now builds for the Pi and can boot with no
+  audio device at all. `engine/cross-build.sh` produces a genuine
+  `aarch64-unknown-linux-gnu` release binary from this Mac: it assembles an
+  aarch64 Linux toolchain (messense/homebrew-macos-cross-toolchains), builds
+  `alsa-lib` for aarch64 against that toolchain's sysroot, and links with
+  `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER` plus `PKG_CONFIG_ALLOW_CROSS=1`
+  (Rust's `pkg-config` crate refuses to cross-compile without a target sysroot).
+  Verified: the output is a valid aarch64 ELF whose only non-libc dependency is
+  `libasound.so.2`, which Raspberry Pi OS ships as `libasound2t64`;
+  `pedal-dsp` and `dsp-graph` also `cargo check` clean for the target.
+  `engine/src/headless.rs` adds a simulated device (`--headless`,
+  `--source riff|live|silence`, `--bench <seconds>`, `--port <n>`) that runs the
+  real `run_callback` on a paced device and **discards the output** — no audio
+  hardware, and nothing is ever played. `engine/tests/headless_smoke.rs` spawns
+  the real `pedal-engine --headless --port P --bench 3`, connects a real
+  WebSocket client, checks the snapshot and a `setParam` round trip, and asserts
+  the bench counters (`callbacks > 0`, `frames > 0`, `xruns == 0`). Verified:
+  `cargo test -p pedal-engine --test headless_smoke` passes — on this host
+  `callbacks=107 cpu=0.9% frames=27392 realtime=19.0 xruns=0` over 3 s (the low
+  `realtime` is the macOS `sleep` overshoot; `cpu` is unaffected);
+  `cargo test --workspace` passes (125 tests). `docs/PI-DEPLOY.md` is the
+  runbook. The aarch64 binary itself cannot be executed here: qemu's linux-user
+  emulation is Linux-host-only (`configure` refuses it on macOS), so its first
+  boot is still pending real hardware.
+
 - Kanban reconciliation: US-1.4–1.6, US-2.1–2.11, and US-3.3 are verified done
   in the worklog but still showed `ready`/`todo` on the board; marked done.
 - US-5.2 (`graph/tests/pitch_delay.rs`): renders a 20 ms 220 Hz burst through a
@@ -183,13 +208,13 @@ pedal-dsp/
 
 ## Next step
 
-**US-5.4 (Pi 5 CPU headroom and latency) is the last open E5 card, but it needs
-the Pi 5 — which is not currently reachable (no ssh config, `raspberrypi.local`
-does not resolve). The next host-doable step is to prepare the Pi deployment
-path: an `aarch64-unknown-linux-gnu` release build of the engine plus a headless
-smoke test, so US-3.2 and US-5.4 can be measured as soon as the Pi is connected.
-Until then the Pi stories (US-3.1, US-3.2, US-3.4, US-5.4) stay blocked on
-hardware.**
+**The Pi deployment path is ready.** Connect the Pi 5, then follow
+`docs/PI-DEPLOY.md`: `engine/cross-build.sh` (or a native `cargo build` on the
+Pi), copy the binary, and run `pedal-engine --headless --bench 10` to smoke test
+it and get the first US-5.4 CPU number. US-3.2 then follows by attaching the
+interface and running without `--headless`. Until the Pi is reachable, the Pi
+stories (US-3.1, US-3.2, US-3.4, US-5.4) stay blocked on hardware, and the next
+host-doable card is **US-4.1 (VST3 wrapper)** — the last remaining shell.
 
 ## Gotcha worth remembering
 
@@ -244,6 +269,15 @@ tauri-bundler pass `--skip-jenkins` and skip only that cosmetic pass — the DMG
 still has the app and the `Applications` symlink. The trade-off is no custom
 DMG background or icon positions.
 
+**A cross-built aarch64 binary cannot be executed on this Mac.** qemu's
+linux-user emulation (`qemu-aarch64`) is Linux-host-only — `configure` refuses
+it on macOS ("linux-user not supported on this architecture"), and Homebrew's
+`qemu` bottle ships only `qemu-system-*` (a full VM needs a kernel and rootfs).
+Docker Desktop is not installed either. So `engine/cross-build.sh` can prove the
+binary is a valid aarch64 ELF with the right `NEEDED` libraries, but its first
+boot has to happen on the Pi. Do not claim the Pi build is "verified" beyond
+that.
+
 ## How to run
 
 ```bash
@@ -261,6 +295,11 @@ python3 graph/tests/nam_reference.py --model \
 cd shell && ./build-bundle.sh
 open ../target/release/bundle/macos/Pedal.app
 open ../target/release/bundle/dmg/Pedal_0.1.0_aarch64.dmg
+
+# Pi 5: cross-build the engine, then boot it with no audio device
+./engine/cross-build.sh
+./target/aarch64-unknown-linux-gnu/release/pedal-engine --headless --bench 10
+# see docs/PI-DEPLOY.md
 
 # debug build: still loads the Vite devUrl, so run `pnpm --dir ui dev` first
 cargo build -p pedal-shell --features custom-protocol

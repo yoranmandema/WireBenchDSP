@@ -533,8 +533,16 @@ async fn meters_loop(sh: Arc<Shared>) {
 
 /// Bind loopback and serve until the process exits.
 pub async fn serve(sh: Arc<Shared>) -> Result<(), String> {
-    let listener = TcpListener::bind(("127.0.0.1", PORT)).await.map_err(|e| e.to_string())?;
-    eprintln!("pedal-engine: ipc listening on ws://127.0.0.1:{PORT}");
+    serve_port(sh, PORT).await
+}
+
+/// Bind loopback on an explicit port and serve until the process exits.
+///
+/// Split out from [`serve`] so a test (or a Pi whose [`PORT`] is taken) can
+/// bind somewhere else.
+pub async fn serve_port(sh: Arc<Shared>, port: u16) -> Result<(), String> {
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| e.to_string())?;
+    eprintln!("pedal-engine: ipc listening on ws://127.0.0.1:{port}");
     serve_listener(sh, listener).await
 }
 
