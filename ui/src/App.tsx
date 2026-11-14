@@ -1,5 +1,5 @@
 import { useEffect } from "preact/hooks";
-import { error, init, ready } from "./state";
+import { error, init, notice, ready } from "./state";
 import { TopBar } from "./components/TopBar";
 import { Rack } from "./components/Rack";
 import { Chain } from "./components/Chain";
@@ -45,6 +45,12 @@ export function App() {
       </div>
       <Editor />
       <PresetBrowser />
+      {/* Command failures surface here instead of failing silently. */}
+      {notice.value && (
+        <div class="toast" onClick={() => (notice.value = null)}>
+          {notice.value}
+        </div>
+      )}
     </div>
   );
 }

@@ -47,6 +47,9 @@ export interface Channel {
 }
 
 export interface State {
+  /** Monotonic revision. Bumped by the engine on every rebuild; the UI drops
+   *  snapshots that are not newer, so a late delivery cannot roll it back. */
+  rev: number;
   preset: string;
   presets: string[];
   source: "riff" | "live" | "silence";

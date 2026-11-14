@@ -1,5 +1,7 @@
 /* Pedal UI — dark, dense, touch-first. The visual target is
-   docs/ui-mock-neuraldsp.html. */
+   docs/ui-mock-neuraldsp.html. Colour is per category: every block carries its
+   category hue in `--cat-h`, and the cards, rack, icons and editor header all
+   derive from it. */
 
 :root {
   --bg: #101116;
@@ -47,9 +49,23 @@ input {
   font: inherit;
 }
 
+/* Category accent, used wherever a block's hue is in scope. */
+.block-card,
+.rack-item,
+.rack h2,
+.editor-id {
+  --cat: hsl(var(--cat-h, 222) 62% 58%);
+  --cat-soft: hsl(var(--cat-h, 222) 45% 20%);
+}
+
+.icon {
+  flex: none;
+  display: block;
+}
+
 .app {
   display: grid;
-  grid-template-rows: 58px 1fr 190px;
+  grid-template-rows: 58px 1fr 208px;
   height: 100%;
 }
 
@@ -259,11 +275,14 @@ input {
 }
 
 .rack h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 10px;
   letter-spacing: 1.4px;
-  color: var(--muted);
   margin: 14px 2px 6px;
   font-weight: 600;
+  color: var(--cat);
 }
 
 .rack h2:first-child {
@@ -272,18 +291,34 @@ input {
 
 .rack-item {
   width: 100%;
-  display: grid;
-  gap: 1px;
-  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
   border-radius: 6px;
   margin-bottom: 3px;
   text-align: left;
   border: 1px solid transparent;
+  border-left: 3px solid var(--cat);
+  background: linear-gradient(90deg, var(--cat-soft), transparent 70%);
 }
 
 .rack-item:hover {
   background: var(--panel-2);
   border-color: #3b3e49;
+  border-left-color: var(--cat);
+}
+
+.rack-icon {
+  color: var(--cat);
+  display: grid;
+  place-items: center;
+}
+
+.rack-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
 }
 
 .rack-name {
@@ -349,7 +384,8 @@ input {
   color: var(--muted);
   display: flex;
   align-items: center;
-  gap: 4px}
+  gap: 4px;
+}
 
 .mini.danger {
   margin-left: auto;
@@ -363,12 +399,32 @@ input {
   background: #2a1d1d;
 }
 
+/* The strip sits on a visible signal path: a line runs the full width behind
+   the cards, and each card carries a port dot on its left and right edge. */
 .strip {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   overflow-x: auto;
   padding-bottom: 4px;
+}
+
+.strip::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  transform: translateY(-50%);
+  background: linear-gradient(90deg, transparent, #3d414d 7%, #3d414d 93%, transparent);
+  border-radius: 1px;
+}
+
+.strip > * {
+  position: relative;
+  z-index: 1;
 }
 
 .strip::-webkit-scrollbar {
@@ -394,24 +450,67 @@ input {
 .block-card {
   flex: none;
   width: 116px;
-  height: 62px;
+  height: 66px;
   border-radius: 7px;
-  background: linear-gradient(#2b2e37, #1b1c22);
+  background: linear-gradient(155deg, var(--cat-soft) 0%, #1b1c22 62%);
   border: 1px solid #353843;
+  border-left: 3px solid var(--cat);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: auto 1fr auto;
   align-content: center;
-  padding: 6px 8px;
+  justify-items: center;
+  gap: 1px;
+  padding: 5px 8px;
   cursor: grab;
   position: relative;
   user-select: none;
   /* Pointer drags are JS-driven; stop the browser from scrolling instead. */
   touch-action: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+/* Ports on the signal path. */
+.block-card::before,
+.block-card::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: var(--cat);
+  box-shadow: 0 0 5px var(--cat);
+}
+
+.block-card::before {
+  left: -3px;
+}
+
+.block-card::after {
+  right: -3px;
 }
 
 .block-card:hover {
   border-color: #4a4d59;
+}
+
+.block-card.selected {
+  border-color: var(--cat);
+  box-shadow: 0 0 0 1px var(--cat), 0 5px 18px hsl(var(--cat-h, 222) 70% 55% / 0.3);
+  transform: translateY(-1px);
+}
+
+.block-icon {
+  color: var(--cat);
+  display: grid;
+  place-items: center;
+  height: 14px;
+}
+
+.block-icon:empty {
+  display: none;
 }
 
 /* The dragged card's original slot is dimmed; the pointer carries a ghost. */
@@ -427,7 +526,7 @@ input {
   flex: none;
   width: 0;
   margin-right: -8px; /* cancel the flex gap while collapsed */
-  height: 62px;
+  height: 66px;
   border-radius: 7px;
   border: 1px dashed transparent;
   overflow: hidden;
@@ -471,6 +570,7 @@ input {
   font-size: 11px;
   font-weight: 600;
   text-align: center;
+  line-height: 1.15;
 }
 
 .block-type {
@@ -548,10 +648,11 @@ input {
 .editor {
   background: linear-gradient(#1a1b21, #14151a);
   border-top: 1px solid var(--line);
-  padding: 12px 20px;
-  display: flex;
+  padding: 14px 22px;
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  gap: 24px;
   align-items: center;
-  gap: 22px;
   min-height: 0;
 }
 
@@ -561,20 +662,36 @@ input {
 }
 
 .editor-id {
-  min-width: 170px;
+  display: grid;
+  gap: 3px;
+  align-content: center;
+  justify-items: start;
+  padding-left: 12px;
+  border-left: 3px solid var(--cat);
+  background: linear-gradient(90deg, var(--cat-soft), transparent 75%);
+  border-radius: 0 6px 6px 0;
+  min-height: 96px;
+}
+
+.editor-side {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .editor-kind {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 9px;
   letter-spacing: 1.4px;
-  color: var(--muted);
+  color: var(--cat);
   font-weight: 600;
 }
 
 .editor-name {
   font-size: 16px;
   font-weight: 600;
-  margin-top: 2px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -593,24 +710,45 @@ input {
   font-size: 9px;
   color: var(--muted);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  margin-top: 2px;
 }
 
-.knobs {
+/* The controls fill the panel: knobs and selectors wrap and centre, so a block
+   with three params no longer leaves half the bar empty. */
+.editor-controls {
   display: flex;
-  gap: 20px;
-  flex: 1;
-  justify-content: center;
   flex-wrap: wrap;
   align-content: center;
+  justify-content: center;
+  gap: 14px 26px;
+}
+
+.side-btn {
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #22242b;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.side-btn:hover {
+  color: var(--text);
+  border-color: #3a3d47;
+}
+
+.side-btn.on {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+  background: #2a2318;
 }
 
 .knob-unit {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
-  width: 74px;
+  gap: 4px;
+  width: 84px;
 }
 
 .knob {
@@ -632,6 +770,29 @@ input {
   top: 50%;
   transform: translate(-50%, -50%);
   pointer-events: none;
+}
+
+/* End stops at the two ends of the travel arc (bottom-left / bottom-right). */
+.knob-end {
+  position: absolute;
+  bottom: -3px;
+  font-size: 7.5px;
+  line-height: 1;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  background: #14151a;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 1px 3px;
+  pointer-events: none;
+}
+
+.knob-end.lo {
+  left: -10px;
+}
+
+.knob-end.hi {
+  right: -10px;
 }
 
 .knob::after {
@@ -659,6 +820,7 @@ input {
   color: var(--muted);
   font-weight: 600;
   text-transform: uppercase;
+  text-align: center;
 }
 
 .knob-value {
@@ -671,6 +833,77 @@ input {
   min-width: 56px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+}
+
+/* --- choice parameters -------------------------------------------------- */
+
+.choice-unit,
+.select-unit {
+  display: grid;
+  gap: 5px;
+  align-content: center;
+  justify-items: center;
+}
+
+.segmented {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  overflow: hidden;
+  background: #14151a;
+}
+
+.seg {
+  padding: 8px 11px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  border-right: 1px solid var(--line-soft);
+  white-space: nowrap;
+}
+
+.seg:last-child {
+  border-right: none;
+}
+
+.seg:hover {
+  color: var(--text);
+  background: #1e2027;
+}
+
+.seg.on {
+  background: linear-gradient(#f0b453, #d18f22);
+  border-color: #f5c877;
+  color: #23180a;
+}
+
+.select {
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: #121318;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 10px;
+  max-width: 180px;
+}
+
+/* --- toast -------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 228px;
+  z-index: 50;
+  max-width: 420px;
+  padding: 9px 14px;
+  border-radius: 7px;
+  background: #2a1d1d;
+  border: 1px solid #5a3535;
+  color: #ff9c8a;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
 /* --- preset browser ----------------------------------------------------- */
@@ -824,4 +1057,3 @@ input {
 .presets-open {
   font-size: 13px;
 }
-

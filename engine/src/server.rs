@@ -5,7 +5,7 @@
 //! thread did. The audio thread never touches the WebSocket.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
@@ -36,6 +36,9 @@ pub struct Shared {
     /// Current preset name, `""` when the rig has never been saved.
     pub preset: Mutex<String>,
     clients: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+    /// Bumped on every successful rebuild. The UI uses it to ignore a stale
+    /// snapshot, so an out-of-order delivery can never roll the UI backwards.
+    pub rev: AtomicU64,
 }
 
 impl Shared {
@@ -48,6 +51,7 @@ impl Shared {
             source,
             preset: Mutex::new(String::new()),
             clients: Mutex::new(Vec::new()),
+            rev: AtomicU64::new(0),
         }
     }
 
@@ -143,7 +147,9 @@ fn snapshot(sh: &Shared) -> Value {
         })
         .collect();
     let preset = sh.preset.lock().unwrap().clone();
+    let rev = sh.rev.load(Ordering::Acquire);
     json!({
+        "rev": rev,
         "preset": preset,
         "presets": sh.presets(),
         "source": sh.source_name(),
@@ -196,6 +202,7 @@ fn rebuild(sh: &Shared) -> Result<(), String> {
     sh.handle.push(Cmd::Swap(ex, bypass)).map_err(|e| e.to_string())?;
     *sh.handle.node_ids.lock().unwrap() = ids;
     *sh.handle.rate_mismatches.lock().unwrap() = Vec::new();
+    sh.rev.fetch_add(1, Ordering::Release);
     Ok(())
 }
 
@@ -482,9 +489,12 @@ async fn handle_client(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStr
                         match apply(&sh, &cmd, &args) {
                             Ok(payload) => {
                                 if cmd != "getState" {
-                                    // The answer already carries the new state;
-                                    // tell the other clients.
-                                    send_state(&sh, Some(&tx));
+                                    // Tell everyone, the requester included. The
+                                    // reply carries the state too and the UI drops
+                                    // duplicates by `rev`, so if the reply is lost
+                                    // the broadcast still lands — that redundancy
+                                    // is what keeps the UI from freezing.
+                                    send_state(&sh, None);
                                 }
                                 json!({"type":"res","id":id,"ok":true,"payload":payload})
                             }

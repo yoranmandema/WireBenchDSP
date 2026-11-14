@@ -50,6 +50,11 @@ Rules:
 - `res.payload` depends on the command. For mutating commands it is the **full
   new state** — see below.
 - Events are server-initiated. The client must handle them without having asked.
+- Every state snapshot carries a `rev` counter, bumped by the engine on each
+  successful graph rebuild. A client must ignore a snapshot whose `rev` is not
+  newer than the last one it applied, so an out-of-order delivery cannot roll
+  it back. A *lower* `rev` means the engine restarted and its counter began
+  again; accept that one.
 
 ## Why full state instead of deltas
 
@@ -64,9 +69,11 @@ a much harder reconnection story. **Snapshot, not deltas.**
 
 1. Client connects.
 2. Server sends one `event: state` with the full snapshot (no request needed).
-3. Client sends `req`s; server answers each with a `res` and, for mutations,
-   broadcasts nothing — the answer carries the new state. (Other connected
-   clients get an `event: state`.)
+3. Client sends `req`s; server answers each with a `res`. For mutations the
+   answer carries the new state **and** the server broadcasts an `event: state`
+   to every client, the requester included. The two are identical, so the
+   client's `rev` guard turns the duplicate into a no-op — and if the reply is
+   ever lost, the broadcast still lands.
 4. Server sends `event: meters` at 20 Hz while audio is running.
 5. On disconnect the engine keeps running. On reconnect the client gets a
    fresh snapshot.

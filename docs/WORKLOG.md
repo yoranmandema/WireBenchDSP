@@ -7,7 +7,25 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-4.1's C ABI boundary is in place and verified from a real C program.
+**UI visual overhaul + state-delivery hardening (this session, uncommitted at
+the time of writing).** Colour is now per category (`ui/src/theme.ts` sets a
+hue per `Category`; cards, rack items, icons and the editor header all derive
+from `--cat-h`). Knobs carry min/max end-stop labels. `choice` parameters
+render as a segmented control (or a dropdown above five options) instead of a
+knob, and the editor is a two-column grid so the controls use the whole width.
+The selected card is highlighted, and a signal-path line with port dots runs
+behind the chain.
+
+The freeze the user reported is addressed on the delivery path: the engine now
+bumps a `rev` counter on every rebuild and includes it in the snapshot, and it
+broadcasts `event: state` to **every** client including the requester (the
+reply carries the same state, so the client's `rev` guard makes the duplicate
+a no-op). Command failures are no longer swallowed — a rejection surfaces as a
+toast (`state.ts` `notice`). Pending requests are dropped when the socket
+closes so their promises cannot hang.
+
+**Previously: US-4.1's C ABI boundary is in place and verified from a real C
+program.
 `ffi/` (`pedal-ffi`) exposes the `dsp-graph` executor through a flat C
 interface — `pedal_core_new` / `load_preset[_file]` / `set_sample_rate` /
 `set_param_norm|real` / `get_param_norm|real` / `set_bypass` / `process` /

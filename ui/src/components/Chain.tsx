@@ -1,11 +1,14 @@
 import { Fragment } from "preact";
 import { useRef, useState } from "preact/hooks";
+import { Icon } from "./Icon";
+import { catStyle } from "../theme";
 import {
   addBlock,
   moveBlock,
   removeBlock,
   removeChannel,
   select,
+  selected,
   setBypass,
   setMasterVolume,
   setSources,
@@ -129,58 +132,75 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
       </div>
 
       <div class="strip" ref={strip}>
-        <div class="io">In</div>
-        {channel.blocks.map((b, i) => (
-          <Fragment key={b.id}>
-            {/* Always-mounted slot so the cards themselves are never added or
-                removed mid-drag (that would break pointer capture). */}
-            <div
-              class={`block-placeholder${drag && drag.insert === i && drag.insert !== drag.from ? " active" : ""}`}
-            />
-            <div
-              class={`block-card${b.bypass ? " bypass" : ""}${drag?.id === b.id ? " dragging" : ""}`}
-              data-slot={i}
-              style={drag?.id === b.id ? { opacity: 0.35 } : undefined}
-              onPointerDown={(e) => down(e, b.id, i)}
-              onPointerMove={move}
-              onPointerUp={up}
-              onPointerCancel={cancel}
-              onClick={() => {
-                // A drag ends with a synthetic click on the same card; swallow
-                // that one, but never swallow clicks after it.
-                if (dragged.current) {
-                  dragged.current = false;
-                  return;
-                }
-                select(channel.id, b.id);
-              }}
-              title={`${b.name} — drag to reorder, click to edit`}
-            >
-              <span class="block-name">{b.name}</span>
-              <span class="block-type">{b.type}</span>
-              <button
-                class={`bypass${b.bypass ? " on" : ""}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void setBypass(channel.id, b.id, !b.bypass);
+        <div class="io in">In</div>
+        {channel.blocks.map((b, i) => {
+          const spec = s.registry[b.type];
+          const isSel = selected.value?.block === b.id;
+          return (
+            <Fragment key={b.id}>
+              {/* Always-mounted slot so the cards themselves are never added or
+                  removed mid-drag (that would break pointer capture). */}
+              <div
+                class={`block-placeholder${drag && drag.insert === i && drag.insert !== drag.from ? " active" : ""}`}
+              />
+              <div
+                class={[
+                  "block-card",
+                  b.bypass ? "bypass" : "",
+                  isSel ? "selected" : "",
+                  drag?.id === b.id ? "dragging" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                data-slot={i}
+                style={{
+                  ...(spec ? catStyle(spec.category) : null),
+                  ...(drag?.id === b.id ? { opacity: 0.35 } : null),
                 }}
-                title="Bypass"
-              >
-                B
-              </button>
-              <button
-                class="remove"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void removeBlock(channel.id, b.id);
+                onPointerDown={(e) => down(e, b.id, i)}
+                onPointerMove={move}
+                onPointerUp={up}
+                onPointerCancel={cancel}
+                onClick={() => {
+                  // A drag ends with a synthetic click on the same card; swallow
+                  // that one, but never swallow clicks after it.
+                  if (dragged.current) {
+                    dragged.current = false;
+                    return;
+                  }
+                  select(channel.id, b.id);
                 }}
-                title="Remove block"
+                title={`${b.name} — drag to reorder, click to edit`}
               >
-                x
-              </button>
-            </div>
-          </Fragment>
-        ))}
+                <span class="block-icon">
+                  {spec && <Icon category={spec.category} size={13} />}
+                </span>
+                <span class="block-name">{b.name}</span>
+                <span class="block-type">{b.type}</span>
+                <button
+                  class={`bypass${b.bypass ? " on" : ""}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void setBypass(channel.id, b.id, !b.bypass);
+                  }}
+                  title="Bypass"
+                >
+                  B
+                </button>
+                <button
+                  class="remove"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void removeBlock(channel.id, b.id);
+                  }}
+                  title="Remove block"
+                >
+                  x
+                </button>
+              </div>
+            </Fragment>
+          );
+        })}
         <div
           class={`block-placeholder${drag && drag.insert === channel.blocks.length && drag.insert !== drag.from ? " active" : ""}`}
         />
@@ -197,7 +217,7 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
         >
           +
         </button>
-        <div class="io">Out</div>
+        <div class="io out">Out</div>
       </div>
 
       {/* Ghost of the dragged card, following the pointer. */}

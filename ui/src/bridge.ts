@@ -38,6 +38,10 @@ export class WebSocketBridge implements Bridge {
     ws.onmessage = (ev) => this.onMessage(String(ev.data));
     ws.onclose = () => {
       if (!this.closed) {
+        // In-flight requests are superseded by the snapshot the next connection
+        // greets us with. Drop them so the promises do not hang forever.
+        for (const { reject } of this.pending.values()) reject(new Error("engine disconnected"));
+        this.pending.clear();
         // The engine may be restarting; try again shortly.
         setTimeout(() => this.connect(), 1000);
       }

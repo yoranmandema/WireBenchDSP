@@ -16,6 +16,13 @@ const RING_R = 30; // ring centreline radius, px (the face itself is r=27)
 const RING_W = 4; // ring thickness
 const START = 135; // SVG degrees clockwise from 3 o'clock == 225deg on a clock face
 
+/** Compact readout for the arc's end stops (min / max). */
+function endLabel(v: number, unit?: string): string {
+  const a = Math.abs(v);
+  const s = a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2);
+  return unit ? `${s}${unit}` : s;
+}
+
 /** A rotary knob. Drag vertically, double-click to reset. */
 export function Knob({
   name,
@@ -90,6 +97,9 @@ export function Knob({
             transform={`rotate(${START} 32 32)`}
           />
         </svg>
+        {/* End stops, sitting at the two ends of the travel arc. */}
+        <span class="knob-end lo">{endLabel(min, unit)}</span>
+        <span class="knob-end hi">{endLabel(max, unit)}</span>
       </div>
       <div class="knob-name">{name}</div>
       <div class="knob-value">{display}</div>
