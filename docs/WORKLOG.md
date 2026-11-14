@@ -7,10 +7,11 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-3.3 is implemented and verified, and both follow-ups are done: the release
-`.app` embeds the UI, declares `NSMicrophoneUsageDescription`, and ships the
-engine beside the shell (`externalBin`), so the bundle is self-contained.
-Next: the `.dmg` installer target, which currently fails on this host.**
+**US-3.3 is complete: the `.app` and the `.dmg` both build and are verified.
+The DMG's Finder cosmetic pass is skipped in headless sessions via `CI=true`
+(`shell/build-bundle.sh`). Next: settle the US-2.11 transport question — its
+card asks for a Unix domain socket, but a webview can only open a WebSocket
+over TCP.**
 
 ## Goal
 
@@ -97,20 +98,29 @@ pedal-dsp/
   0; the fresh bundle has `Contents/MacOS/pedal-engine` and the mic key in
   `Info.plist`; launching the bundle's binary spawns that engine and the
   embedded UI connects (`client connected`, `<- getState`).
+- Follow-up 3 (the `.dmg` installer): `shell/build-bundle.sh` runs
+  `CI=true npx @tauri-apps/cli build`, which makes tauri-bundler pass
+  `--skip-jenkins` and skip the Finder AppleScript that times out
+  (`AppleEvent timed out. (-1712)`) in any session with no Finder GUI —
+  cron, SSH, CI. The DMG still carries `Pedal.app` and the `Applications`
+  symlink; only the cosmetic pass (background picture, icon layout) is
+  skipped. Verified: exit 0; `hdiutil verify` reports VALID; the image
+  mounts at `/Volumes/Pedal` with `Pedal.app` + `Applications` ->
+  `/Applications`; launching the app *from the mounted volume* spawns the
+  bundled engine and the embedded UI connects (`client connected`,
+  `<- getState`).
 
 ## Next step
 
-US-3.3 is done, and follow-ups 1–2 are done and committed (`0fe028c`). One
-follow-up remains:
+US-3.3 and all three follow-ups are done.
 
-3. **The `.dmg` installer target fails on this host** (`bundle_dmg.sh` →
-   Finder AppleEvent timeout). The `.app` itself is unaffected; build with
-   `npx @tauri-apps/cli build --bundles app` to skip the installer step.
-
-Open question for US-2.11: its card asks for a Unix domain socket on
-macOS/Linux, but a webview can only open a WebSocket over TCP, and
-`docs/IPC-PROTOCOL.md` already commits to loopback TCP. Confirm that decision
-before building anything on it.
+**Settle the US-2.11 transport contradiction before building anything else on
+the transport.** Its card's acceptance says "a Unix domain socket on
+macOS/Linux, loopback TCP elsewhere", but a webview can only open a WebSocket
+over TCP, and `docs/IPC-PROTOCOL.md` already commits to loopback TCP. The
+webview constraint decides it: keep loopback TCP on every platform and amend
+the card's acceptance to match. That is a decision for the user to confirm,
+not an implementation — do not build on the transport until it is settled.
 
 ## Gotcha worth remembering
 
@@ -156,10 +166,14 @@ long-lived shell had windows. To verify a bundle, run its binary directly and
 watch `/tmp/pedal-engine.log` for `client connected` followed by
 `<- getState`; that pair is the embedded UI's `init()` running.
 
-**`bundle.targets = "all"` makes `tauri build` exit non-zero on the `.dmg`
-failure** even though the `.app` is already written by then. Build with
-`npx @tauri-apps/cli build --bundles app` to get the `.app` without the
-installer step.
+**The DMG's Finder cosmetic pass fails in any session with no Finder GUI.**
+`bundle_dmg.sh` drives Finder through AppleScript to lay out the volume; from
+cron/SSH/CI that AppleEvent times out (`-1712`) or is denied (`-1743`). The
+`.app` is already written by then, so `tauri build` exits non-zero even though
+the app is fine. `shell/build-bundle.sh` sets `CI=true`, which makes
+tauri-bundler pass `--skip-jenkins` and skip only that cosmetic pass — the DMG
+still has the app and the `Applications` symlink. The trade-off is no custom
+DMG background or icon positions.
 
 ## How to run
 
@@ -167,10 +181,11 @@ installer step.
 # engine alone
 ./target/debug/pedal-engine --rig 04-rainbow
 
-# self-contained desktop app bundle (spawns the engine itself, embeds the UI)
-# --bundles app skips the .dmg installer, which fails on this host
-cd shell && npx --yes @tauri-apps/cli build --bundles app
+# self-contained desktop app + .dmg installer (spawns the engine, embeds the UI)
+# CI=true skips the Finder cosmetic pass, which cannot run headless
+cd shell && ./build-bundle.sh
 open ../target/release/bundle/macos/Pedal.app
+open ../target/release/bundle/dmg/Pedal_0.1.0_aarch64.dmg
 
 # debug build: still loads the Vite devUrl, so run `pnpm --dir ui dev` first
 cargo build -p pedal-shell --features custom-protocol
