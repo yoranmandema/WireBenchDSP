@@ -7,9 +7,10 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-2.10 is implemented and verified: the UI never touches the audio path.
-Next: US-3.3 — build the self-contained desktop app (`cargo tauri build`) and
-prove the embedded UI runs with no Vite dev server.**
+**US-3.3 is implemented and verified: the release `.app` bundle embeds the UI,
+and the embedded UI drives the engine the shell spawns.
+Next: give the app microphone permission (`NSMicrophoneUsageDescription`) so the
+engine can open live input, then ship the engine inside the bundle.**
 
 ## Goal
 
@@ -78,16 +79,29 @@ pedal-dsp/
   which serves the full snapshot on 8737. Debug builds use the Vite `devUrl`
   (standard Tauri behaviour); production embedding needs `tauri build` (the
   `custom-protocol` feature) — that is US-3.3.
+- US-3.3 (desktop app bundle): `npx @tauri-apps/cli build` produces
+  `target/release/bundle/macos/Pedal.app` (plus a `.dmg`, which currently fails
+  on this host). The Preact UI is embedded in the binary (`strings` finds
+  `assets/index-*.js`). Verified end to end with no Vite dev server on 5173:
+  the bundle's binary spawns `target/release/pedal-engine`, the engine listens
+  on `ws://127.0.0.1:8737`, and the embedded UI connects and sends `getState`
+  (see `/tmp/pedal-engine.log`). `engine_path()` now also looks next to the
+  executable, so a bundle that ships the engine beside the shell works.
 
 ## Next step
 
-US-3.3: `cargo tauri build` (release, `custom-protocol`) and prove the app is
-self-contained — launch the `.app` with no Vite dev server running and show
-the webview really renders the UI (check `/tmp/pedal-engine.log` for a client
-connection, or `CGWindowListCopyWindowInfo`), and that the embedded UI still
-reaches the engine it spawns on `ws://127.0.0.1:8737` (the CSP already allows
-it). Debug builds stay dev builds and load `devUrl`, so this needs the
-feature, not just `cargo build`.
+US-3.3 is done. Three follow-ups, in order:
+
+1. **Microphone permission (blocks live input on macOS).** tccd refuses the
+   engine's input request: "Refusing authorization request for service
+   kTCCServiceMicrophone ... without NSMicrophoneUsageDescription key". Add the
+   key to the bundle's Info.plist (`bundle.macOS.infoPlist`) and rebuild.
+2. **Ship the engine inside the bundle.** `engine_path()` still falls back to
+   the workspace `target/<profile>/pedal-engine`, so a `.app` moved off the
+   build machine cannot start. Tauri `externalBin` needs a
+   `-<target_triple>`-suffixed copy at build time (see gotcha).
+3. The `.dmg` target fails on this host (`bundle_dmg.sh` → Finder AppleEvent
+   timeout). The `.app` itself is unaffected.
 
 Open question for US-2.11: its card asks for a Unix domain socket on
 macOS/Linux, but a webview can only open a WebSocket over TCP, and
@@ -122,13 +136,33 @@ not in the accessibility database, so it reports 0 windows even when the window
 exists. Use `CGWindowListCopyWindowInfo`, or check whether the engine log shows
 a client connection.
 
+**Tauri runs `beforeDevCommand` / `beforeBuildCommand` with cwd = the
+*frontend* directory (`dirs.frontend`), not the directory holding
+`tauri.conf.json`** — here that is the workspace root, so `pnpm --dir ../ui
+build` fails with "canonicalizing the `--dir` argument". The config uses the
+explicit form `{ "script": "pnpm build", "cwd": "../ui" }`, which resolves
+against the tauri dir.
+
+**`cargo tauri` is not installed on this host.** The official JS wrapper is:
+`npx --yes @tauri-apps/cli build` (tauri-cli 2.12.4). It warns that the
+identifier `com.pedal.app` ends with `.app`.
+
+**A GUI app launched from a cron/background session gets no window** — only a
+long-lived shell had windows. To verify a bundle, run its binary directly and
+watch `/tmp/pedal-engine.log` for `client connected` followed by
+`<- getState`; that pair is the embedded UI's `init()` running.
+
 ## How to run
 
 ```bash
 # engine alone
 ./target/debug/pedal-engine --rig 04-rainbow
 
-# self-contained desktop app (spawns the engine itself, embeds the UI)
+# self-contained desktop app bundle (spawns the engine itself, embeds the UI)
+cd shell && npx --yes @tauri-apps/cli build
+open ../target/release/bundle/macos/Pedal.app
+
+# debug build: still loads the Vite devUrl, so run `pnpm --dir ui dev` first
 cargo build -p pedal-shell --features custom-protocol
 ./target/debug/pedal-shell
 

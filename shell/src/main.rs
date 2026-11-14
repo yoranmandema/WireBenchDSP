@@ -19,12 +19,21 @@ use std::sync::Mutex;
 
 /// Where the engine binary lives.
 ///
-/// Order: PEDAL_ENGINE, then the workspace target directory (development),
-/// then the bundled resource (a real .app ships it alongside the binary).
+/// Order: `PEDAL_ENGINE`, then the directory holding this executable (where a
+/// bundle would place a sidecar engine), then the workspace target directory
+/// (development), then bare `pedal-engine` on `PATH`.
 fn engine_path() -> PathBuf {
     if let Ok(p) = std::env::var("PEDAL_ENGINE") {
         if !p.is_empty() {
             return PathBuf::from(p);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let bundled = dir.join("pedal-engine");
+            if bundled.exists() {
+                return bundled;
+            }
         }
     }
     let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
