@@ -7,15 +7,17 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-5.1 is verified against a self-contained Python reference: the tiny
-WaveNet's forward pass, reimplemented in pure Python
-(`graph/tests/nam_reference.py`), matches the Rust `Nam` block's output sample
-by sample (max abs error 9.24e-07 over 512 samples). The Python `nam` package
-is not available on this host — PyPI `nam` is a different project (Google's
-Neural Additive Models), and NAM's own package needs torch — so the worklog's
-fallback was used. The real OD808 `.nam` still loads and runs (`nam_check`:
-peak 0.794, rms 0.186, no non-finite). Next: extend the Python reference to the
-real SlimmableContainer `.nam` and compare that too.**
+**US-5.1 is fully verified against a self-contained Python reference, for both
+the tiny WaveNet and the user's real OD808 model. `graph/tests/nam_reference.py`
+now parses a real `.nam` (WaveNet or SlimmableContainer) and runs the same
+forward pass in pure Python; `graph/examples/nam_real_reference.rs` dumps the
+Rust block's input/output for the real model. On 8192 samples of the real
+`models/MES DRECF RD Gain2 BAL O808 CAB.nam` (v0.7.0 SlimmableContainer, full
+submodel), the two agree sample by sample: max abs error 6.19e-07, rms
+6.65e-08 — float32 rounding, well inside 1e-5. The tiny model still matches at
+9.24e-07 over 512 samples. The Python `nam` package is not available on this
+host (PyPI `nam` is Google's Neural Additive Models; NAM's own needs torch), so
+the reference reimplements the forward pass from the weights.**
 
 ## Goal
 
@@ -164,17 +166,30 @@ pedal-dsp/
   `cargo run -p dsp-graph --example nam_reference` + `python3
   graph/tests/nam_reference.py`; `cargo test -p dsp-graph --test nam` (11
   passed); `cargo test --workspace` passes.
+- US-5.1 follow-up — the real `.nam` against the same Python reference:
+  `graph/examples/nam_real_reference.rs` loads `models/MES DRECF RD Gain2 BAL
+  O808 CAB.nam` through the real `Nam` block at its own 48 kHz (so the
+  resampler is a pass-through and `output == model(input)`), renders 8192
+  samples of a deterministic three-tone signal, and dumps `nam_input.raw` /
+  `nam_output.raw`. `graph/tests/nam_reference.py --model <path.nam>` parses the
+  `.nam` itself — SlimmableContainer (default full submodel), the layer-array
+  weight layout, per-layer kernel/dilation/LeakyReLU, `layer1x1`, the multi-tap
+  head rechannel, and `head_scale` — and runs the same forward pass in pure
+  Python. Verified: max abs error 6.19e-07, rms 6.65e-08 over 8192 samples
+  (PASS within 1e-5); the tiny-model path still passes at 9.24e-07 over 512
+  samples; `cargo test --workspace` passes. Grouped convolutions, FiLM,
+  post-stack heads and `condition_dsp` are rejected with a clear error rather
+  than silently mis-run.
 
 ## Next step
 
-**Extend the Python reference to the real OD808 `.nam`.** The tiny-vector
-fallback satisfies the card's acceptance for the test model, but the user's
-real model (`models/MES DRECF RD Gain2 BAL O808 CAB.nam`, a v0.7.0
-SlimmableContainer) is the one that matters. Either install NAM's Python
-package (needs torch — heavy) or extend `graph/tests/nam_reference.py` to
-parse the SlimmableContainer's nested WaveNet and run the same forward pass
-against the real weights, then compare sample by sample. The Rust side already
-runs it (`nam_check`); only the independent reference is missing.
+**US-5.4 (Pi 5 CPU headroom and latency) is the last open E5 card, but it needs
+the Pi 5 — which is not currently reachable (no ssh config, `raspberrypi.local`
+does not resolve). The next host-doable step is to prepare the Pi deployment
+path: an `aarch64-unknown-linux-gnu` release build of the engine plus a headless
+smoke test, so US-3.2 and US-5.4 can be measured as soon as the Pi is connected.
+Until then the Pi stories (US-3.1, US-3.2, US-3.4, US-5.4) stay blocked on
+hardware.**
 
 ## Gotcha worth remembering
 
@@ -234,6 +249,12 @@ DMG background or icon positions.
 ```bash
 # engine alone
 ./target/debug/pedal-engine --rig 04-rainbow
+
+# real .nam against the Python reference (block-level parity)
+cargo run -p dsp-graph --example nam_real_reference -- \
+  "models/MES DRECF RD Gain2 BAL O808 CAB.nam" /tmp/nam-real
+python3 graph/tests/nam_reference.py --model \
+  "models/MES DRECF RD Gain2 BAL O808 CAB.nam" /tmp/nam-real
 
 # self-contained desktop app + .dmg installer (spawns the engine, embeds the UI)
 # CI=true skips the Finder cosmetic pass, which cannot run headless
