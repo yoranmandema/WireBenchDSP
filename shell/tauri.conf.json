@@ -7,7 +7,10 @@
     "frontendDist": "../ui/dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": { "script": "pnpm dev", "cwd": "../ui" },
-    "beforeBuildCommand": { "script": "pnpm build", "cwd": "../ui" }
+    "beforeBuildCommand": {
+      "script": "pnpm build && cargo build --release -p pedal-engine && cp ../target/release/pedal-engine \"../target/release/pedal-engine-$(rustc -vV | sed -n 's/host: //p')\"",
+      "cwd": "../ui"
+    }
   },
   "app": {
     "withGlobalTauri": false,
@@ -29,6 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.icns"]
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.icns"],
+    "externalBin": ["../target/release/pedal-engine"]
   }
 }

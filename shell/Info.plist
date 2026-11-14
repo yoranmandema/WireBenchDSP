@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Live guitar input: the engine opens the selected audio input device.
+	     macOS shows this string when asking for microphone permission. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Pedal needs microphone access to process your guitar&apos;s live input.</string>
+</dict>
+</plist>
