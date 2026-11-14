@@ -7,12 +7,15 @@ spawned worker — reads this before touching the code.
 
 ## Focus
 
-**US-5.3 is verified: `graph/tests/pitch_sweep.rs` renders the real
-`PitchDelay` block in Sweep mode and confirms the pitch keeps climbing at the
-set cents/sec, that doubling `rate` doubles the climb, and that Target mode
-ignores the rate. The kanban board is reconciled with the worklog (US-1.4–1.6,
-US-2.1–2.11, US-3.3, US-5.2, US-5.3 marked done). Next: verify US-5.1 — the
-NAM block's output against a Python reference render.**
+**US-5.1 is verified against a self-contained Python reference: the tiny
+WaveNet's forward pass, reimplemented in pure Python
+(`graph/tests/nam_reference.py`), matches the Rust `Nam` block's output sample
+by sample (max abs error 9.24e-07 over 512 samples). The Python `nam` package
+is not available on this host — PyPI `nam` is a different project (Google's
+Neural Additive Models), and NAM's own package needs torch — so the worklog's
+fallback was used. The real OD808 `.nam` still loads and runs (`nam_check`:
+peak 0.794, rms 0.186, no non-finite). Next: extend the Python reference to the
+real SlimmableContainer `.nam` and compare that too.**
 
 ## Goal
 
@@ -145,21 +148,33 @@ pedal-dsp/
   continuous case and a fine-grid (1 Hz) peak for the burst case. Verified:
   `cargo test -p dsp-graph --test pitch_sweep` passes (4 tests); the full
   `cargo test --workspace` passes (124 tests).
+- US-5.1 (`graph/tests/nam_reference.py` + `graph/examples/nam_reference.rs`):
+  the NAM block's output against a Python reference render. The card's
+  acceptance is "Output matches a Python reference render of the same model";
+  the Python `nam` package is unavailable on this host (PyPI `nam` is Google's
+  Neural Additive Models, not Neural Amp Modeler; NAM's own `nam` needs torch,
+  which is not installed), so the worklog's fallback was used: a pure-Python
+  reimplementation of the tiny WaveNet forward pass (rechannel → dilated conv →
+  input mixer → sum → ReLU → head accumulate → head rechannel → head_scale),
+  compared sample by sample against the Rust `Nam` block on the same 512-sample
+  sine. Max abs error 9.24e-07, rms 2.46e-07 — float32 rounding, well inside
+  1e-5. The real `models/MES DRECF RD Gain2 BAL O808 CAB.nam` (a v0.7.0
+  SlimmableContainer) still loads and runs: `nam_check` reports peak 0.794,
+  rms 0.186, 0 non-finite, 3.89x dry-rms colour. Verified:
+  `cargo run -p dsp-graph --example nam_reference` + `python3
+  graph/tests/nam_reference.py`; `cargo test -p dsp-graph --test nam` (11
+  passed); `cargo test --workspace` passes.
 
 ## Next step
 
-**Verify US-5.1 — the NAM block against a Python reference render.** The card's
-acceptance is "Output matches a Python reference render of the same model".
-`graph/tests/nam.rs` covers parsing, the registry, real-time safety (no
-allocation in `process`), sample-rate mismatch/resampling, and preset path
-resolution — but it only checks that the output is non-silent and finite, not
-that it matches a reference. The remaining work: render a real `.nam` (the user
-has an OD808 amp-cab model) through the `Nam` block and through the Python `nam`
-package (or an equivalent reference implementation), and compare sample by
-sample. Check whether a Python environment with `nam` is available on this host
-first (`python3 -c "import nam"`); if not, record that as the blocker and fall
-back to a self-contained reference (e.g. a hand-computed WaveNet pass for the
-existing tiny test vector, checked against the Rust output).
+**Extend the Python reference to the real OD808 `.nam`.** The tiny-vector
+fallback satisfies the card's acceptance for the test model, but the user's
+real model (`models/MES DRECF RD Gain2 BAL O808 CAB.nam`, a v0.7.0
+SlimmableContainer) is the one that matters. Either install NAM's Python
+package (needs torch — heavy) or extend `graph/tests/nam_reference.py` to
+parse the SlimmableContainer's nested WaveNet and run the same forward pass
+against the real weights, then compare sample by sample. The Rust side already
+runs it (`nam_check`); only the independent reference is missing.
 
 ## Gotcha worth remembering
 
