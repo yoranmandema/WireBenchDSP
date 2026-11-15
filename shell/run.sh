@@ -26,7 +26,7 @@ port_busy() { lsof -iTCP:"$PORT" -sTCP:LISTEN -n >/dev/null 2>&1; }
 # is already there, ours silently moves to 5174 and the shell still loads 5173,
 # so it would show someone else's session. Clear the port and pin ours to it.
 free_vite() {
-  lsof -iTCP:5173 -sTCP:LISTEN -n 2>/dev/null | tail -n +2 | awk '{print $2}' | sort -u |
+  { lsof -iTCP:5173 -sTCP:LISTEN -n 2>/dev/null || true; } | tail -n +2 | awk '{print $2}' | sort -u |
     while read -r pid; do
       [ -n "$pid" ] || continue
       echo "    stopping stale Vite pid $pid"
@@ -38,7 +38,7 @@ free_vite() {
 free_port() {
   if port_busy; then
     echo "• port $PORT is held — stopping the stale engine:"
-    lsof -iTCP:"$PORT" -sTCP:LISTEN -n | tail -n +2 | awk '{print $2}' | sort -u |
+    { lsof -iTCP:"$PORT" -sTCP:LISTEN -n || true; } | tail -n +2 | awk '{print $2}' | sort -u |
       while read -r pid; do
         [ -n "$pid" ] || continue
         echo "    killing pid $pid"
