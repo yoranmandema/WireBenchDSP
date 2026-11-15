@@ -815,6 +815,12 @@ input {
   width: 84px;
 }
 
+/* The end-stop pills hang in the band between the ring and the name (see
+   `.knob-end`), so the name gets extra room above it. */
+.knob-unit .knob-name {
+  margin-top: 5px;
+}
+
 .knob {
   width: 54px;
   height: 54px;
@@ -836,27 +842,35 @@ input {
   pointer-events: none;
 }
 
-/* End stops at the two ends of the travel arc (bottom-left / bottom-right). */
+/* End stops at the two ends of the travel arc (bottom-left / bottom-right).
+   Each pill is anchored by its inner corner, which sits on the ray through its
+   arc end at (ring outer radius 32 + 2px gap) / sqrt(2) = 24px per axis from
+   the knob centre — outside the ring, but still hugging it, and far enough from
+   the centreline that the two pills cannot meet. A pill reaches ~6px past its
+   control cell into the 26px column gap between cells, which is what keeps
+   neighbouring controls clear; the unit's extra room below keeps the name clear. */
 .knob-end {
   position: absolute;
-  bottom: -3px;
-  font-size: 7.5px;
+  top: calc(50% + 24px);
+  font-size: 6.5px;
   line-height: 1;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   background: #14151a;
   border: 1px solid var(--line-soft);
   border-radius: 3px;
-  padding: 1px 3px;
+  padding: 1px 2px;
   pointer-events: none;
 }
 
+/* `.lo` is anchored top-right, `.hi` top-left: the anchored corner is the one
+   nearest the dial, so the pill grows outward along its own side. */
 .knob-end.lo {
-  left: -10px;
+  right: calc(50% + 24px);
 }
 
 .knob-end.hi {
-  right: -10px;
+  left: calc(50% + 24px);
 }
 
 .knob::after {
