@@ -5,3 +5,8 @@ output.wav
 docs/.heartbeat
 plugin/build/
 plugin/build
+index/
+.DS_Store
+.vscode/
+ui/standalone-tmp/
+ui/build-standalone.mjs
