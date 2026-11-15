@@ -46,6 +46,9 @@ function fold(next: State): boolean {
   lastRev = next.rev;
   state.value = next;
   ready.value = true;
+  // A snapshot means the engine is reachable; drop any boot-time error so a
+  // slow-starting engine doesn't leave the UI stuck on the error screen.
+  error.value = null;
   return true;
 }
 
@@ -58,7 +61,12 @@ export async function init(): Promise<void> {
   try {
     fold(asState(await bridge.request("getState")));
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    const msg = e instanceof Error ? e.message : String(e);
+    // The engine may still be starting (the shell spawns it alongside the
+    // window). The bridge keeps reconnecting and the engine greets every new
+    // connection with a snapshot, which `fold` picks up, so keep showing
+    // "Connecting…" instead of the error screen.
+    if (msg !== "engine disconnected") error.value = msg;
   }
 }
 
