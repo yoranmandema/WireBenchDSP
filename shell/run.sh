@@ -59,10 +59,31 @@ case "$mode" in
     # NOTE: no --features custom-protocol. A plain debug build is a Tauri *dev*
     # build and loads Vite's devUrl; that is exactly what gives live reload.
     cargo build -p pedal-shell
+    # Node + pnpm: prefer your own install; fall back to the toolchain Hermes
+    # ships in ~/.hermes/tools (which kanban workers use) so this works either way.
+    if ! command -v node >/dev/null 2>&1; then
+      for d in "$HOME"/.hermes/tools/node-*/bin; do [ -x "$d/node" ] && PATH="$d:$PATH"; done
+    fi
+    if ! command -v pnpm >/dev/null 2>&1; then
+      for d in "$HOME"/.hermes/tools/pnpm-*; do [ -x "$d/pnpm" ] && PATH="$d:$PATH"; done
+    fi
+    export PATH
+    if ! command -v node >/dev/null 2>&1 || ! command -v pnpm >/dev/null 2>&1; then
+      echo "✗ node/pnpm not found. Install them with:  brew install node pnpm" >&2
+      exit 1
+    fi
+    [ -d ui/node_modules ] || ( cd ui && pnpm install --frozen-lockfile )
     echo "• starting Vite on http://localhost:5173"
-    ( cd ui && pnpm dev -- --port 5173 --strictPort ) &
+    ( cd ui && pnpm dev --port 5173 --strictPort ) &
     vite=$!
     trap 'kill $vite 2>/dev/null || true' EXIT
+    # Don't open the window until Vite answers, or the webview shows a blank page.
+    for _ in $(seq 60); do
+      lsof -iTCP:5173 -sTCP:LISTEN -n >/dev/null 2>&1 && break
+      kill -0 "$vite" 2>/dev/null || { echo "✗ Vite exited — see the error above" >&2; exit 1; }
+      sleep 0.5
+    done
+    lsof -iTCP:5173 -sTCP:LISTEN -n >/dev/null 2>&1 || { echo "✗ Vite did not start within 30 s" >&2; exit 1; }
     echo "• starting the shell (it spawns the engine)"
     ./target/debug/pedal-shell
     ;;
