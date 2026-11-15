@@ -527,8 +527,27 @@ input {
 
 .block-card.selected {
   border-color: var(--cat);
-  box-shadow: 0 0 0 1px var(--cat), 0 4px 12px hsl(var(--cat-h, 222) 70% 55% / 0.3);
+  /* The outer ring and the glow are painted by the `.selection-ring` overlay
+     instead: a `box-shadow` is clipped by any ancestor with `overflow` other
+     than `visible`, and both the strip and the chain panel scroll. What stays
+     on the card is an *inset* ring, which is drawn inside its own border box
+     and so cannot be clipped. */
+  box-shadow: inset 0 0 0 1px var(--cat);
   transform: translateY(-1px);
+}
+
+/* The selection ring itself. It is a child of `.app`, so no scrolling
+   container sits between it and the viewport, and `position: fixed` places it
+   in viewport coordinates — the same coordinates `getBoundingClientRect`
+   reports, so it tracks the card through any scroll. Its box straddles the
+   card's border box (see `selection.tsx`), so the ring reads as sitting on the
+   card's edge rather than inside it. */
+.selection-ring {
+  position: fixed;
+  z-index: 30;
+  pointer-events: none;
+  border: 1px solid var(--cat, #8fa3ff);
+  box-shadow: 0 4px 12px hsl(var(--cat-h, 222) 70% 55% / 0.3);
 }
 
 .block-icon {
