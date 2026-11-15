@@ -231,10 +231,23 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
                   ...(spec ? catStyle(spec.category) : null),
                   ...(drag?.id === b.id ? { opacity: 0.35 } : null),
                 }}
+                // Keyboard selection: the card is a button in all but name, so
+                // Tab reaches it and Enter/Space select it.
+                tabIndex={0}
                 onPointerDown={(e) => down(e, b.id, i)}
                 onPointerMove={move}
                 onPointerUp={up}
                 onPointerCancel={cancel}
+                onKeyDown={(e) => {
+                  // Enter/Space on the card itself selects it. If the key was
+                  // pressed on an inner button (bypass/remove), let the button
+                  // handle it natively instead of also selecting the card.
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    select(channel.id, b.id);
+                  }
+                }}
                 onClick={() => {
                   // A drag ends with a synthetic click on the same card; swallow
                   // that one, but never swallow clicks after it.

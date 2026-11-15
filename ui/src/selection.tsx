@@ -14,6 +14,10 @@
 // inset ring, which sits inside its own border box and so cannot be clipped
 // by anything.
 //
+// The same overlay doubles as the keyboard focus indicator: a focused card
+// gets the ring too (in a neutral colour), because the browser's native
+// `outline` is clipped by those same scrolling ancestors.
+//
 // The overlay is `pointer-events: none` and `z-index: 30`, below the modals
 // (40) and the toast (50), so it never intercepts a click or covers a dialog.
 
@@ -25,16 +29,34 @@ export interface Rect {
   top: number;
   width: number;
   height: number;
-  /** The selected card's category hue, so the ring matches the card. */
+  /** The highlighted card's category hue, so the ring matches the card. */
   hue: number;
   /** Card border width; the ring straddles the border box by this much. */
   border: number;
   /** Card border radius, so the ring's corners follow the card's. */
   radius: number;
+  /**
+   * `selection` when the card is the selected block, `focus` when it is only
+   * keyboard-focused. The focus ring is drawn by the same overlay, because the
+   * native `outline` is clipped by the scrolling ancestors just like the old
+   * `box-shadow` ring was.
+   */
+  kind: "selection" | "focus";
 }
 
-/** The currently selected card element, or null. */
+/**
+ * The card the overlay should highlight: the keyboard-focused card if there
+ * is one, otherwise the selected block.
+ *
+ * Focus wins while it is `:focus-visible`, so tabbing through the chain always
+ * shows where focus is even when another block is already selected (that block
+ * keeps its inset ring). `:focus-visible` rather than `:focus` so a card
+ * clicked with the mouse — which browsers do focus — does not light up as if
+ * it were keyboard-targeted.
+ */
 function cardEl(): HTMLElement | null {
+  const focused = document.querySelector(".block-card:focus-visible") as HTMLElement | null;
+  if (focused) return focused;
   return (document.querySelector(".block-card.selected") as HTMLElement | null) ?? null;
 }
 
@@ -74,7 +96,8 @@ export function trackSelection(onRect: (r: Rect | null) => void): () => void {
     }
     const r = el.getBoundingClientRect();
     const m = cardMetrics(el);
-    const key = `${Math.round(r.left)}|${Math.round(r.top)}|${Math.round(r.width)}|${Math.round(r.height)}|${cardHue(el)}`;
+    const kind: Rect["kind"] = el.classList.contains("selected") ? "selection" : "focus";
+    const key = `${kind}|${Math.round(r.left)}|${Math.round(r.top)}|${Math.round(r.width)}|${Math.round(r.height)}|${cardHue(el)}`;
     if (key === last) return;
     last = key;
     onRect({
@@ -85,6 +108,7 @@ export function trackSelection(onRect: (r: Rect | null) => void): () => void {
       hue: cardHue(el),
       border: m.border,
       radius: m.radius,
+      kind,
     });
   };
 
@@ -97,11 +121,15 @@ export function trackSelection(onRect: (r: Rect | null) => void): () => void {
   // editor) repositions the ring.
   const onScroll = () => schedule();
   const onResize = () => schedule();
+  // Focus moving between cards changes which card the overlay highlights.
+  const onFocus = () => schedule();
 
   const detachState = state.subscribe(schedule);
   const detachSel = selected.subscribe(schedule);
   window.addEventListener("resize", onResize);
   window.addEventListener("scroll", onScroll, true);
+  document.addEventListener("focusin", onFocus, true);
+  document.addEventListener("focusout", onFocus, true);
   // One read after layout settles, so a freshly rendered card gets its ring.
   const timers = [0, 50, 150, 400].map((t) => setTimeout(schedule, t));
   schedule();
@@ -113,6 +141,8 @@ export function trackSelection(onRect: (r: Rect | null) => void): () => void {
     detachSel();
     window.removeEventListener("resize", onResize);
     window.removeEventListener("scroll", onScroll, true);
+    document.removeEventListener("focusin", onFocus, true);
+    document.removeEventListener("focusout", onFocus, true);
   };
 }
 
@@ -129,7 +159,7 @@ export function SelectionRing() {
   if (!rect) return null;
   return (
     <div
-      class="selection-ring"
+      class={`selection-ring${rect.kind === "focus" ? " focus" : ""}`}
       aria-hidden="true"
       style={{
         // The ring sits *outside* the card's border box, like the outer ring

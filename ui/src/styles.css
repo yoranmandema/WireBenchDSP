@@ -527,13 +527,29 @@ input {
 
 .block-card.selected {
   border-color: var(--cat);
-  /* The outer ring and the glow are painted by the `.selection-ring` overlay
-     instead: a `box-shadow` is clipped by any ancestor with `overflow` other
-     than `visible`, and both the strip and the chain panel scroll. What stays
-     on the card is an *inset* ring, which is drawn inside its own border box
-     and so cannot be clipped. */
+  /* Only the *inset* ring stays on the card: it is painted inside its own
+     border box, so no scrolling ancestor can clip it. The outer ring and the
+     glow are painted by the `.selection-ring` overlay, because a `box-shadow`
+     here is clipped by any ancestor with `overflow` other than `visible` — and
+     both the strip and the chain panel scroll. */
   box-shadow: inset 0 0 0 1px var(--cat);
   transform: translateY(-1px);
+}
+
+/* Keyboard focus. The browser's own `outline` is clipped by the same scrolling
+   ancestors as the old `box-shadow` ring, so a keyboard user tabbing to a card
+   at the edge of the chain would see no focus indicator. `.block-card` is
+   focusable (see `Chain.tsx`) and the ring is drawn by the same overlay as the
+   selection ring — see `selection.tsx`. */
+.block-card:focus-visible {
+  outline: none;
+}
+
+/* Focus variant of the overlay ring: neutral rather than the category hue, so
+   it reads as "keyboard target" and not as "this block is selected". */
+.selection-ring.focus {
+  border-color: var(--text);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 25%, transparent);
 }
 
 /* The selection ring itself. It is a child of `.app`, so no scrolling
