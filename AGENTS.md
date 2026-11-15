@@ -62,6 +62,10 @@ Commit or stash your work first. The user answers with a comment on the card
 and unblocks it. Read their comment before you continue.
 
 ## Audio safety
+- Clean up after yourself. Before you complete, block, or stop, kill every
+  `pedal-engine`, `pedal-shell` and Vite (`pnpm dev`) process you started.
+  A leftover engine holds port 8737, and the user's app then silently talks to
+  your stale engine instead of its own.
 - Never play sound on this machine. Run the engine with `--headless` (simulated
   device, output discarded) and check audio behaviour with tests or offline
   renders. Never open the speakers, headphones, or the Scarlett output.
