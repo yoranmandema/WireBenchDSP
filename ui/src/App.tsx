@@ -5,6 +5,7 @@ import { Rack } from "./components/Rack";
 import { Chain } from "./components/Chain";
 import { Editor } from "./components/Editor";
 import { PresetBrowser } from "./components/PresetBrowser";
+import { AddBlockModal } from "./components/AddBlockModal";
 
 export function App() {
   useEffect(() => {
@@ -45,6 +46,7 @@ export function App() {
       </div>
       <Editor />
       <PresetBrowser />
+      <AddBlockModal />
       {/* Command failures surface here instead of failing silently. */}
       {notice.value && (
         <div class="toast" onClick={() => (notice.value = null)}>

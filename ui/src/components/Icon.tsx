@@ -1,5 +1,16 @@
-// One stroke-drawn glyph per category. Inline SVG, `currentColor`, so an icon
-// picks up the category colour from its parent.
+// Stroke-drawn glyphs for the block registry, on a 24x24 grid.
+//
+// Two levels:
+//   * `GLYPHS`      — one glyph per category. The fallback, and what rack
+//                    headings use.
+//   * `BLOCK_GLYPHS` — a per-block override for a block whose sound is more
+//                    specific than its category (a cab is not an amp, a pitch
+//                    delay is not a clock, a NAM is a network). A block that *is*
+//                    the archetype of its category inherits the category glyph.
+//
+// Everything is inline SVG, `fill="none"`, `currentColor`, round caps, so a
+// glyph inherits the category hue from its parent and stays crisp at any size.
+// No emoji, no font glyphs: the shapes are drawn, not typed.
 
 import type { JSX } from "preact";
 import type { Category } from "../protocol";
@@ -74,13 +85,95 @@ const GLYPHS: Record<Category, JSX.Element> = {
   ),
 };
 
-/** A category glyph. `size` is the square edge in px. */
-export function Icon({
-  category,
-  size = 16,
+/** Per-block overrides, keyed by block type id. */
+const BLOCK_GLYPHS: Partial<Record<string, JSX.Element>> = {
+  // Level meter: four bars climbing.
+  "util.gain": <path d="M4 15v4M9 11v8M14 7v12M19 3v16" />,
+  // Master control: a knob with cardinal ticks.
+  "util.master": (
+    <>
+      <circle cx="12" cy="12" r="7" />
+      <path d="M12 12l4.2-4.2" />
+      <path d="M12 2.8v1.4M12 19.8v1.4M2.8 12h1.4M19.8 12h1.4" />
+    </>
+  ),
+  // Two channels merging into one.
+  "util.mix": <path d="M4 8h5l5 4h6M4 16h5l5-4" />,
+  // Adder: a sum in a ring.
+  "util.sum": (
+    <>
+      <circle cx="12" cy="12" r="7.5" />
+      <path d="M12 8.5v7M8.5 12h7" />
+    </>
+  ),
+  // Three-band stack: sliders with solid handles.
+  "tone.stack": (
+    <>
+      <path d="M6 4v16M12 4v16M18 4v16" />
+      <rect x="4" y="8" width="4" height="2.6" rx="1.3" fill="currentColor" stroke="none" />
+      <rect x="10" y="13" width="4" height="2.6" rx="1.3" fill="currentColor" stroke="none" />
+      <rect x="16" y="6" width="4" height="2.6" rx="1.3" fill="currentColor" stroke="none" />
+    </>
+  ),
+  // Soft clip: the top of the wave flattens.
+  "dist.overdrive": <path d="M3 12h2l2.5-7 3 14 2.5-11 2.5 9H21" />,
+  // Three echoes, each quieter than the last.
+  "time.delay": (
+    <>
+      <path d="M3 13c1.6-4.5 3.2-4.5 4.8 0s3.2 4.5 4.8 0" />
+      <path d="M9.5 13c1.6-4.5 3.2-4.5 4.8 0s3.2 4.5 4.8 0" stroke-opacity="0.55" />
+      <path d="M16 13c1.6-4.5 3.2-4.5 4.8 0s3.2 4.5 4.8 0" stroke-opacity="0.28" />
+    </>
+  ),
+  // Diffusion: a source and the reflections spreading out of it.
+  "time.reverb": (
+    <>
+      <circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none" />
+      <path d="M10 8a5 5 0 0 1 0 8" />
+      <path d="M14.5 4.5a10 10 0 0 1 0 15" />
+    </>
+  ),
+  // Pitch climbing a staircase.
+  "time.pitchdelay": <path d="M4 19h4v-4h4v-4h4V7h4M16.5 7H20v3.5" />,
+  // Amp head: the category archetype.
+  "amp.basic": (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="12" cy="14" r="3.4" />
+      <path d="M7 7.5h3M7 10h3" />
+    </>
+  ),
+  // Speaker cabinet: one cone in a box.
+  "cab.sim": (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <circle cx="12" cy="12" r="4.5" />
+      <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
+    </>
+  ),
+  // A jack: an arrow into a terminal.
+  "io.input": <path d="M3 12h9M9 7l5 5-5 5M18 5v14" />,
+  // A jack: an arrow out of a terminal.
+  "io.output": <path d="M6 5v14M9 12h9M14 7l5 5-5 5" />,
+  // A small network: two in, a hidden node, two out.
+  "mod.nam": (
+    <>
+      <circle cx="5.5" cy="7.5" r="1.7" />
+      <circle cx="5.5" cy="16.5" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="18.5" cy="7.5" r="1.7" />
+      <circle cx="18.5" cy="16.5" r="1.7" />
+      <path d="M7.2 8.2l3.2 2.6M7.2 15.8l3.2-2.6M13.8 10.9l2.9-2.4M13.8 13.1l2.9 2.4" />
+    </>
+  ),
+};
+
+function Svg({
+  size,
+  children,
 }: {
-  category: Category;
-  size?: number;
+  size: number;
+  children: JSX.Element | JSX.Element[];
 }) {
   return (
     <svg
@@ -95,7 +188,56 @@ export function Icon({
       stroke-linejoin="round"
       aria-hidden="true"
     >
-      {GLYPHS[category] ?? GLYPHS.Utility}
+      {children}
     </svg>
+  );
+}
+
+/** A category glyph. `size` is the square edge in px. */
+export function Icon({ category, size = 16 }: { category: Category; size?: number }) {
+  return <Svg size={size}>{GLYPHS[category] ?? GLYPHS.Utility}</Svg>;
+}
+
+/**
+ * A block glyph: the block's own drawing when it has one, otherwise its
+ * category's. `type` is the registry id (`amp.basic`), `category` the fallback.
+ */
+export function BlockIcon({
+  type,
+  category,
+  size = 16,
+}: {
+  type: string;
+  category: Category;
+  size?: number;
+}) {
+  return <Svg size={size}>{BLOCK_GLYPHS[type] ?? GLYPHS[category] ?? GLYPHS.Utility}</Svg>;
+}
+
+/** Power symbol — the bypass switch. */
+export function PowerIcon({ size = 11 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M12 3.5V10" />
+      <path d="M8.2 6.2a5.5 5.5 0 1 0 7.6 0" />
+    </Svg>
+  );
+}
+
+/** A close/cross. */
+export function CloseIcon({ size = 10 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
+    </Svg>
+  );
+}
+
+/** An add/plus. */
+export function PlusIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
   );
 }

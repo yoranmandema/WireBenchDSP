@@ -31,7 +31,7 @@ fn render(rig: &Rig, n: usize) -> Vec<f32> {
 /// A pedalboard with no channels at all is a bypass, not a dead pedal.
 #[test]
 fn blank_pedalboard_is_a_bypass_not_silence() {
-    let rig = Rig { name: "blank".into(), channels: vec![] };
+    let rig = Rig::new("blank");
     let peak = run_peak(&rig);
     assert!(peak > 0.05, "blank pedalboard output silence (peak {peak})");
 }
@@ -39,7 +39,7 @@ fn blank_pedalboard_is_a_bypass_not_silence() {
 /// One channel with no blocks is the same thing: the user's starting point.
 #[test]
 fn empty_channel_passes_audio() {
-    let rig = Rig::single("blank", vec![]);
+    let rig = Rig::new("blank");
     let peak = run_peak(&rig);
     assert!(peak > 0.05, "empty channel output silence (peak {peak})");
 }
@@ -47,7 +47,7 @@ fn empty_channel_passes_audio() {
 /// A rig must survive a save/load round trip unchanged.
 #[test]
 fn rig_round_trip_preserves_channels() {
-    let mut rig = Rig::single("round trip", vec![]);
+    let mut rig = Rig::new("round trip");
     rig.add_block("ch1", "amp.basic", [0.0, 0.0]);
     rig.add_block("ch1", "time.delay", [0.0, 0.0]);
     let back = Rig::from_doc(&rig.to_doc());
@@ -62,7 +62,7 @@ fn rig_round_trip_preserves_channels() {
 /// sum → out. Before this was wired, a freshly added block was dead weight.
 #[test]
 fn added_block_is_wired_into_the_chain() {
-    let mut rig = Rig::single("wired", vec![]);
+    let mut rig = Rig::new("wired");
     let id = rig.add_block("ch1", "amp.basic", [0.0, 0.0]);
     let doc = rig.to_doc();
 
@@ -80,7 +80,7 @@ fn added_block_is_wired_into_the_chain() {
 /// A block that is wired in but audible-identical would still fail the POC.
 #[test]
 fn adding_a_block_changes_the_sound() {
-    let mut rig = Rig::single("poc", vec![]);
+    let mut rig = Rig::new("poc");
     let dry = render(&rig, SR as usize);
 
     rig.add_block_as("ch1", "amp.basic", "Amp", [0.0, 0.0]);
@@ -105,7 +105,7 @@ fn rms(v: &[f32]) -> f32 {
 /// Reordering must not break the chain.
 #[test]
 fn reordered_chain_is_still_fully_wired() {
-    let mut rig = Rig::single("reorder", vec![]);
+    let mut rig = Rig::new("reorder");
     let amp = rig.add_block_as("ch1", "amp.basic", "Amp", [0.0, 0.0]);
     let delay = rig.add_block_as("ch1", "time.delay", "Delay", [0.0, 0.0]);
     // Move the delay to the front.

@@ -77,7 +77,7 @@ async fn main() {
         .find(|(n, _)| *n == preset)
         .map(|(_, d)| d.clone())
         .or_else(|| store.presets.first().map(|(_, d)| d.clone()))
-        .unwrap_or_else(|| Rig::single("Untitled", vec![]).to_doc());
+        .unwrap_or_else(|| Rig::new("Untitled").to_doc());
     let rig = Rig::from_doc(&doc);
     {
         let mut g = rig

@@ -17,7 +17,7 @@ use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Stroke};
 use dsp_graph::{BlockSpec, Category, ParamSpec, Unit};
 
 use crate::audio::{read_f32, Handle, Meters};
-use crate::channels::{master_id, Rig, IN, MAX_CHANNELS};
+use crate::channels::{master_id, Rig, IN};
 use crate::store::Store;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -282,7 +282,7 @@ pub fn palette(ui: &mut egui::Ui, registry: &dsp_graph::Registry) -> Option<(Str
     picked
 }
 
-/// Top bar: preset, source, meters, add channel.
+/// Top bar: preset, source, meters.
 pub fn top_bar(ui: &mut egui::Ui, handle: &Handle, store: &mut Store, rig: &mut Rig, state: &mut UiState, meters: &Arc<Meters>) {
     ui.horizontal(|ui| {
         ui.heading("Pedal");
@@ -331,13 +331,6 @@ pub fn top_bar(ui: &mut egui::Ui, handle: &Handle, store: &mut Store, rig: &mut 
         ui.label(format!("cpu {:.1}%", cpu * 100.0));
         ui.label(format!("xruns {}", meters.xruns.load(Ordering::Relaxed)));
         ui.separator();
-        if rig.channels.len() < MAX_CHANNELS && ui.button("+ Channel").clicked() {
-            if let Some(id) = rig.add_channel() {
-                state.status = format!("added {id}");
-                state.dirty = true;
-                let _ = rebuild(handle, rig);
-            }
-        }
         if !state.status.is_empty() {
             ui.label(egui::RichText::new(state.status.clone()).weak());
         }
@@ -369,7 +362,7 @@ pub fn rebuild(handle: &Handle, rig: &Rig) -> Result<(), String> {
     Ok(())
 }
 
-/// One channel: a header row (name, volume, source routing, remove) above a
+/// One channel: a header row (name, volume, source routing) above a
 /// horizontally scrolling strip of blocks that read as a signal path.
 pub fn channel_strip(
     ui: &mut egui::Ui,
@@ -427,11 +420,6 @@ pub fn channel_strip(
             let _ = rebuild(handle, rig);
         }
         ui.separator();
-        if ui.button("✕").on_hover_text("Remove channel").clicked() {
-            rig.remove_channel(channel);
-            state.dirty = true;
-            let _ = rebuild(handle, rig);
-        }
     });
 
     // --- the strip: blocks run left to right ----------------------------

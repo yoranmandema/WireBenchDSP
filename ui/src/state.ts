@@ -3,6 +3,7 @@
 
 import { signal } from "@preact/signals";
 import { createBridge, type Bridge } from "./bridge";
+import { type BlockPayload } from "./dnd";
 import { asState, isMeters, isState, type Meters, type State } from "./protocol";
 
 export const bridge: Bridge = createBridge();
@@ -17,6 +18,16 @@ export const notice = signal<string | null>(null);
 export const selected = signal<{ channel: string; block: string } | null>(null);
 /** Whether the preset browser modal is open. */
 export const presetsOpen = signal(false);
+/** Channel the add-block picker targets; null when the picker is closed. */
+export const addBlockFor = signal<string | null>(null);
+/** Current filter text of the add-block picker. */
+export const blockQuery = signal("");
+
+/** Open the picker over `channel`, resetting any previous search. */
+export function openBlockPicker(channel: string): void {
+  blockQuery.value = "";
+  addBlockFor.value = channel;
+}
 
 /** Highest revision applied. See `fold`. */
 let lastRev = -1;
@@ -93,15 +104,37 @@ export const setBypass = (channel: string, block: string, bypass: boolean) =>
 export const addBlock = (channel: string, type: string, name: string) =>
   mutate("addBlock", { channel, type, name });
 
+/**
+ * Insert a block dragged from the browser at `index` in `channel`.
+ *
+ * The engine's `addBlock` appends, so this adds and then moves the new node
+ * into place. The new id is found by diffing the channel's block ids across the
+ * add, which is robust to the engine's name-derived id suffixing (`amp`, `amp2`,
+ * …). A drop on an empty channel is just the add.
+ */
+export async function insertBlock(
+  channel: string,
+  index: number,
+  entry: BlockPayload,
+): Promise<void> {
+  const before = new Set(
+    (state.value?.channels.find((c) => c.id === channel)?.blocks ?? []).map((b) => b.id),
+  );
+  await mutate("addBlock", { channel, type: entry.type, name: entry.name });
+  const blocks = state.value?.channels.find((c) => c.id === channel)?.blocks ?? [];
+  const added = blocks.find((b) => !before.has(b.id));
+  if (!added) return;
+  const to = Math.max(0, Math.min(index, blocks.length - 1));
+  if (to !== blocks.indexOf(added)) {
+    await mutate("moveBlock", { channel, block: added.id, to });
+  }
+}
+
 export const removeBlock = (channel: string, block: string) =>
   mutate("removeBlock", { channel, block });
 
 export const moveBlock = (channel: string, block: string, to: number) =>
   mutate("moveBlock", { channel, block, to });
-
-export const addChannel = () => mutate("addChannel");
-
-export const removeChannel = (channel: string) => mutate("removeChannel", { channel });
 
 export const setSources = (channel: string, sources: string[]) =>
   mutate("setSources", { channel, sources });

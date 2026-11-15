@@ -6,15 +6,26 @@
 //! channel gets a `Split` node so it can be fed by several sources), and
 //! [`Rig::from_doc`] reads that layout back.
 //!
-//! With one channel this is just a pedalboard. With two it is a parallel rig:
-//! channel B's source row has `A` and `In` ticked. A send/return is the same
-//! idea with three.
+//! A **cross-channel routing** ([`Routing`]) is a different thing: it taps one
+//! block's output and *additionally* feeds a block in another channel. It lives
+//! in [`Rig::routings`], not in a channel's `sources` and not in the graph's
+//! `edges`, so the source block's own downstream connection is untouched. It
+//! carries an `enabled` flag and a `gain`, and it is saved in the project file
+//! beside the edges.
+//!
+//! A rig always has exactly [`CHANNEL_COUNT`] channels. They are slots, not
+//! something the user adds or removes: an empty one is simply left out of the
+//! compiled graph ([`Rig::to_doc`]), so it costs nothing but still appears in
+//! the UI. With one channel populated this is a pedalboard; with two it is a
+//! parallel rig: channel B's source row has `A` and `In` ticked. A send/return
+//! is the same idea with three.
 
 use std::collections::BTreeMap;
 
-use dsp_graph::{Doc, EdgeDoc, NodeDoc};
+use dsp_graph::{Doc, EdgeDoc, NodeDoc, Routing, RoutingEndpoint};
 
-pub const MAX_CHANNELS: usize = 4;
+/// The number of channel slots a rig always has.
+pub const CHANNEL_COUNT: usize = 4;
 /// The pedal's input, as a routing source.
 pub const IN: &str = "<in>";
 
@@ -39,10 +50,21 @@ impl Channel {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Rig {
     pub name: String,
     pub channels: Vec<Channel>,
+    /// Cross-channel routings. This is a separate list from each channel's
+    /// `sources` and from the block chain: a routing taps a block's output and
+    /// *additionally* feeds a block in another channel, so the source keeps
+    /// its original downstream connection(s).
+    pub routings: Vec<Routing>,
+}
+
+impl Default for Rig {
+    fn default() -> Self {
+        Self::new("")
+    }
 }
 
 /// The master node id for a channel.
@@ -56,11 +78,12 @@ pub fn master_id(ch: &str) -> String {
 pub const OUT_MASTER_ID: &str = "out__master";
 
 impl Rig {
-    pub fn single(name: &str, blocks: Vec<NodeDoc>) -> Self {
-        let mut c = Channel::new("ch1", "Channel 1");
-        c.blocks = blocks;
-        c.sources = vec![IN.into()];
-        Self { name: name.into(), channels: vec![c] }
+    /// A rig with the full [`CHANNEL_COUNT`] channel slots, all empty.
+    pub fn new(name: &str) -> Self {
+        let channels = (1..=CHANNEL_COUNT)
+            .map(|n| Channel::new(&format!("ch{n}"), &format!("Channel {n}")))
+            .collect();
+        Self { name: name.into(), channels, routings: Vec::new() }
     }
 
     pub fn channel(&self, id: &str) -> Option<&Channel> {
@@ -115,23 +138,160 @@ impl Rig {
         }
     }
 
-    pub fn add_channel(&mut self) -> Option<String> {
-        if self.channels.len() >= MAX_CHANNELS {
-            return None;
-        }
-        let id = format!("ch{}", self.channels.len() + 1);
-        self.channels.push(Channel::new(&id, &format!("Channel {}", self.channels.len() + 1)));
-        Some(id)
+    // --- cross-channel routings -------------------------------------------
+
+    /// Create a routing from `source` to `dest` and return its id.
+    ///
+    /// The source block keeps its own downstream connection; this only adds a
+    /// feed into `dest`. Invalid routings are refused: unknown endpoints, a
+    /// block routing to itself, a routing within one channel, an exact
+    /// duplicate, and anything that would close a feedback loop.
+    pub fn create_routing(
+        &mut self,
+        source: &RoutingEndpoint,
+        dest: &RoutingEndpoint,
+    ) -> Result<String, String> {
+        self.validate_routing(source, dest)?;
+        let id = self.fresh_routing_id();
+        self.routings.push(Routing {
+            id: id.clone(),
+            source: source.clone(),
+            dest: dest.clone(),
+            enabled: true,
+            gain: 1.0,
+        });
+        Ok(id)
     }
 
-    pub fn remove_channel(&mut self, id: &str) {
-        self.channels.retain(|c| c.id != id);
-        for c in &mut self.channels {
-            c.sources.retain(|s| s != id);
-            if c.sources.is_empty() {
-                c.sources.push(IN.into());
+    /// Remove a routing by id. Returns whether it existed.
+    pub fn remove_routing(&mut self, id: &str) -> bool {
+        let before = self.routings.len();
+        self.routings.retain(|r| r.id != id);
+        self.routings.len() != before
+    }
+
+    /// Enable or disable a routing. Disabling keeps it in the list (and in the
+    /// saved project) but takes its feed out of the signal path.
+    pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), String> {
+        let r = self.routing(id).ok_or_else(|| format!("no such routing: {id}"))?;
+        if enabled && !r.enabled && self.routing_creates_cycle(&r.source, &r.dest) {
+            return Err("enabling that routing would create a feedback cycle".to_string());
+        }
+        self.routing_mut(id).expect("checked above").enabled = enabled;
+        Ok(())
+    }
+
+    /// Set a routing's gain (linear). Optional in the API; the field defaults
+    /// to 1.0 when a project does not carry it.
+    pub fn set_gain(&mut self, id: &str, gain: f32) -> Result<(), String> {
+        let r = self.routing_mut(id).ok_or_else(|| format!("no such routing: {id}"))?;
+        r.gain = gain;
+        Ok(())
+    }
+
+    /// Every routing, in creation order.
+    pub fn list_routings(&self) -> &[Routing] {
+        &self.routings
+    }
+
+    pub fn routing(&self, id: &str) -> Option<&Routing> {
+        self.routings.iter().find(|r| r.id == id)
+    }
+
+    fn routing_mut(&mut self, id: &str) -> Option<&mut Routing> {
+        self.routings.iter_mut().find(|r| r.id == id)
+    }
+
+    /// A fresh id that does not collide with an existing routing.
+    fn fresh_routing_id(&self) -> String {
+        let mut n = self.routings.len() + 1;
+        while self.routing(&format!("route{n}")).is_some() {
+            n += 1;
+        }
+        format!("route{n}")
+    }
+
+    /// Reject a routing that cannot be honoured. See [`Rig::create_routing`].
+    pub fn validate_routing(
+        &self,
+        source: &RoutingEndpoint,
+        dest: &RoutingEndpoint,
+    ) -> Result<(), String> {
+        self.check_endpoint("source", source)?;
+        self.check_endpoint("destination", dest)?;
+        if source.block == dest.block {
+            return Err(format!("'{}' cannot route to itself", source.block));
+        }
+        if source.channel == dest.channel {
+            return Err(format!(
+                "a routing must cross channels: both ends are in '{}'",
+                source.channel
+            ));
+        }
+        if self.routings.iter().any(|r| &r.source == source && &r.dest == dest) {
+            return Err("that routing already exists".to_string());
+        }
+        if self.routing_creates_cycle(source, dest) {
+            return Err("that routing would create a feedback cycle".to_string());
+        }
+        Ok(())
+    }
+
+    fn check_endpoint(&self, role: &str, e: &RoutingEndpoint) -> Result<(), String> {
+        let ch = self
+            .channel(&e.channel)
+            .ok_or_else(|| format!("{role}: no such channel: {}", e.channel))?;
+        if !ch.blocks.iter().any(|b| b.id == e.block) {
+            return Err(format!("{role}: no such block: {}", e.block));
+        }
+        Ok(())
+    }
+
+    /// Would adding `source` → `dest` close a feedback loop?
+    ///
+    /// The block-level signal graph is the channel chains, the channel-source
+    /// feeds, and the enabled routings. A cycle exists when `dest` can already
+    /// reach `source` through it.
+    pub fn routing_creates_cycle(
+        &self,
+        source: &RoutingEndpoint,
+        dest: &RoutingEndpoint,
+    ) -> bool {
+        let edges = self.signal_edges(Some((&source.block, &dest.block)));
+        reaches(&edges, &dest.block, &source.block)
+    }
+
+    /// Block-level signal edges: each channel's chain, the feeds a channel's
+    /// sources give its head, and the enabled routings. `extra` adds a
+    /// candidate edge (the routing being validated).
+    fn signal_edges(&self, extra: Option<(&str, &str)>) -> Vec<(String, String)> {
+        let mut edges: Vec<(String, String)> = Vec::new();
+        for c in &self.channels {
+            if c.blocks.is_empty() {
+                continue;
+            }
+            for w in c.blocks.windows(2) {
+                edges.push((w[0].id.clone(), w[1].id.clone()));
+            }
+            if let Some(last) = c.blocks.last() {
+                edges.push((last.id.clone(), master_id(&c.id)));
+            }
+            let head = c.blocks[0].id.clone();
+            for src in self.resolve_sources(&c.id) {
+                if src != IN {
+                    edges.push((master_id(&src), head.clone()));
+                }
             }
         }
+        for r in &self.routings {
+            if r.enabled {
+                edges.push((r.source.block.clone(), r.dest.block.clone()));
+            }
+        }
+        if let Some((s, d)) = extra {
+            edges.push((s.to_string(), d.to_string()));
+        }
+        edges
     }
 
     // --- graph conversion -------------------------------------------------
@@ -153,13 +313,18 @@ impl Rig {
     /// Lay the rig out as a graph the executor can compile.
     pub fn to_doc(&self) -> Doc {
         let mut doc = Doc::new(self.name.clone());
+        // Routings are carried as their own list, not as edges: the compiled
+        // graph is unchanged by a routing, so a save/load round trip cannot
+        // silently rewire the source block.
+        doc.routings = self.routings.clone();
         doc.nodes.push(NodeDoc { id: "in".into(), block: "io.input".into(), params: BTreeMap::new(), bypass: false, pos: Some([60.0, 400.0]), model: None, });
         doc.nodes.push(NodeDoc { id: "out".into(), block: "io.output".into(), params: BTreeMap::new(), bypass: false, pos: Some([1400.0, 400.0]), model: None, });
-        // A pedalboard with no channels at all is a *bypass*, not a dead pedal.
+        // A pedalboard with nothing in it is a *bypass*, not a dead pedal.
         // The summer below needs a channel master to feed it, so without this
         // the sum's inputs would all be tied to silence and the pedal would
         // output nothing until a block was added.
-        if self.channels.is_empty() {
+        let active: Vec<&Channel> = self.channels.iter().filter(|c| !c.blocks.is_empty()).collect();
+        if active.is_empty() {
             doc.nodes.push(Self::out_master());
             doc.edges.push(EdgeDoc { from: ["in".to_string(), "out".into()], to: ["out__master".to_string(), "in".into()] });
             doc.edges.push(EdgeDoc { from: ["out__master".to_string(), "out".into()], to: ["out".to_string(), "in".into()] });
@@ -173,9 +338,15 @@ impl Rig {
         sum.params.insert("c".into(), 1.0);
         sum.params.insert("d".into(), 1.0);
         doc.nodes.push(sum);
-        for (ci, c) in self.channels.iter().enumerate() {
+        // Empty channels are skipped: they have no blocks, so they would only
+        // duplicate the dry signal into the sum. Their slots stay in the model
+        // and the UI; they just cost nothing until a block is dropped in.
+        for (ci, c) in active.iter().enumerate() {
             let y = 240.0 + ci as f32 * 150.0;
-            let multi = c.sources.len() > 1;
+            // An empty channel is transparent, so a channel fed by one is fed
+            // by whatever feeds that one (see `resolve_sources`).
+            let sources = self.resolve_sources(&c.id);
+            let multi = sources.len() > 1;
             if multi {
                 doc.nodes.push(NodeDoc {
                     id: Self::split_id(&c.id),
@@ -207,7 +378,7 @@ impl Rig {
             };
             // Routing edges into the head. (A channel's master is wired to
             // the pedal output by the channel-end edge below.)
-            for (k, src) in c.sources.iter().enumerate() {
+            for (k, src) in sources.iter().enumerate() {
                 let (from_node, from_port) = if src == IN {
                     ("in".to_string(), "out".to_string())
                 } else {
@@ -239,18 +410,15 @@ impl Rig {
             } else {
                 c.blocks.last().map(|b| b.id.clone()).unwrap_or_else(|| head.clone())
             };
-            // An empty channel's head *is* the master, so the routing edge
-            // above already feeds it; adding another edge here would be a
-            // self-loop (and a second driver on the master's input).
-            if last != master_id(&c.id) {
-                doc.edges.push(EdgeDoc { from: [last, "out".into()], to: [master_id(&c.id), "in".into()] });
-            }
+            // The last block feeds the channel master. (A channel always has
+            // at least one block here, so `last` is never the master.)
+            doc.edges.push(EdgeDoc { from: [last, "out".into()], to: [master_id(&c.id), "in".into()] });
             let port = ["a", "b", "c", "d"][ci.min(3)];
             doc.edges.push(EdgeDoc { from: [master_id(&c.id), "out".into()], to: ["sum".to_string(), port.into()] });
         }
         // Unused sum inputs are tied to silence via a zero-gain gain node, so
         // the graph's "every input driven" rule holds without a special case.
-        for (k, port) in ["a", "b", "c", "d"].iter().enumerate().skip(self.channels.len()) {
+        for (k, port) in ["a", "b", "c", "d"].iter().enumerate().skip(active.len()) {
             let id = format!("sum_z{k}");
             doc.nodes.push(NodeDoc {
                 id: id.clone(),
@@ -277,7 +445,7 @@ impl Rig {
     /// from several sources at once (a summing point). That node is the
     /// channel's first block, and its inputs are the channel's sources.
     pub fn from_doc(doc: &Doc) -> Self {
-        let mut rig = Rig { name: doc.name.clone(), channels: Vec::new() };
+        let mut rig = Rig { name: doc.name.clone(), channels: Vec::new(), routings: Vec::new() };
         // Channel masters are the `util.master` nodes that are not the global
         // output limiter. Hand-written presets wire their masters straight to
         // `out` (there is no summer), while the app's own docs wire them to
@@ -341,7 +509,91 @@ impl Rig {
             let n = rig.channels.len() + 1;
             rig.channels.push(Channel { id, name: format!("Channel {n}"), blocks, sources, master_volume, master_ceiling });
         }
+        // A rig always shows the full set of channel slots. A preset with
+        // fewer channels (every shipped one has one) gets empty slots rather
+        // than a UI that grows and shrinks.
+        rig.pad_channels();
+        // Routings are validated on load too: a hand-edited project must not be
+        // able to smuggle in a self-route, a same-channel route, a duplicate,
+        // or a cycle. Invalid entries are dropped rather than poisoning the rig.
+        for r in &doc.routings {
+            if let Err(e) = rig.validate_routing(&r.source, &r.dest) {
+                eprintln!("pedal: dropping routing '{}' on load: {e}", r.id);
+                continue;
+            }
+            rig.routings.push(r.clone());
+        }
         rig
+    }
+
+    /// Fill the channel slots up to [`CHANNEL_COUNT`] with empty channels and
+    /// drop any beyond it, so a rig always has the same shape.
+    fn pad_channels(&mut self) {
+        self.channels.truncate(CHANNEL_COUNT);
+        while self.channels.len() < CHANNEL_COUNT {
+            let n = self.channels.len() + 1;
+            let mut id = format!("ch{n}");
+            let mut k = 2;
+            while self.channels.iter().any(|c| c.id == id) {
+                id = format!("ch{n}_{k}");
+                k += 1;
+            }
+            self.channels.push(Channel::new(&id, &format!("Channel {n}")));
+        }
+    }
+
+    /// The sources that actually feed a channel once empty channels are
+    /// skipped, deduplicated. An empty channel is transparent: it passes its
+    /// own sources through, so a channel fed by an empty one is fed by
+    /// whatever feeds that one.
+    fn resolve_sources(&self, id: &str) -> Vec<String> {
+        let Some(ch) = self.channel(id) else {
+            return vec![IN.to_string()];
+        };
+        let mut seen = vec![id.to_string()];
+        let mut out = Vec::new();
+        for s in &ch.sources {
+            if s == IN {
+                out.push(IN.to_string());
+            } else {
+                out.extend(self.resolve_source(s, &mut seen));
+            }
+        }
+        if out.is_empty() {
+            out.push(IN.to_string());
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Resolve one source name. An active channel stands for its own master;
+    /// an empty one is transparent, so its sources are used instead. A routing
+    /// cycle falls back to the pedal input rather than recursing forever.
+    fn resolve_source(&self, id: &str, seen: &mut Vec<String>) -> Vec<String> {
+        if seen.iter().any(|s| s == id) {
+            return vec![IN.to_string()];
+        }
+        let Some(ch) = self.channel(id) else {
+            return vec![IN.to_string()];
+        };
+        if !ch.blocks.is_empty() {
+            return vec![id.to_string()];
+        }
+        seen.push(id.to_string());
+        let mut out = Vec::new();
+        for s in &ch.sources {
+            if s == IN {
+                out.push(IN.to_string());
+            } else {
+                out.extend(self.resolve_source(s, seen));
+            }
+        }
+        seen.pop();
+        if out.is_empty() {
+            out.push(IN.to_string());
+        }
+        out
     }
 }
 
@@ -353,4 +605,20 @@ fn src_name(node: &str) -> String {
     } else {
         node.into()
     }
+}
+
+/// Depth-first reachability over block-level signal edges. Used to refuse a
+/// routing that would close a feedback loop.
+fn reaches(edges: &[(String, String)], from: &str, to: &str) -> bool {
+    let mut stack = vec![from.to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(n) = stack.pop() {
+        if n == to {
+            return true;
+        }
+        if seen.insert(n.clone()) {
+            stack.extend(edges.iter().filter(|(s, _)| *s == n).map(|(_, d)| d.clone()));
+        }
+    }
+    false
 }

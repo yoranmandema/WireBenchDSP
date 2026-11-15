@@ -12,30 +12,29 @@ const SR: f32 = 48_000.0;
 const BLOCK: usize = 64;
 
 fn engine_with_rig() -> AudioThread {
-    let mut g = Rig::single(
-        "test",
-        vec![
-            dsp_graph::NodeDoc {
-                id: "amp".into(),
-                block: "amp.basic".into(),
-                params: [("gain".to_string(), 4.0)].into_iter().collect(),
-                bypass: false,
-                pos: None,
-                model: None,
-            },
-            dsp_graph::NodeDoc {
-                id: "master".into(),
-                block: "util.master".into(),
-                params: [("volume".to_string(), 0.0)].into_iter().collect(),
-                bypass: false,
-                pos: None,
-                model: None,
-            },
-        ],
-    )
-    .to_doc()
-    .build(&builtin_registry())
-    .unwrap();
+    let mut rig = Rig::new("test");
+    rig.channel_mut("ch1").expect("ch1 slot").blocks = vec![
+        dsp_graph::NodeDoc {
+            id: "amp".into(),
+            block: "amp.basic".into(),
+            params: [("gain".to_string(), 4.0)].into_iter().collect(),
+            bypass: false,
+            pos: None,
+            model: None,
+        },
+        dsp_graph::NodeDoc {
+            id: "master".into(),
+            block: "util.master".into(),
+            params: [("volume".to_string(), 0.0)].into_iter().collect(),
+            bypass: false,
+            pos: None,
+            model: None,
+        },
+    ];
+    let mut g = rig
+        .to_doc()
+        .build(&builtin_registry())
+        .unwrap();
     let ex = dsp_graph::Executor::compile_owned(&mut g, SR, BLOCK).unwrap();
     let (_cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(8);
     let (trash_tx, _trash_rx) = rtrb::RingBuffer::<dsp_graph::Executor>::new(4);

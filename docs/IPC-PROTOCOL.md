@@ -115,11 +115,38 @@ a much harder reconnection story. **Snapshot, not deltas.**
         }
       ]
     }
+  ],
+  "routings": [
+    {
+      "id": "route1",
+      "source": { "channel": "ch1", "block": "amp" },
+      "dest":   { "channel": "ch2", "block": "delay" },
+      "enabled": true,
+      "gain": 1.0
+    }
   ]
 }
 ```
 
 `registry` is static for a given engine build; the UI may cache it.
+
+### Cross-channel routings
+
+A routing is **not** an edge. An edge replaces a block's wire; a routing taps a
+block's output and *additionally* feeds a block in another channel, so the
+source block's own downstream connection is untouched. Routings are a separate
+list on the state and in the saved project file.
+
+- `source` / `dest` are `{ channel, block }`. Both endpoints must exist.
+- `enabled` defaults to `true`; `gain` is linear and defaults to `1.0`.
+- Refused with `ok: false` and a message: a block routing to itself, a routing
+  within one channel, an exact duplicate, or one that would close a feedback
+  loop. A refused routing never enters the list.
+- Invalid routings in a loaded project are dropped, not applied.
+
+`channels` always has exactly 4 entries, in slot order. A channel is never
+added or removed: an unused slot is present with an empty `blocks` array, not
+missing from the list.
 
 ## Commands
 
@@ -135,9 +162,12 @@ All commands are `req` messages. Mutating commands return the full state in
 | `addBlock` | `{channel, type, name, pos}` | append a block | full state |
 | `removeBlock` | `{channel, block}` | remove a block | full state |
 | `moveBlock` | `{channel, block, to}` | reorder | full state |
-| `addChannel` | — | append a channel | full state |
-| `removeChannel` | `{channel}` | remove a channel | full state |
 | `setSources` | `{channel, sources}` | channel inputs | full state |
+| `createRouting` | `{source: {channel, block}, dest: {channel, block}}` | tap a block into another channel | full state |
+| `removeRouting` | `{id}` | delete a routing | full state |
+| `setEnabled` | `{id, enabled}` | toggle a routing | full state |
+| `setGain` | `{id, gain}` | routing gain (linear) | full state |
+| `listRoutings` | — | — | `{"routings": [...]}` |
 | `setSource` | `{source}` | riff / live / silence | full state |
 | `listPresets` | — | — | `{"presets": [...]}` |
 | `loadPreset` | `{name}` | load a preset | full state |

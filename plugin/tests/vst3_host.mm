@@ -30,6 +30,7 @@
 #include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "public.sdk/source/main/pluginfactory.h"
 #include "public.sdk/source/vst/hosting/hostclasses.h"
+#include "public.sdk/source/vst/utility/stringconvert.h"
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
@@ -108,7 +109,14 @@ int main(int argc, char** argv)
   {
     // SingleComponentEffect: the controller is the same object, already
     // initialized above, so do not call initialize() a second time.
-    std::printf("parameters: %d\n", ctrl->getParameterCount());
+    const int32_t nParams = ctrl->getParameterCount();
+    std::printf("parameters: %d\n", nParams);
+    for (int32_t i = 0; i < nParams; i++)
+    {
+      ParameterInfo pi {};
+      if (ctrl->getParameterInfo(i, pi) == kResultTrue)
+        std::printf("  [%d] %s\n", i, Vst::StringConvert::convert(pi.title).c_str());
+    }
   }
 
   CHECK(comp->setActive(true) == kResultTrue, "setActive(true)");
@@ -160,7 +168,10 @@ int main(int argc, char** argv)
       return 1;
     }
 
-    recorded.insert(recorded.end(), outBuf.begin(), outBuf.end());
+    // Write interleaved stereo, like any normal .raw capture.
+    for (int32_t s = 0; s < kBlock; s++)
+      for (int32_t c = 0; c < nChans; c++)
+        recorded.push_back(outPtrs[c][s]);
   }
 
   CHECK(proc->setProcessing(false) == kResultTrue, "setProcessing(false)");

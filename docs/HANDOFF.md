@@ -188,9 +188,10 @@ shifters).
 
 - **Channel strips.** A channel is an ordered strip of blocks; drag to
   reorder, click to select, `+ Block` palette, Delete to remove. The **Source**
-  row routes audio in: `In` and/or another channel. Up to 4 channels, each
-  with its own master volume and limiter, summed through one limiter at the
-  output.
+  row routes audio in: `In` and/or another channel. A rig always has 4
+  channels — they are fixed slots, never added or removed; an empty one is
+  simply left out of the compiled graph. Each has its own master volume and
+  limiter, summed through one limiter at the output.
 - cpal audio I/O on the Scarlett at 48 kHz; riff / live / silence source;
   in/out meters; preset load/save to `presets/*.json`.
 - Every structural change rebuilds the executor on the UI thread and hands it

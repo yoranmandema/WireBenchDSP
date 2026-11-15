@@ -14,7 +14,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use dsp_graph::Registry;
+use dsp_graph::{Registry, RoutingEndpoint};
 
 use crate::audio::{read_f32, Cmd, Handle};
 use crate::channels::{master_id, Rig, IN};
@@ -146,6 +146,7 @@ fn snapshot(sh: &Shared) -> Value {
             })
         })
         .collect();
+    let routings = serde_json::to_value(&rig.routings).unwrap_or_else(|_| json!([]));
     let preset = sh.preset.lock().unwrap().clone();
     let rev = sh.rev.load(Ordering::Acquire);
     json!({
@@ -155,6 +156,7 @@ fn snapshot(sh: &Shared) -> Value {
         "source": sh.source_name(),
         "registry": registry_json(&sh.registry),
         "channels": channels,
+        "routings": routings,
     })
 }
 
@@ -284,20 +286,51 @@ fn move_block(sh: &Shared, channel: &str, block: &str, to: usize) -> Result<(), 
     rebuild(sh)
 }
 
-fn add_channel(sh: &Shared) -> Result<(), String> {
+fn create_routing(sh: &Shared, source: RoutingEndpoint, dest: RoutingEndpoint) -> Result<(), String> {
     {
         let mut rig = sh.rig.lock().unwrap();
-        rig.add_channel().ok_or_else(|| "maximum number of channels reached".to_string())?;
+        rig.create_routing(&source, &dest)?;
     }
     rebuild(sh)
 }
 
-fn remove_channel(sh: &Shared, channel: &str) -> Result<(), String> {
+fn remove_routing(sh: &Shared, id: &str) -> Result<(), String> {
     {
         let mut rig = sh.rig.lock().unwrap();
-        rig.remove_channel(channel);
+        if !rig.remove_routing(id) {
+            return Err(format!("no such routing: {id}"));
+        }
     }
     rebuild(sh)
+}
+
+fn set_routing_enabled(sh: &Shared, id: &str, enabled: bool) -> Result<(), String> {
+    {
+        let mut rig = sh.rig.lock().unwrap();
+        rig.set_enabled(id, enabled)?;
+    }
+    rebuild(sh)
+}
+
+fn set_routing_gain(sh: &Shared, id: &str, gain: f32) -> Result<(), String> {
+    {
+        let mut rig = sh.rig.lock().unwrap();
+        rig.set_gain(id, gain)?;
+    }
+    rebuild(sh)
+}
+
+fn list_routings(sh: &Shared) -> Value {
+    let rig = sh.rig.lock().unwrap();
+    json!({ "routings": serde_json::to_value(&rig.routings).unwrap_or_else(|_| json!([])) })
+}
+
+/// Parse `{ "channel": "...", "block": "..." }` from a command's args.
+fn endpoint(args: &Value, key: &str) -> Result<RoutingEndpoint, String> {
+    let o = args.get(key).ok_or_else(|| key.to_string())?;
+    let channel = o.get("channel").and_then(|v| v.as_str()).ok_or("channel")?;
+    let block = o.get("block").and_then(|v| v.as_str()).ok_or("block")?;
+    Ok(RoutingEndpoint::new(channel, block))
 }
 
 fn set_sources(sh: &Shared, channel: &str, sources: Vec<String>) -> Result<(), String> {
@@ -394,7 +427,8 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
 
     match cmd {
         "getState" | "setParam" | "setMasterVolume" | "setBypass" | "addBlock"
-        | "removeBlock" | "moveBlock" | "addChannel" | "removeChannel" | "setSources"
+        | "removeBlock" | "moveBlock" | "setSources" | "createRouting"
+        | "removeRouting" | "setEnabled" | "setGain"
         | "loadPreset" | "setSource" | "savePreset" | "deletePreset" | "renamePreset" => {
             match cmd {
                 "getState" => {}
@@ -417,12 +451,6 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                     let to = args.get("to").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                     move_block(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, to)?;
                 }
-                "addChannel" => {
-                    add_channel(sh)?;
-                }
-                "removeChannel" => {
-                    remove_channel(sh, &s("channel").ok_or("channel")?)?;
-                }
                 "setSources" => {
                     let sources: Vec<String> = args
                         .get("sources")
@@ -430,6 +458,20 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                         .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
                         .unwrap_or_default();
                     set_sources(sh, &s("channel").ok_or("channel")?, sources)?;
+                }
+                "createRouting" => {
+                    let source = endpoint(args, "source")?;
+                    let dest = endpoint(args, "dest")?;
+                    create_routing(sh, source, dest)?;
+                }
+                "removeRouting" => {
+                    remove_routing(sh, &s("id").ok_or("id")?)?;
+                }
+                "setEnabled" => {
+                    set_routing_enabled(sh, &s("id").ok_or("id")?, b("enabled"))?;
+                }
+                "setGain" => {
+                    set_routing_gain(sh, &s("id").ok_or("id")?, f("gain"))?;
                 }
                 "loadPreset" => {
                     load_preset(sh, &s("name").ok_or("name")?)?;
@@ -456,6 +498,7 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
             Ok(snapshot(sh))
         }
         "listPresets" => Ok(json!({ "presets": sh.presets() })),
+        "listRoutings" => Ok(list_routings(sh)),
         other => Err(format!("unknown command: {other}")),
     }
 }

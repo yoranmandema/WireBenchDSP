@@ -46,7 +46,7 @@ fn main() {
         .find(|(n, _)| *n == preset_name)
         .map(|(_, d)| d.clone())
         .or_else(|| store.presets.first().map(|(_, d)| d.clone()))
-        .unwrap_or_else(|| channels::Rig::single("Untitled", vec![]).to_doc());
+        .unwrap_or_else(|| channels::Rig::new("Untitled").to_doc());
     let rig = Rig::from_doc(&doc);
 
     let devices = pedal_engine::host::pick();
@@ -226,13 +226,6 @@ impl eframe::App for App {
                 }
                 None => {
                     ui.label("Select a block to edit its parameters.");
-                    ui.separator();
-                    if ui.button("Add channel").clicked() {
-                        if let Some(id) = self.rig.add_channel() {
-                            self.state.status = format!("added {id}");
-                            let _ = rebuild(&self.handle, &self.rig);
-                        }
-                    }
                 }
             }
         });

@@ -59,7 +59,7 @@ fn render(handle: &Handle, rig: &mut Rig, channels: &[&str]) -> Vec<egui::Rect> 
 #[test]
 fn blocks_in_a_channel_run_left_to_right() {
     let handle = test_handle();
-    let mut rig = Rig::single("lay", vec![]);
+    let mut rig = Rig::new("lay");
     rig.add_block_as("ch1", "amp.basic", "Amp", [0.0, 0.0]);
     rig.add_block_as("ch1", "cab.sim", "Cab", [0.0, 0.0]);
     rig.add_block_as("ch1", "delay.basic", "Delay", [0.0, 0.0]);
@@ -92,8 +92,7 @@ fn blocks_in_a_channel_run_left_to_right() {
 #[test]
 fn channels_stack_vertically() {
     let handle = test_handle();
-    let mut rig = Rig::single("lay", vec![]);
-    rig.add_channel();
+    let mut rig = Rig::new("lay");
     rig.add_block_as("ch1", "amp.basic", "Amp", [0.0, 0.0]);
     rig.add_block_as("ch2", "delay.basic", "Delay", [0.0, 0.0]);
 

@@ -18,8 +18,8 @@ constexpr uint32_t kMaxBlock = 4096;
 constexpr const char* kDefaultPreset = "04-rainbow.json";
 
 /* One VST3 parameter per control the UI exposes. The ranges/defaults mirror
- * the block specs in graph/src/blocks.rs, so the automation curves line up
- * with what the UI sends. `norm` is what crosses the C ABI. */
+ * the block specs in graph/src/blocks.rs, so automation lands on the same
+ * real values the UI would send; the C ABI takes real values. */
 struct ParamMap {
   int index;
   const char* node;
@@ -157,10 +157,13 @@ void PedalVST3::ProcessBlock(sample** inputs, sample** outputs, int nFrames)
     return;
   }
 
-  /* Normalised values cross the C ABI, like VST3 automation. */
+  /* Real values cross the C ABI, not normalised ones: iPlug2's parameter
+   * shape is linear while several block specs use log / amp-gain curves
+   * (delay time, amp level, master volume), and normalising linearly would
+   * land on the wrong real value. */
   for (const ParamMap& pm : kParamMap)
-    pedal_core_set_param_norm(mCore, pm.node, pm.param,
-                              (float) GetParam(pm.index)->GetNormalized());
+    pedal_core_set_param_real(mCore, pm.node, pm.param,
+                              (float) GetParam(pm.index)->Value());
 
   const int chans = (nIn >= 2 && nOut >= 2) ? 2 : 1;
 

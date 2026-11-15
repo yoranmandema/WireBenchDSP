@@ -14,7 +14,12 @@
 //!   "nodes": [
 //!     { "id": "amp", "block": "amp.basic", "params": { "gain": 6.5 }, "pos": [300, 120] }
 //!   ],
-//!   "edges": [ { "from": ["in", "out"], "to": ["amp", "in"] } ]
+//!   "edges": [ { "from": ["in", "out"], "to": ["amp", "in"] } ],
+//!   "routings": [
+//!     { "id": "route1", "source": { "channel": "ch1", "block": "amp" },
+//!       "dest": { "channel": "ch2", "block": "delay" },
+//!       "enabled": true, "gain": 1.0 }
+//!   ]
 //! }
 //! ```
 //!
@@ -27,6 +32,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::graph::Graph;
+use crate::models::{ModelResolver, PathResolver};
 use crate::registry::Registry;
 use crate::types::{BlockSpec, PortKind};
 
@@ -37,6 +43,10 @@ pub struct Doc {
     pub nodes: Vec<NodeDoc>,
     #[serde(default)]
     pub edges: Vec<EdgeDoc>,
+    /// Cross-channel routings. Separate from `edges`: a routing taps a block
+    /// and adds a feed, it does not replace the block's own wire.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routings: Vec<Routing>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -55,6 +65,48 @@ pub struct NodeDoc {
     /// Path to a `.nam` model file (for `mod.nam` blocks).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+/// A block in a channel: one end of a cross-channel routing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutingEndpoint {
+    pub channel: String,
+    pub block: String,
+}
+
+impl RoutingEndpoint {
+    pub fn new(channel: impl Into<String>, block: impl Into<String>) -> Self {
+        Self { channel: channel.into(), block: block.into() }
+    }
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+fn default_gain() -> f32 {
+    1.0
+}
+
+/// A cross-channel routing: `source` keeps its normal downstream connection
+/// and *additionally* feeds `dest`.
+///
+/// This is deliberately not an [`EdgeDoc`]. An edge replaces a block's wire;
+/// a routing taps a block's output and adds a feed, so the source's original
+/// routing survives. Routings live beside `edges` on the [`Doc`] and beside
+/// `Channel::sources` on the rig.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Routing {
+    /// Stable id, used by `removeRouting` / `setEnabled`.
+    pub id: String,
+    pub source: RoutingEndpoint,
+    pub dest: RoutingEndpoint,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    /// Linear gain applied to the tapped signal. Optional in JSON; a missing
+    /// value means unity.
+    #[serde(default = "default_gain")]
+    pub gain: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,7 +151,7 @@ impl std::error::Error for DocError {}
 
 impl Doc {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), nodes: Vec::new(), edges: Vec::new() }
+        Self { name: name.into(), nodes: Vec::new(), edges: Vec::new(), routings: Vec::new() }
     }
 
     pub fn from_json(s: &str) -> Result<Self, DocError> {

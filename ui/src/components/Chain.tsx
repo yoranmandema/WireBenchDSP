@@ -1,12 +1,13 @@
 import { Fragment } from "preact";
 import { useRef, useState } from "preact/hooks";
-import { Icon } from "./Icon";
+import { BlockIcon, CloseIcon, PlusIcon, PowerIcon } from "./Icon";
 import { catStyle } from "../theme";
+import { decodeBlockPayload, isBlockDrag } from "../dnd";
 import {
-  addBlock,
+  insertBlock,
   moveBlock,
+  openBlockPicker,
   removeBlock,
-  removeChannel,
   select,
   selected,
   setBypass,
@@ -28,10 +29,19 @@ interface Drag {
   y: number;
 }
 
+/** Live state of a block dragged from the browser hovering this channel. */
+interface Drop {
+  /** Slot the insertion line sits at (0..len). */
+  slot: number;
+  /** Content-space x of that slot, for the indicator. */
+  x: number;
+}
+
 /** One channel row: header above a horizontally scrolling strip of blocks. */
 function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
   const s = state.value!;
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [drop, setDrop] = useState<Drop | null>(null);
   const strip = useRef<HTMLDivElement>(null);
   // Pending press (not yet past the drag threshold) and the click/drag verdict.
   const pending = useRef<{ id: string; from: number; x: number; y: number } | null>(null);
@@ -46,6 +56,65 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
     }
     return channel.blocks.length;
   }
+
+  /** Content-space x of the insertion boundary before `slot`. */
+  function boundaryX(slot: number): number {
+    const el = strip.current;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    const cards = Array.from(el.querySelectorAll(".block-card")) as HTMLElement[];
+    if (cards.length === 0) {
+      const io = el.querySelector(".io.in") as HTMLElement | null;
+      const r = io?.getBoundingClientRect();
+      return r ? r.right - rect.left + el.scrollLeft : 0;
+    }
+    if (slot >= cards.length) {
+      const last = cards[cards.length - 1].getBoundingClientRect();
+      return last.right - rect.left + el.scrollLeft;
+    }
+    return cards[slot].getBoundingClientRect().left - rect.left + el.scrollLeft;
+  }
+
+  /** Remember the slot under the pointer and paint the insertion line. */
+  function trackDrop(e: DragEvent) {
+    const slot = slotAt(e.clientX);
+    setDrop((d) => (d && d.slot === slot ? d : { slot, x: boundaryX(slot) }));
+  }
+
+  const dragEnter = (e: DragEvent) => {
+    const dt = e.dataTransfer;
+    if (!dt || !isBlockDrag(dt)) return;
+    e.preventDefault();
+    dt.dropEffect = "copy";
+    trackDrop(e);
+  };
+
+  const dragOver = (e: DragEvent) => {
+    const dt = e.dataTransfer;
+    if (!dt || !isBlockDrag(dt)) return;
+    // Required, or the browser will refuse the drop.
+    e.preventDefault();
+    dt.dropEffect = "copy";
+    trackDrop(e);
+  };
+
+  const dragLeave = (e: DragEvent) => {
+    // `dragleave` also fires when the pointer crosses into a child; only a
+    // leave of the channel itself clears the highlight.
+    const next = e.relatedTarget as Node | null;
+    if (next && (e.currentTarget as HTMLElement).contains(next)) return;
+    setDrop(null);
+  };
+
+  const dropFromBrowser = (e: DragEvent) => {
+    e.preventDefault();
+    const slot = drop?.slot ?? slotAt(e.clientX);
+    setDrop(null);
+    const payload = decodeBlockPayload(e.dataTransfer);
+    // Not a block, or a type the engine does not offer: nothing to insert.
+    if (!payload || !s.registry[payload.type]) return;
+    void insertBlock(channel.id, slot, payload);
+  };
 
   const down = (e: PointerEvent, blockId: string, index: number) => {
     if (e.button !== 0) return;
@@ -96,8 +165,18 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
     setDrag(null);
   };
 
+  // The dragged block's spec, for the ghost's icon and colour.
+  const dragBlock = drag ? channel.blocks.find((b) => b.id === drag.id) : undefined;
+  const dragSpec = dragBlock ? s.registry[dragBlock.type] : undefined;
+
   return (
-    <div class="channel">
+    <div
+      class={`channel${drop ? " drop-target-active" : ""}`}
+      onDragEnter={dragEnter}
+      onDragOver={dragOver}
+      onDragLeave={dragLeave}
+      onDrop={dropFromBrowser}
+    >
       <div class="channel-head">
         <span class="channel-name">{channel.name}</span>
         <input
@@ -124,11 +203,6 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
           />
           In
         </label>
-        {s.channels.length > 1 && (
-          <button class="mini danger" onClick={() => void removeChannel(channel.id)} title="Remove channel">
-            x
-          </button>
-        )}
       </div>
 
       <div class="strip" ref={strip}>
@@ -170,33 +244,32 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
                   }
                   select(channel.id, b.id);
                 }}
-                title={`${b.name} — drag to reorder, click to edit`}
+                title={`${b.name} (${b.type}) — drag to reorder, click to edit`}
               >
-                <span class="block-icon">
-                  {spec && <Icon category={spec.category} size={13} />}
-                </span>
-                <span class="block-name">{b.name}</span>
-                <span class="block-type">{b.type}</span>
                 <button
-                  class={`bypass${b.bypass ? " on" : ""}`}
+                  class={`icon-btn bypass${b.bypass ? " on" : ""}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     void setBypass(channel.id, b.id, !b.bypass);
                   }}
-                  title="Bypass"
+                  title={b.bypass ? "Unbypass" : "Bypass"}
                 >
-                  B
+                  <PowerIcon size={10} />
                 </button>
                 <button
-                  class="remove"
+                  class="icon-btn remove"
                   onClick={(e) => {
                     e.stopPropagation();
                     void removeBlock(channel.id, b.id);
                   }}
                   title="Remove block"
                 >
-                  x
+                  <CloseIcon size={9} />
                 </button>
+                <span class="block-icon">
+                  {spec && <BlockIcon type={b.type} category={spec.category} size={26} />}
+                </span>
+                <span class="block-name">{b.name}</span>
               </div>
             </Fragment>
           );
@@ -204,26 +277,32 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
         <div
           class={`block-placeholder${drag && drag.insert === channel.blocks.length && drag.insert !== drag.from ? " active" : ""}`}
         />
+        {drop && <div class="drop-indicator" style={{ left: `${drop.x}px` }} />}
         {channel.blocks.length === 0 && (
-          <div class="strip-empty">Empty channel — add a block from the rack</div>
+          <div class="strip-empty">Empty channel — press + to search for a block</div>
         )}
         <button
           class="add-block"
-          onClick={() => {
-            const first = Object.entries(s.registry)[0];
-            if (first) void addBlock(channel.id, first[0], first[1].name);
-          }}
-          title="Add a block"
+          onClick={() => openBlockPicker(channel.id)}
+          title="Search and add a block"
         >
-          +
+          <PlusIcon size={16} />
         </button>
         <div class="io out">Out</div>
       </div>
 
       {/* Ghost of the dragged card, following the pointer. */}
       {drag && (
-        <div class="drag-ghost" style={{ left: `${drag.x}px`, top: `${drag.y}px` }}>
-          {channel.blocks.find((b) => b.id === drag.id)?.name}
+        <div
+          class="drag-ghost"
+          style={{
+            left: `${drag.x}px`,
+            top: `${drag.y}px`,
+            ...(dragSpec ? catStyle(dragSpec.category) : null),
+          }}
+        >
+          {dragSpec && <BlockIcon type={dragBlock!.type} category={dragSpec.category} size={14} />}
+          {dragBlock?.name}
         </div>
       )}
     </div>
@@ -242,9 +321,7 @@ export function Chain() {
           <ChannelRow key={c.id} channel={c} />
         ))}
       </div>
-      <p class="hint">
-        Drag a block sideways to reorder it — the dashed slot shows where it will land. Click a block to edit it below.
-      </p>
+      <p class="hint">Drag to reorder · click a block to edit it below.</p>
     </div>
   );
 }
