@@ -153,6 +153,11 @@ missing from the list.
 All commands are `req` messages. Mutating commands return the full state in
 `payload`. Non-mutating commands return their specific payload.
 
+The command set is closed: there is no command that adds or removes a channel.
+Every channel-addressed command takes one of the existing slot ids (`ch1`…`ch4`)
+and is refused with `no such channel: …` otherwise, so the channel count cannot
+be changed from the client.
+
 | Cmd | args | Effect | payload |
 |---|---|---|---|
 | `getState` | — | — | full state |

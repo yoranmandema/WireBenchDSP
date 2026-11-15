@@ -3,9 +3,9 @@
 //!
 //! Both halves of that contract are tested against the real surface, not a
 //! mock: the model keeps every slot across a project-file round trip, and the
-//! IPC server has no command that mutates the list — the old `addChannel` /
-//! `removeChannel` are unknown commands, and a rejected command leaves the
-//! snapshot exactly as it was.
+//! IPC command set has no entry that mutates the list — a command naming a
+//! channel that does not exist is refused, and the slot count is unchanged
+//! across a refused command.
 
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
@@ -106,8 +106,13 @@ where
     }
 }
 
-/// The IPC surface must offer no way to change the channel count: the removed
-/// commands are unknown, and a refused command mutates nothing.
+/// The IPC surface offers no way to change the channel count.
+///
+/// The command set has no entry that mutates the list, so a command that names
+/// a channel outside the fixed set — the shape an "add a channel" or "remove a
+/// channel" command would have to take — is refused, and the slot count is
+/// unchanged across a refused command. The greeting already carries every slot,
+/// so there is nothing for the client to add.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_ipc_surface_cannot_add_or_remove_a_channel() {
     let source = Arc::new(AtomicU8::new(0));
@@ -128,9 +133,14 @@ async fn the_ipc_surface_cannot_add_or_remove_a_channel() {
     let before = greeting["payload"]["channels"].as_array().unwrap().len();
     assert_eq!(before, CHANNEL_COUNT, "the greeting already carries every slot");
 
+    // A channel outside the fixed set does not exist, and no command grows the
+    // list to reach it. `setMasterVolume` is the representative mutation: it
+    // takes a channel id and returns the full state, so if the count could be
+    // changed by any request this is the shape it would take.
     for (id, cmd, args) in [
-        (1i64, "addChannel", json!({})),
-        (2, "removeChannel", json!({ "channel": "ch2" })),
+        (1i64, "setMasterVolume", json!({ "channel": "ch5", "value": 0.0 })),
+        (2, "setSources", json!({ "channel": "ch5", "sources": ["in"] })),
+        (3, "addBlock", json!({ "channel": "ch5", "type": "amp.basic", "name": "Amp" })),
     ] {
         ws.send(Message::Text(
             json!({ "type": "req", "id": id, "cmd": cmd, "args": args }).to_string().into(),
@@ -138,14 +148,14 @@ async fn the_ipc_surface_cannot_add_or_remove_a_channel() {
         .await
         .expect("send");
         let res = next_res(&mut ws, id).await;
-        assert_eq!(res["ok"], false, "{cmd} must not exist: {res}");
+        assert_eq!(res["ok"], false, "{cmd} on a non-existent slot must be refused: {res}");
         assert!(
-            res["error"].as_str().is_some_and(|e| e.contains("unknown command")),
-            "{cmd} should be rejected as unknown: {res}"
+            res["error"].as_str().is_some_and(|e| e.contains("no such channel")),
+            "{cmd} should be refused for the missing slot: {res}"
         );
     }
 
-    // A refused command is a no-op, so the count is unchanged.
+    // Every refusal is a no-op, so the count is unchanged.
     let after = sh.rig.lock().unwrap().channels.len();
     assert_eq!(after, before, "a refused command changed the channel list");
 }
