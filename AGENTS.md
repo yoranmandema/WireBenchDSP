@@ -34,6 +34,33 @@ budget on code that ends up committed.
   build that loads Vite's dev URL. A self-contained binary needs
   `--features custom-protocol`.
 
+## Handoffs to the product owner (the user)
+The user is the product owner, not a code reviewer. The `summary` you pass to
+`kanban_complete` or `kanban_request_review` is what pops up as their desktop
+notification. Write it for someone who will open the app and try the change:
+
+1. First line (shown in the notification): what is different in the app, in
+   plain words. Example: "Knob min/max labels no longer overlap; they sit just
+   outside the ring in smaller text." Don't put file names or test counts here.
+2. **Try it:** the exact command to run the app (see `docs/RUN-THE-APP.md`) and
+   what to click, drag or listen for.
+3. **Not done / known limits:** anything left out on purpose.
+4. Last: commit hash(es). Put test results in `metadata`, not in the summary.
+
+Reviewers who complete a card after review must keep this format and carry the
+"Try it" steps forward. Don't replace the summary with "approved".
+
+## When you need a decision
+If the card needs a product decision (look, feel, sound, scope) or something
+only the user can do (hardware, accounts, listening tests), don't guess. Call
+`kanban_block` with kind `needs_input`, and make the reason:
+- one concrete question in one sentence,
+- 2–3 labelled options with a one-line trade-off each,
+- your recommendation.
+
+Commit or stash your work first. The user answers with a comment on the card
+and unblocks it. Read their comment before you continue.
+
 ## Audio safety
 - Never play sound on this machine. Run the engine with `--headless` (simulated
   device, output discarded) and check audio behaviour with tests or offline
