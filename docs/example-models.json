@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "provider": "t3k",
+  "generated_at": "2026-11-14T23:40:00Z",
+  "count": 2,
+  "models": [
+    {
+      "id": "t3k:379978",
+      "provider": "t3k",
+      "tone_id": "28199",
+      "source_url": "https://www.tone3000.com/tones/api-512c-28199",
+      "download_url": "r2://models/7e9gmdzciqu_a2.nam",
+      "content_hash": "nam-content-v1:388d6d0ec112e422cb7d35303a9d5da14932c99f7ac1dc543fd69a4b7d3f7128",
+      "fetched_at": "2026-11-14T23:40:00Z",
+      "local_path": "t3k/28199/379978_a2.nam",
+      "local": {
+        "file_name": "379978_a2.nam",
+        "size_bytes": 301225,
+        "checksum": "sha256:329f688414be07d72718cc79f378fa5dbe96095f4dd74bf12fb5a8d961072639",
+        "downloaded_at": "2026-11-14T23:41:02Z",
+        "stale": false
+      },
+      "metadata": {
+        "name": "API 512c - left mic gain 5",
+        "tone_title": "API 512c",
+        "author": {
+          "name": "TONE3000",
+          "username": "tone3000",
+          "url": "https://www.tone3000.com/tone3000",
+          "avatar_url": "https://assets.tone3000.com/d1e9gybqbfa.png",
+          "verified": true
+        },
+        "description": "Dual channels on an API 512c preamp. Classic punchy sound. I ran through the mic input so it would hit both the 2520 op-amp + input transformer, giving it that aggressive, punchy midrange, slight saturation, and solid transient response.\n\nCaptured both channels at gains 3, 5 and 8",
+        "kind": "outboard",
+        "format": "nam",
+        "variant": "a2",
+        "with_cab": false,
+        "manufacturer": "API",
+        "gear_model": "API 512c",
+        "tags": [
+          "mic preamp",
+          "mid-forward",
+          "nam",
+          "preamp",
+          "punch"
+        ],
+        "sample_rate": 48000,
+        "published_at": "2026-05-04T20:49:14Z"
+      }
+    },
+    {
+      "id": "t3k:379979",
+      "provider": "t3k",
+      "tone_id": "28199",
+      "source_url": "https://www.tone3000.com/tones/api-512c-28199",
+      "download_url": "r2://models/i7i3wwp8pt8_a2.nam",
+      "content_hash": null,
+      "fetched_at": "2026-11-14T23:40:00Z",
+      "local_path": null,
+      "local": null,
+      "metadata": {
+        "name": "API 512c - left mic gain 3",
+        "tone_title": "API 512c",
+        "author": {
+          "name": "TONE3000",
+          "username": "tone3000",
+          "url": "https://www.tone3000.com/tone3000",
+          "avatar_url": "https://assets.tone3000.com/d1e9gybqbfa.png",
+          "verified": true
+        },
+        "description": "Dual channels on an API 512c preamp. Classic punchy sound.",
+        "kind": "outboard",
+        "format": "nam",
+        "variant": "a2",
+        "with_cab": false,
+        "manufacturer": "API",
+        "gear_model": "API 512c",
+        "tags": [
+          "mic preamp",
+          "mid-forward",
+          "nam",
+          "preamp",
+          "punch"
+        ],
+        "sample_rate": 48000,
+        "published_at": "2026-05-04T20:49:14Z"
+      }
+    }
+  ]
+}

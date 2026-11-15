@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pedal.local/schemas/model-index.schema.json",
+  "title": "Pedal model index",
+  "description": "The local, refreshable cache of browsable NAM/IR models. See docs/MODEL-BROWSE-AND-CACHE.md. Provider-independent: every record carries its provider id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "provider", "generated_at", "count", "models"],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "const": 1,
+      "description": "Index schema version. v1 is the only version."
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Primary provider id, e.g. 't3k'. Records from other providers may still appear."
+    },
+    "generated_at": {
+      "$ref": "#/$defs/timestamp",
+      "description": "When this index file was written (RFC 3339 UTC)."
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of records in 'models'. Must equal models.length."
+    },
+    "models": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ModelRecord" }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$",
+      "description": "RFC 3339 UTC, e.g. 2026-11-14T23:40:00Z."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["amp", "pedal", "outboard", "ir", "fullrig", "other"]
+    },
+    "format": {
+      "type": "string",
+      "enum": ["nam", "ir"]
+    },
+    "variant": {
+      "type": "string",
+      "enum": ["a1", "a2", "custom"]
+    },
+    "Author": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "username": { "type": "string" },
+        "url": { "type": ["string", "null"], "format": "uri" },
+        "avatar_url": { "type": ["string", "null"], "format": "uri" },
+        "verified": { "type": "boolean" }
+      }
+    },
+    "Stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["favorites", "downloads"],
+      "properties": {
+        "favorites": { "type": "integer", "minimum": 0 },
+        "downloads": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "Metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "author", "kind", "format", "variant"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "tone_title": { "type": "string" },
+        "author": { "$ref": "#/$defs/Author" },
+        "description": { "type": "string" },
+        "kind": { "$ref": "#/$defs/kind" },
+        "format": { "$ref": "#/$defs/format" },
+        "variant": { "$ref": "#/$defs/variant" },
+        "with_cab": {
+          "type": "boolean",
+          "description": "True when the capture includes a cabinet/IR (amp-cab, fullrig). Drives the Cab/IR facet."
+        },
+        "manufacturer": { "type": ["string", "null"] },
+        "gear_model": { "type": ["string", "null"] },
+        "cab": { "type": ["string", "null"] },
+        "mics": { "type": ["string", "null"] },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Lowercased, trimmed, sorted."
+        },
+        "sample_rate": { "type": ["integer", "null"], "minimum": 1 },
+        "loudness_db": { "type": ["number", "null"] },
+        "gain_db": { "type": ["number", "null"] },
+        "license": { "type": ["string", "null"] },
+        "links": {
+          "type": "array",
+          "items": { "type": "string", "format": "uri" }
+        },
+        "thumbnail": { "type": ["string", "null"], "format": "uri" },
+        "stats": { "$ref": "#/$defs/Stats" },
+        "published_at": { "$ref": "#/$defs/timestamp" },
+        "updated_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "LocalState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_name", "size_bytes", "checksum", "downloaded_at", "stale"],
+      "properties": {
+        "file_name": { "type": "string", "minLength": 1 },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "checksum": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 of the downloaded file, hex, prefixed."
+        },
+        "downloaded_at": { "$ref": "#/$defs/timestamp" },
+        "stale": {
+          "type": "boolean",
+          "description": "True when upstream content_hash differs from the stored file."
+        }
+      }
+    },
+    "ModelRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "provider",
+        "tone_id",
+        "source_url",
+        "fetched_at",
+        "metadata",
+        "local_path",
+        "local"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*:.+$",
+          "description": "<provider>:<model_id>. Stable across refreshes."
+        },
+        "provider": { "type": "string", "minLength": 1 },
+        "tone_id": { "type": "string", "minLength": 1 },
+        "source_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Canonical upstream landing page for this model."
+        },
+        "download_url": {
+          "type": ["string", "null"],
+          "description": "Direct download URL or provider-specific locator; null if not resolvable."
+        },
+        "content_hash": {
+          "type": ["string", "null"],
+          "description": "Upstream content hash; null if the provider exposes none."
+        },
+        "fetched_at": {
+          "$ref": "#/$defs/timestamp",
+          "description": "When this record's metadata was last fetched from upstream."
+        },
+        "local_path": {
+          "type": ["string", "null"],
+          "pattern": "^[^/].*$",
+          "description": "Path relative to $PEDAL_MODELS, POSIX separators. Null when not downloaded."
+        },
+        "local": {
+          "oneOf": [
+            { "$ref": "#/$defs/LocalState" },
+            { "type": "null" }
+          ],
+          "description": "Null when the model is not downloaded."
+        },
+        "metadata": { "$ref": "#/$defs/Metadata" }
+      },
+      "allOf": [
+        {
+          "comment": "local_path and local must agree: both null (not downloaded) or both present.",
+          "if": {
+            "properties": { "local": { "type": "null" } }
+          },
+          "then": {
+            "properties": { "local_path": { "type": "null" } }
+          },
+          "else": {
+            "properties": { "local_path": { "type": "string", "minLength": 1 } }
+          }
+        }
+      ]
+    }
+  }
+}
