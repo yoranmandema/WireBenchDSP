@@ -1,128 +1,66 @@
 # Roadmap
 
-Epics and user stories for the pedal. The kanban board (`pedal`) carries the
-stories as cards; this file is the map that groups them.
+The `pedal` Kanban board is the execution source of truth; this file records
+product direction and groups the active work. The current product path is
+**Mac-first Preact/Tauri UI → Raspberry Pi 5 deployment**. STM32 H7 is dropped.
+The egui app remains a developer/debug surface. See `UI-ARCHITECTURE.md`,
+`IPC-PROTOCOL.md`, and `HANDOFF.md` for architecture and verified state.
 
-Status legend: **done** · **ready** (on the board, unassigned) · **planned**
+## Direction and completed foundations
 
----
+- The Mac concept rig, DSP/graph executor, NAM playback, pitch-delay and
+  continuous sweep are implemented; corresponding historical US cards are
+  done or archived.
+- The Preact UI, loopback WebSocket engine bridge, Tauri desktop bundle, and
+  baseline pedalboard UI stories are done. This is a native webview app, not a
+  Rust-hosted served page.
+- The active near-term work is UI usability and polish on the Mac. Current
+  work includes bottom-editor layout/responsiveness and block-picker/drag
+  interactions. Check live card statuses and dependencies before dispatching;
+  this roadmap does not override them.
 
-## E1 · Concept POC on macOS (egui) — done
+## Next product phase: improve the Mac UI
 
-Prove the whole chain works — open the app, hear sound, add a block, hear it
-change — before investing in a real UI or hardware.
+Prioritize small, observable UI slices that can be built and visually checked
+on macOS without hardware. The live board currently contains bottom-panel
+responsiveness work (`t_d42c3156`, running; `t_8ed177cc` and `t_f25bee02`
+ready) followed by visual QA (`t_d2973e1f`, todo). A redesign proposal and
+cross-channel routing are separate later efforts; do not gate routine panel
+polish on them. Avoid assigning two UI cards to one profile concurrently.
 
-| Story | Title | Status |
-|---|---|---|
-| US-1.1 | Blank pedalboard is a true bypass | done |
-| US-1.2 | Adding a block changes the sound | done |
-| US-1.3 | Reorder blocks by dragging | done |
-| US-1.4 | Select a block and edit its params | done |
-| US-1.5 | Route live guitar input | done |
-| US-1.6 | Save and recall a preset | done |
+Other active UI candidates include block insertion via drag/drop and the
+Add Block modal. Keep their dependencies limited to concrete component/API
+prerequisites. Do not dispatch duplicates of done cards or treat speculative
+TONE3000 integration, plugin support, or hardware design as prerequisites for
+Mac UI work.
 
-Verified by `app/tests/rig.rs` and `app/tests/layout.rs`.
+## Pi 5 deployment (later, hardware-dependent)
 
----
+After the Mac UI and engine behavior are stable, validate Linux/Pi audio I/O,
+round-trip latency and CPU, then package the fullscreen touchscreen app. Keep
+hardware-dependent measurement cards parked until the Pi and suitable audio
+interface are available. Do not represent those tests as passed based on Mac
+benchmarks. The Pi 5 is the settled hardware direction; STM32 H7/firmware work
+is dormant and must not be reopened absent an explicit product-owner change.
 
-## E2 · Web UI (Neural DSP-style)
+## Parked / decision-gated areas
 
-A web page served by the Rust host: better visuals, faster iteration, and one
-UI that runs on the Pi and the desktop. Decision in `docs/UI-ARCHITECTURE.md`,
-visual target in `docs/ui-mock-neuraldsp.html`.
+- **Physical hardware design:** analogue front end, ADC/DAC, controls, enclosure
+  and display need product-owner/hardware decisions and/or hardware access.
+- **Plugin:** wrapper, plugin UI and automation are exploratory, not on the
+  current critical path. Revisit framework/licensing choices before dispatch.
+- **TONE3000:** API reconnaissance and UX/schema work exist, but network/auth,
+  model licensing and download policy should be resolved before implementation.
+- **Cross-channel routing:** model/persistence and engine/UI work are a
+  substantial feature. Keep it behind the architecture/data-model decision;
+  do not make unrelated UI tasks depend on the entire routing fan-in.
 
-| Story | Title | Status |
-|---|---|---|
-| US-2.1 | Architecture spike: webview shell vs served page | done (`docs/UI-ARCHITECTURE.md`) |
-| US-2.2 | Native webview shell (Tauri) rendering a Preact page | ready |
-| US-2.3 | IPC bridge: params and meters | ready |
-| US-2.4 | Top bar: preset name, slots, meters | ready |
-| US-2.5 | Left rack: amp, cab, FX selection | ready |
-| US-2.6 | Centre chain with In/Out bookends | ready |
-| US-2.7 | Bottom editor for the selected block | ready |
-| US-2.8 | Rotary knob component | ready |
-| US-2.9 | Preset browser | ready |
-| US-2.10 | UI never touches the audio path | ready |
-| US-2.11 | Engine/UI process split | ready — decided: split |
+## Board hygiene
 
-Dependencies: 2.2 → 2.3 → {2.4, 2.5, 2.6, 2.7, 2.9}; 2.6 → 2.7 → 2.8; 2.10
-and 2.11 should be settled early, before anything is built on the transport or
-the process layout. 2.11 is the foundation: the IPC protocol and reconnect
-behaviour are shared by every shell.
-
----
-
-## E3 · Standalone shells (Pi 5 + desktop)
-
-Run the same UI as a real product: headless on the pedal, windowed on the
-desktop.
-
-| Story | Title | Status |
-|---|---|---|
-| US-3.1 | Pi 5 native fullscreen window on the touchscreen | ready (needs 2.2) |
-| US-3.2 | Pi 5 audio I/O | ready |
-| US-3.3 | Desktop app bundle | ready (needs 2.2) |
-| US-3.4 | Touchscreen layout | ready (needs 2.6) |
-
----
-
-## E4 · VST3 plugin
-
-Ship the same engine as a DAW plugin. The plugin shell is still an open
-question — see `docs/UI-ARCHITECTURE.md` for the JUCE / iPlug2 / nice-plug
-comparison. A native UI stays as the fallback either way.
-
-| Story | Title | Status |
-|---|---|---|
-| US-4.1 | VST3 wrapper | ready |
-| US-4.4 | Spike: plugin shell (iPlug2 vs JUCE vs nice-plug) | ready (needs 4.1) |
-| US-4.2 | Spike: webview inside the VST3 plugin | ready (needs 4.1) |
-| US-4.3 | DAW automation and preset recall | ready (needs 4.2) |
-
----
-
-## E5 · DSP engine and NAM
-
-The sound: real model playback and the pitch-shifting delay.
-
-| Story | Title | Status |
-|---|---|---|
-| US-5.1 | Run a .nam model in real time | ready |
-| US-5.2 | Pitch-shifting delay | done |
-| US-5.3 | Continuous sweep rate (cents/sec) | done |
-| US-5.4 | Pi 5 CPU headroom and latency | ready |
-
----
-
-## E6 · Hardware
-
-The physical pedal: analogue front end, conversion, controls, enclosure.
-
-| Story | Title | Status |
-|---|---|---|
-| US-6.1 | Analogue front end | ready |
-| US-6.2 | ADC/DAC choice | ready |
-| US-6.3 | Footswitches and expression pedal | ready |
-| US-6.4 | Enclosure, power, and thermal | ready |
-| US-6.5 | Display | ready |
-
----
-
-## How the board works
-
-```bash
-hermes kanban list                      # see the board
-hermes kanban show t_xxx                # read a card
-hermes kanban assign t_xxx default      # route it to a profile
-hermes kanban dispatch                  # run ready cards now
-```
-
-Unassigned `ready` cards are skipped by the dispatcher, so the backlog is safe
-to sit on. Assigning a card to a profile is what makes it run.
-
-Cards that depend on another card should link with
-`hermes kanban link <parent> <child>`; the child stays parked until the parent
-is done. Do **not** link a support card to the card it is meant to unblock —
-that gates the support card behind its own blocker.
-
-Full reference: <https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban>
+Use the live `pedal` board for status, assignment and dependency edges. Mark
+completed historical cards done only with implementation evidence; archive
+superseded duplicates rather than claiming work completed. Hardware-dependent
+or undecided cards should remain explicitly parked/unassigned, not dispatchable.
+Each builder card should state scope, observable acceptance checks, verification
+commands and a product-owner try-it path. `AGENTS.md` defines role ownership,
+worktree, review and landing rules.
