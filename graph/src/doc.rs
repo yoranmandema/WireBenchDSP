@@ -177,13 +177,28 @@ impl Doc {
     /// Relative `model` paths resolve against the current directory. Use
     /// [`Doc::build_in`] to resolve against the preset's own directory, so a
     /// preset can carry `../models/foo.nam` and still work after the folder is
-    /// moved (Mac today, Pi later).
+    /// moved (Mac today, Pi later). [`Doc::build_in_with`] takes a resolver, so
+    /// the engine can also accept a model index id.
     pub fn build(&self, reg: &Registry) -> Result<Graph, DocError> {
         self.build_in(reg, std::path::Path::new("."))
     }
 
     /// As [`Doc::build`], but relative `model` paths resolve against `base`.
     pub fn build_in(&self, reg: &Registry, base: &std::path::Path) -> Result<Graph, DocError> {
+        self.build_in_with(reg, base, &PathResolver)
+    }
+
+    /// As [`Doc::build_in`], but `model` references are resolved by `resolver`.
+    ///
+    /// The engine passes an index-aware resolver so a preset can name a model
+    /// by its index id; the legacy path behaviour stays available through
+    /// [`Doc::build_in`].
+    pub fn build_in_with(
+        &self,
+        reg: &Registry,
+        base: &std::path::Path,
+        resolver: &dyn ModelResolver,
+    ) -> Result<Graph, DocError> {
         let mut g = Graph::new();
         for n in &self.nodes {
             let mut block = reg.build(&n.block).ok_or_else(|| DocError::UnknownBlock {
@@ -194,11 +209,7 @@ impl Doc {
             if let Some(path) = &n.model {
                 // Absolute paths are used as-is; relative ones are relative to
                 // the preset, not to wherever the app was launched from.
-                let resolved = if std::path::Path::new(path).is_absolute() {
-                    path.clone()
-                } else {
-                    base.join(path).to_string_lossy().into_owned()
-                };
+                let resolved = resolver.resolve(path, base);
                 block
                     .configure("model", &resolved)
                     .map_err(|e| DocError::Graph(e.to_string()))?;

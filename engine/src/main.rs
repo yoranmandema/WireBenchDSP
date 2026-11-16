@@ -40,6 +40,36 @@ async fn main() {
         .filter(|s| *s > 0.0);
     let preset = value("--rig").unwrap_or_else(|| "04-rainbow".into());
 
+    // One-shot: rewrite path-based `model` references in the preset directory
+    // to index ids, for models the cached index already has. Nothing is written
+    // for a model the index lacks; it is reported and left as a path.
+    if flag("--migrate-presets") {
+        let store = Store::discover();
+        if let Some(e) = &store.error {
+            eprintln!("presets: {e}");
+        }
+        let index = pedal_engine::model_index::load_index();
+        if index.is_empty() {
+            eprintln!(
+                "pedal: no model index at {} — refresh the index, then rerun",
+                pedal_engine::model_index::index_file()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<unknown>".into())
+            );
+        }
+        let report = pedal_engine::model_index::migrate_preset_models(&store.dir, &index);
+        for preset in &report.migrated {
+            println!("pedal: {preset}: model reference migrated to an index id");
+        }
+        for (preset, reference) in &report.skipped {
+            eprintln!("pedal: {preset}: '{reference}' is not in the model index; left as a path");
+        }
+        if report.is_empty() {
+            println!("pedal: no preset model references needed migrating");
+        }
+        return;
+    }
+
     let store = Store::discover();
     if let Some(e) = &store.error {
         eprintln!("presets: {e}");
@@ -80,9 +110,10 @@ async fn main() {
         .unwrap_or_else(|| Rig::new("Untitled").to_doc());
     let rig = Rig::from_doc(&doc);
     {
+        let resolver = pedal_engine::model_index::resolver();
         let mut g = rig
             .to_doc()
-            .build_in(&handle.registry, &handle.preset_dir)
+            .build_in_with(&handle.registry, &handle.preset_dir, &resolver)
             .expect("initial rig builds");
         let ex = dsp_graph::Executor::compile_owned(&mut g, setup.sample_rate, BLOCK)
             .expect("initial rig compiles");
