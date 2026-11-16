@@ -74,7 +74,8 @@ a much harder reconnection story. **Snapshot, not deltas.**
    to every client, the requester included. The two are identical, so the
    client's `rev` guard turns the duplicate into a no-op — and if the reply is
    ever lost, the broadcast still lands.
-4. Server sends `event: meters` at 20 Hz while audio is running.
+4. Server sends `event: meters` at 20 Hz while audio is running, and
+   `event: tuner` at 20 Hz while a client is connected (see below).
 5. On disconnect the engine keeps running. On reconnect the client gets a
    fresh snapshot.
 
@@ -203,6 +204,32 @@ changes state, so the client can keep its current snapshot.
 - `xruns`: cumulative buffer underrun count.
 
 20 Hz is enough for a meter; it is not a control path.
+
+## Tuner
+
+The tuner is a **read-only stream**, like the meters: the client never asks for
+it and never enables it. The engine analyses the instrument input continuously
+and pushes a reading at 20 Hz to every connected client.
+
+```jsonc
+{ "type": "event", "event": "tuner",
+  "payload": {
+    "active": true,        // false = no reliable note
+    "freq": 220.01,        // Hz, 0.0 when inactive
+    "note": "A",           // "C"…"B", "" when inactive
+    "octave": 3,           // 0 when inactive
+    "cents": 0.1,          // −50…+50, signed: negative = flat
+    "clarity": 0.94,       // 0…1, how periodic the input is
+    "reference": 440.0     // the fixed A4 the note name is derived from
+  } }
+```
+
+- The reading is **not** part of `state` and carries no `rev`. It changes far
+  faster than the rig does, and a reconnecting client must see it immediately.
+- It is not affected by the `RIFF` / `LIVE` / `SILENCE` selector: the tuner
+  listens to the physical instrument input, not to the selected source.
+- There is no `setTuner` command. See `docs/design/instrument-tuner.md`.
+- An inactive reading is a valid answer ("play a note"), not an error.
 
 ## Real-time safety
 

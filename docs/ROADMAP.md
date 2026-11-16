@@ -34,6 +34,12 @@ prerequisites. Do not dispatch duplicates of done cards or treat speculative
 TONE3000 integration, plugin support, or hardware design as prerequisites for
 Mac UI work.
 
+The instrument tuner (`t_b366a8fb`) is decomposed into an engine card (YIN pitch
+detection on the input, `event: tuner`) and a UI card (top-bar button + modal),
+UI behind engine. The design is frozen in
+`docs/design/instrument-tuner.md`; the tuner is a read-only stream, so it adds
+no command and no state field.
+
 ## Pi 5 deployment (later, hardware-dependent)
 
 After the Mac UI and engine behavior are stable, validate Linux/Pi audio I/O,
