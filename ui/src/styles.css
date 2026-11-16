@@ -1,7 +1,9 @@
 /* Pedal UI — dark, dense, touch-first. The visual target is
    docs/ui-mock-neuraldsp.html. Colour is per category: every block carries its
    category hue in `--cat-h`, and the cards, rack, icons and editor header all
-   derive from it. */
+   derive from it.
+
+   Spacing and alignment live in `layout.css`, imported after this file. */
 
 :root {
   --bg: #101116;

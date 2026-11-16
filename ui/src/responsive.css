@@ -1,13 +1,15 @@
 /* Responsive layer for the pedal UI.
  *
- * `styles.css` holds the desktop layout; this file is the breakpoint layer on
- * top of it. It is imported after `styles.css` (see main.tsx) so its rules win
- * at equal specificity, and it lives in its own file so the spacing and
- * overflow work on `styles.css` can land independently.
+ * `styles.css` holds the desktop layout and `layout.css` (imported after this
+ * file) holds the spacing scale and the alignment rules. This file is the
+ * *breakpoint* layer: it changes how much room things get, and where the bar's
+ * children sit when there is not enough room for them side by side. It does
+ * not set gaps, padding or margins — those all come from the scale.
  *
  * Breakpoints:
- *   >= 820px   desktop — two-column editor in a fixed 208px bar, one-row top bar
- *   700–819px  tablet portrait — the bar sizes to its content, the top bar wraps
+ *   >= 820px   desktop — one-row editor, one-row top bar
+ *   700–819px  tablet portrait — the editor is one row of fluid control cells,
+ *              the identity column narrows, the top bar wraps
  *   < 700px    phone — the editor stacks (identity above controls), the rack
  *              becomes a horizontal palette strip and the chain goes full width
  *
@@ -18,11 +20,14 @@
 
 :root {
   --ui-topbar-h: 58px;
-  --ui-bottom-h: 208px;
   --ui-rack-w: 240px;
-  /* One control cell. Grows on wide screens so the bar does not read as
-     stretched; the floor keeps a phone at the 84px touch-friendly cell. */
-  --ui-ctrl-cell: clamp(84px, 6.5vw, 104px);
+  /* The identity column's width, shared with `layout.css` (which uses it for
+     the editor's grid). It narrows as the window narrows so the controls keep
+     enough cells to sit on one row. */
+  --ui-id-w: clamp(160px, 18vw, 200px);
+  /* A knob face scales with the viewport inside a fixed band, so the bar
+     fills a wide window without outgrowing a phone. The tick geometry in
+     `layout.css` derives from the same variable. */
   --ui-knob: clamp(54px, 4.2vw, 62px);
 }
 
@@ -41,21 +46,8 @@
   min-height: var(--ui-topbar-h);
 }
 
-/* Desktop keeps its fixed bar height, so selecting a block does not resize
-   the chain. Below 820px this becomes `auto` (see the media query). */
-.editor {
-  height: var(--ui-bottom-h);
-}
-
-/* ---- bottom bar --------------------------------------------------------- */
-
-/* Knobs scale with the viewport inside a fixed band, so the bar fills a wide
-   window without outgrowing a phone. The tick geometry derives from the same
-   variable so the indicator stays centred on the face. */
-.knob-unit {
-  width: 100%;
-}
-
+/* The knob face. `layout.css` sizes the control *cell*; this sizes the dial
+   inside it, so the two can be tuned independently. */
 .knob {
   width: var(--ui-knob);
   height: var(--ui-knob);
@@ -68,30 +60,13 @@
   transform-origin: 50% calc(var(--ui-knob) * 0.4074);
 }
 
-/* The controls form a grid rather than a wrapping flex line: every row then
-   shares the same left edge (the audit's ragged-row defect) and the group is
-   centred as a block instead of each line centring itself. */
-.editor-controls {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, var(--ui-ctrl-cell));
-  justify-content: center;
-  align-content: center;
-  gap: 14px 26px;
-}
-
-/* A choice control is wider than a knob cell, so it spans two. */
-.choice-unit,
-.select-unit {
-  grid-column: span 2;
-}
-
-/* ---- tablet / phone ----------------------------------------------------- */
+/* ---- tablet ------------------------------------------------------------- */
 
 @media (max-width: 819px) {
   .topbar {
     flex-wrap: wrap;
-    row-gap: 8px;
-    padding: 8px 12px;
+    row-gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
   }
 
   .preset {
@@ -105,26 +80,27 @@
 
   .top-right {
     flex-wrap: wrap;
-    row-gap: 8px;
+    row-gap: var(--space-2);
   }
 
-  /* The bar takes the height its content needs instead of a fixed 208px; if
-     that would crowd the chain, it scrolls internally rather than clipping. */
+  /* The bar may now need two rows of controls. It is content-sized
+     (`.editor` in `layout.css` is `height: auto`), so it grows; if the window
+     is too short for that, it scrolls internally rather than clipping. */
   .editor {
-    height: auto;
     max-height: 62vh;
     overflow-y: auto;
-    padding: 12px 16px;
-    gap: 12px;
   }
 
-  /* Fluid cells: the knobs stay at their floor size and share the width. */
+  /* Fluid cells: a cell is at least as wide as its content needs, and shares
+     any extra width with its row. */
   .editor-controls {
-    grid-template-columns: repeat(auto-fit, minmax(var(--ui-ctrl-cell), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(var(--ui-ctrl), 1fr));
     justify-content: stretch;
     align-content: start;
   }
 }
+
+/* ---- phone -------------------------------------------------------------- */
 
 @media (max-width: 699px) {
   /* The rack stops being a 240px column: it becomes a horizontally scrolling
@@ -139,25 +115,25 @@
     border-right: none;
     border-bottom: 1px solid var(--line);
     overflow: auto;
-    padding: 8px;
+    padding: var(--space-2);
     max-height: 200px;
   }
 
   .block-list {
     display: flex;
-    gap: 16px;
+    gap: var(--space-4);
     align-items: flex-start;
   }
 
   .block-list section {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
     flex: none;
   }
 
   .block-list h2 {
-    margin: 0 0 4px;
+    margin: 0 0 var(--space-1);
     font-size: 9px;
     letter-spacing: 1px;
   }
@@ -165,7 +141,7 @@
   .rack-item {
     flex: none;
     width: 172px;
-    padding: 6px 8px;
+    padding: var(--space-1) var(--space-2);
   }
 
   /* Identity becomes one horizontal bar above the controls. */
@@ -175,23 +151,17 @@
   }
 
   .editor-id {
-    min-height: 0;
     align-content: start;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 4px 10px;
-    padding: 8px 8px 8px 12px;
+    gap: var(--space-1) var(--space-3);
+    padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   }
 
+  /* The buttons leave the identity column's flow and sit at its right edge. */
   .editor-side {
-    margin-top: 0;
     margin-left: auto;
-  }
-
-  .editor-name,
-  .editor-type {
-    min-width: 0;
   }
 
   /* The choice control takes a full row so the knob cells stay square. */
@@ -213,7 +183,5 @@
   grid-column: 1;
   align-self: start;
   justify-self: end;
-  margin: 0 18px 0 0;
-  transform: translateY(calc(-100% - 8px));
-  max-width: min(420px, calc(100% - 36px));
+  transform: translateY(calc(-100% - var(--space-2)));
 }
