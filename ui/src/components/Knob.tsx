@@ -61,9 +61,9 @@ export function Knob({
   const up = () => setDragging(false);
 
   return (
-    <div class="knob-unit">
+    <div class="knob-unit flex flex-col items-center w-full gap-1 p-0">
       <div
-        class={`knob${dragging ? " dragging" : ""}`}
+        class={`knob relative size-[var(--ui-knob)] rounded-full cursor-ns-resize touch-none ${dragging ? "dragging" : ""}`}
         style={{ "--angle": `${angle}deg` }}
         onPointerDown={down}
         onPointerMove={move}
@@ -75,37 +75,16 @@ export function Knob({
         {/* The ring is SVG, not a masked conic gradient: exact geometry, and it
             renders identically in every webview. pathLength=100 makes the dash
             numbers percentages of the circumference; 75 = the 270deg window. */}
-        <svg class="knob-arc" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
-          <circle
-            cx="32"
-            cy="32"
-            r={RING_R}
-            fill="none"
-            stroke="#2f323b"
-            stroke-width={RING_W}
-            pathLength={100}
-            stroke-dasharray="75 100"
-            transform={`rotate(${START} 32 32)`}
-          />
-          <circle
-            cx="32"
-            cy="32"
-            r={RING_R}
-            fill="none"
-            stroke="var(--amber)"
-            stroke-width={RING_W}
-            stroke-linecap="round"
-            pathLength={100}
-            stroke-dasharray={`${t * 75} 100`}
-            transform={`rotate(${START} 32 32)`}
-          />
+        <svg class="knob-arc absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+          <circle cx="32" cy="32" r={RING_R} fill="none" stroke="#2f323b" strokeWidth={RING_W} pathLength={100} strokeDasharray="75 100" transform={`rotate(${START} 32 32)`} />
+          <circle cx="32" cy="32" r={RING_R} fill="none" stroke="var(--amber)" strokeWidth={RING_W} strokeLinecap="round" pathLength={100} strokeDasharray={`${t * 75} 100`} transform={`rotate(${START} 32 32)`} />
         </svg>
         {/* End stops, sitting at the two ends of the travel arc. */}
-        <span class="knob-end lo">{endLabel(min)}</span>
-        <span class="knob-end hi">{endLabel(max)}</span>
+        <span class="knob-end lo absolute text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ right: `calc(50% + var(--space-6))`, top: `calc(50% + var(--space-6))`, padding: 0 }}>{endLabel(min)}</span>
+        <span class="knob-end hi absolute text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ left: `calc(50% + var(--space-6))`, top: `calc(50% + var(--space-6))`, padding: 0 }}>{endLabel(max)}</span>
       </div>
-      <div class="knob-name">{name}</div>
-      <div class="knob-value">{display}</div>
+      <div class="knob-name text-center text-2xs tracking-[0.8px] text-muted font-semibold uppercase">{name}</div>
+      <div class="knob-value text-xs text-text bg-inset border border-line-soft rounded-sm min-w-[56px] text-center tabular-nums px-2">{display}</div>
     </div>
   );
 }
