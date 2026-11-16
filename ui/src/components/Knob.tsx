@@ -86,8 +86,10 @@ export function Knob({
         <span class="knob-end lo absolute right-[calc(50%+var(--space-6))] top-[calc(50%+var(--space-6))] text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ padding: 0 }}>{endLabel(min)}</span>
         <span class="knob-end hi absolute left-[calc(50%+var(--space-6))] top-[calc(50%+var(--space-6))] text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ padding: 0 }}>{endLabel(max)}</span>
       </div>
-      <div class="knob-name text-center text-2xs tracking-[0.8px] text-muted font-semibold uppercase">{name}</div>
-      <div class="knob-value text-xs text-text bg-inset border border-line-soft rounded-sm min-w-[56px] text-center tabular-nums px-2">{display}</div>
+      {/* A long parameter name or readout truncates inside its cell (with the
+          full string in the title) instead of spilling onto the neighbour. */}
+      <div class="knob-name w-full truncate text-center text-2xs tracking-[0.8px] text-muted font-semibold uppercase" title={name}>{name}</div>
+      <div class="knob-value max-w-full truncate text-xs text-text bg-inset border border-line-soft rounded-sm min-w-[56px] text-center tabular-nums px-2" title={display}>{display}</div>
     </div>
   );
 }

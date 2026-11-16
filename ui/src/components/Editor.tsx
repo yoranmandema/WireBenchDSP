@@ -34,7 +34,7 @@ function ChoiceControl({
 
   if (choices.length > 5) {
     return (
-      <label class="select-unit grid items-center justify-items-center gap-1 w-full col-span-2">
+      <label class="select-unit grid items-center justify-items-center gap-1 w-full min-w-0 col-span-2">
         <span class={`${ctrlName} ctrlName`}>{p.name}</span>
         <select class="select textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3" value={current} onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}>
           {choices.map((c, i) => (
@@ -46,9 +46,12 @@ function ChoiceControl({
   }
 
   return (
-    <div class="choice-unit grid items-center justify-items-center gap-1 w-full col-span-2">
+    <div class="choice-unit grid items-center justify-items-center gap-1 w-full min-w-0 col-span-2">
       <span class={`${ctrlName} ctrlName`}>{p.name}</span>
-      <div class="segmented flex border border-line rounded-lg overflow-hidden bg-well" role="radiogroup" aria-label={p.name}>
+      {/* `overflow-x-auto` (not `hidden`) so a param with more options than fit
+          the cell scrolls instead of clipping the last segment; `w-full` lets
+          the row fill the cell so `flex-1` shares the width out. */}
+      <div class="segmented flex w-full min-w-0 border border-line rounded-lg overflow-x-auto bg-well" role="radiogroup" aria-label={p.name}>
         {choices.map((c, i) => (
           <button
             key={c}
@@ -106,11 +109,13 @@ export function Editor() {
           {spec && <Icon category={spec.category} size={13} />}
           <span>Selected block</span>
         </div>
-        <div class="editor-name flex items-center gap-2 min-w-0 max-w-full">
+        <div class="editor-name flex items-center gap-2 min-w-0 max-w-full" title={block.name}>
           <span class="min-w-0 truncate text-xl font-semibold">{block.name}</span>
           {block.bypass && <span class="editor-bypass flex-none px-2 text-[9px] text-amber border border-amber-dim rounded-sm font-medium">bypassed</span>}
         </div>
-        <div class="editor-type text-[9px] text-muted font-mono max-w-full truncate">{block.type}</div>
+       {/* The type is a long unbroken identifier, so it truncates rather than
+           wrapping; the title carries the full string. */}
+       <div class="editor-type max-w-full truncate text-[9px] text-muted font-mono" title={block.type}>{block.type}</div>
         <div class="editor-side flex flex-wrap gap-1 mt-0">
           <button class={`side-btn sideBtn min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 rounded-md text-[11px] font-semibold bg-raised border border-line text-muted hover:text-text hover:border-line-hi ${block.bypass ? "on text-amber border-amber-dim bg-[#2a2318]" : ""}`} onClick={() => void setBypass(sel.channel, sel.block, !block.bypass)} title="Bypass this block">
             {block.bypass ? "Bypassed" : "Bypass"}
@@ -133,5 +138,9 @@ export function Editor() {
     </>
   );
 
-  return <footer class="editor row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 min-h-0 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">{body}</footer>;
+  {/* `phone:grid-auto-rows-[max-content]`: the bar is capped at 62vh and
+      scrolls, so its two rows must keep their content height. The default
+      `auto` minimum would squeeze the identity row to min-content and paint
+      it over the controls on short viewports. */}
+  return <footer class="editor grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 min-h-0 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:[grid-auto-rows:max-content] phone:items-start">{body}</footer>;
 }
