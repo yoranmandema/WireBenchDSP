@@ -148,6 +148,14 @@ list on the state and in the saved project file.
 added or removed: an unused slot is present with an empty `blocks` array, not
 missing from the list.
 
+An empty slot is also *cheap*. It is absent from the compiled graph, so it has
+no node to address: `setMasterVolume` on an empty channel is accepted and is a
+no-op on the audio path (the value is stored, and takes effect when a block
+lands). When *every* slot is empty the engine runs a bypass graph — input to
+output limiter, no blocks — rather than compiling the rig, so an untouched
+pedalboard costs no compile and no block instantiation. The first block dropped
+into any slot makes the rig compile normally again, on the same connection.
+
 ## Commands
 
 All commands are `req` messages. Mutating commands return the full state in
