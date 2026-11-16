@@ -23,8 +23,11 @@
  *
  * BREAKPOINTS (mobile-first, so a class with no prefix is the phone layout):
  *   (none)   < 700px   phone: the editor stacks, the rack is a palette strip
- *   tab:    >= 700px   tablet: rack becomes a column, editor is two columns
- *   desk:   >= 820px   desktop: fixed-height bar, one-row top bar
+ *   tab:    >= 700px   tablet: rack becomes a column, editor is two columns,
+ *                      the bar is content-sized (the controls may wrap)
+ *   desk:   >= 832px   desktop: fixed-height bar, one control row. 832 is the
+ *                      narrowest width at which the densest block (7 cells)
+ *                      still fits one row, so the fixed bar never clips.
  *
  * GEOMETRY (the `--ui-*` variables below):
  *   --ui-touch     44px  minimum hit target (WCAG 2.5.8): buttons and selectors
@@ -39,10 +42,11 @@
  *   --ui-ctrl-row        the widest the controls group may be: the densest
  *                        block (5 knobs + a choice spanning two = 7 cells) plus
  *                        the six gutters. Past this the group is centred.
- *   --ui-bar      224px  the bar's height on desktop. Below 820px it is
+ *   --ui-bar      128px  the bar's height on desktop. Below 832px it is
  *                        content-sized, because the controls may wrap.
  *   --ui-id-w            the identity column's width; it narrows with the
- *                        window so the controls keep their cell floor.
+ *                        window so the controls keep their cell floor, and
+ *                        its floor (140px) is what Bypass + Reset need.
  *   --ui-knob            a knob face scales with the viewport inside a band.
  *
  * ALIGNMENT: every control cell in a row is the same height and its contents
@@ -59,7 +63,7 @@
   /* Only the project's own breakpoints. */
   --breakpoint-*: initial;
   --breakpoint-tab: 700px;
-  --breakpoint-desk: 820px;
+  --breakpoint-desk: 832px;
 
   /* Only the project's own palette. */
   --color-*: initial;
@@ -147,7 +151,7 @@
     --ui-ctrl-row: calc(7 * var(--ui-ctrl-max) + 6 * var(--spacing) * 6);
     --ui-bar: 128px;
     --ui-topbar-h: 58px;
-    --ui-id-w: clamp(112px, 16vw, 200px);
+    --ui-id-w: clamp(140px, 16vw, 200px);
     --ui-knob: clamp(54px, 4.2vw, 62px);
     --amber: var(--color-amber);
     --space-6: calc(var(--spacing) * 6);
