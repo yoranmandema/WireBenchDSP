@@ -112,3 +112,68 @@ describe("signal chain", () => {
     cy.get(".channel").eq(2).find(".block-card").should("contain", "Reverb");
   });
 });
+
+// Empty channels: they are fixed slots, so they stay in the layout and keep
+// their height, they render none of the per-block machinery, and dropping a
+// block into one resumes normal processing on the same snapshot.
+describe("empty channels", () => {
+  beforeEach(() => {
+    cy.boot();
+  });
+
+  it("stays visible and keeps the height of a populated row", () => {
+    cy.get(".channel").should("have.length", 4);
+    cy.get(".channel").eq(2).should("have.class", "is-empty");
+    cy.get(".channel").eq(2).find(".channel-name").should("have.text", "Channel 3");
+    cy.get(".channel").eq(2).find(".strip-empty").should("contain", "Empty channel");
+
+    // Same strip height as a row with cards, so the rows below do not jump.
+    cy.get(".channel").eq(0).find(".strip").then(($populated) => {
+      const h = $populated[0].getBoundingClientRect().height;
+      cy.get(".channel").eq(2).find(".strip").then(($empty) => {
+        expect($empty[0].getBoundingClientRect().height).to.be.closeTo(h, 1);
+      });
+    });
+  });
+
+  it("has no cards, drag state or drop indicator to pay for", () => {
+    cy.get(".channel").eq(2).find(".block-card").should("have.length", 0);
+    cy.get(".channel").eq(2).find(".block-placeholder").should("have.length", 0);
+    cy.get(".channel").eq(2).find(".drop-indicator").should("have.length", 0);
+    cy.get(".channel").eq(2).find(".drag-ghost").should("have.length", 0);
+    // The header is still a working control on an empty channel.
+    cy.get(".channel").eq(2).find(".channel-head input[type=range]").should("exist");
+    cy.get(".channel").eq(2).find(".add-block").should("exist");
+  });
+
+  it("resumes normal processing when a block is added, without a reload", () => {
+    cy.get(".channel").eq(2).find(".add-block").click();
+    cy.contains(".picker .rack-item", /^Overdrive$/).click();
+
+    cy.get(".modal.picker").should("not.exist");
+    cy.get(".channel").eq(2).should("not.have.class", "is-empty");
+    cy.get(".channel").eq(2).find(".block-card").should("have.length", 1);
+    cy.get(".channel").eq(2).find(".strip-empty").should("have.length", 0);
+
+    // And the block is immediately usable: selectable, editable, draggable.
+    cy.selectBlock(2, 0);
+    cy.get(".editor-name").should("contain", "Overdrive");
+    cy.get(".channel").eq(2).find(".block-card").eq(0).find(".remove").click();
+    cy.get(".channel").eq(2).find(".block-card").should("have.length", 0);
+    cy.get(".channel").eq(2).should("have.class", "is-empty");
+    cy.get(".channel").should("have.length", 4);
+  });
+
+  it("keeps its volume and source controls working while empty", () => {
+    cy.get(".channel").eq(3).find(".channel-head input[type=range]")
+      .invoke("val", "-12")
+      .trigger("input");
+    cy.get(".toast").should("not.exist");
+
+    // The source toggle is live on an empty channel too: ticking it sends and
+    // the engine's snapshot comes back with the channel still present.
+    cy.get(".channel").eq(3).find(".mini input[type=checkbox]").should("not.be.checked").check();
+    cy.get(".channel").eq(3).find(".mini input[type=checkbox]").should("be.checked");
+    cy.get(".channel").should("have.length", 4);
+  });
+});

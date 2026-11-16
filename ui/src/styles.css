@@ -701,6 +701,20 @@ input {
   padding: 12px 8px;
 }
 
+/* An empty channel's strip has no 66px cards to give it height, so the hint
+   reserves that height itself. Without this the row collapses to the hint's
+   own line box and every channel below it jumps up until the first block is
+   dropped in — the layout must not move when a channel goes empty ⇄ populated.
+   `.strip` carries 18px padding top and bottom, so the content box has to be
+   66px to match a row of cards: 66 + 36 = 102px overall. */
+.channel.is-empty .strip {
+  min-height: 102px;
+}
+
+.channel.is-empty .strip-empty {
+  align-self: center;
+}
+
 .add-block {
   flex: none;
   width: 34px;

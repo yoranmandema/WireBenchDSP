@@ -39,6 +39,126 @@ interface Drop {
 
 /** One channel row: header above a horizontally scrolling strip of blocks. */
 function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
+  // An empty channel is a fixed slot that happens to hold nothing, not a
+  // missing one. So it still has to be *there*: header, signal path, the empty
+  // hint and the "+" button all stay, and the slot keeps its place in the
+  // layout. What it must not do is pay for any of the per-block machinery.
+  //
+  // Everything below the header is therefore split on this one check. The
+  // populated branch is the behaviour this component always had; the empty
+  // branch renders the same shell with no cards, no drag state and no pointer
+  // handlers to bind (it keeps the drop handlers, because an empty channel is
+  // still where a dragged block lands). Dropping a block in flips
+  // `blocks.length`, the branch swaps on the next snapshot, and the channel
+  // resumes normal processing — no reload, and the channel row itself is not
+  // remounted.
+  if (channel.blocks.length === 0) return <EmptyChannel channel={channel} />;
+  return <PopulatedChannel channel={channel} />;
+}
+
+/**
+ * The slot under the pointer: the first card whose midpoint is to the right.
+ * Shared by both branches — a populated channel has cards to measure, an empty
+ * one has none and so always answers 0, which is the only slot it has.
+ */
+function slotAtFor(strip: HTMLDivElement | null, clientX: number, count: number): number {
+  const els = Array.from(strip?.querySelectorAll(".block-card") ?? []) as HTMLElement[];
+  for (const el of els) {
+    const r = el.getBoundingClientRect();
+    if (clientX < r.left + r.width / 2) return Number(el.dataset.slot);
+  }
+  return count;
+}
+
+/**
+ * The shell of a channel with nothing in it.
+ *
+ * Deliberately a separate component: it has no drag state and no pointer
+ * handlers, so Preact mounts a handful of elements and nothing more. It is not
+ * `null` and not `display: none` — the slot stays visible and keeps its height,
+ * which is what makes an empty channel "existent" in the layout.
+ */
+function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
+  const s = state.value!;
+  const strip = useRef<HTMLDivElement>(null);
+
+  const dragEnter = (e: DragEvent) => {
+    const dt = e.dataTransfer;
+    if (!dt || !isBlockDrag(dt)) return;
+    e.preventDefault();
+    dt.dropEffect = "copy";
+  };
+
+  const dragOver = (e: DragEvent) => {
+    const dt = e.dataTransfer;
+    if (!dt || !isBlockDrag(dt)) return;
+    // Required, or the browser will refuse the drop.
+    e.preventDefault();
+    dt.dropEffect = "copy";
+  };
+
+  const drop = (e: DragEvent) => {
+    e.preventDefault();
+    const payload = decodeBlockPayload(e.dataTransfer);
+    // Not a block, or a type the engine does not offer: nothing to insert.
+    if (!payload || !s.registry[payload.type]) return;
+    void insertBlock(channel.id, slotAtFor(strip.current, e.clientX, 0), payload);
+  };
+
+  return (
+    <div class="channel is-empty" onDragEnter={dragEnter} onDragOver={dragOver} onDrop={drop}>
+      <ChannelHead channel={channel} />
+      <div class="strip" ref={strip}>
+        <div class="io in">In</div>
+        <div class="strip-empty">Empty channel — press + to search for a block</div>
+        <button
+          class="add-block"
+          onClick={() => openBlockPicker(channel.id)}
+          title="Search and add a block"
+        >
+          <PlusIcon size={16} />
+        </button>
+        <div class="io out">Out</div>
+      </div>
+    </div>
+  );
+}
+
+/** The always-present header: name, volume, and the input-source toggle. */
+function ChannelHead({ channel }: { channel: import("../protocol").Channel }) {
+  return (
+    <div class="channel-head">
+      <span class="channel-name">{channel.name}</span>
+      <input
+        type="range"
+        min={-60}
+        max={12}
+        step={0.1}
+        value={channel.volume}
+        title={`Volume ${channel.volume.toFixed(1)} dB`}
+        onInput={(e) => void setMasterVolume(channel.id, Number((e.target as HTMLInputElement).value))}
+      />
+      <label class="mini">
+        <input
+          type="checkbox"
+          checked={channel.sources.includes("<in>")}
+          onChange={(e) =>
+            void setSources(
+              channel.id,
+              (e.target as HTMLInputElement).checked
+                ? [...new Set([...channel.sources, "<in>"])]
+                : channel.sources.filter((x) => x !== "<in>"),
+            )
+          }
+        />
+        In
+      </label>
+    </div>
+  );
+}
+
+/** A channel holding at least one block: the drag-and-drop strip. */
+function PopulatedChannel({ channel }: { channel: import("../protocol").Channel }) {
   const s = state.value!;
   const [drag, setDrag] = useState<Drag | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
@@ -49,12 +169,7 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
 
   /** Slot under the pointer: the first card whose midpoint is to the right. */
   function slotAt(clientX: number): number {
-    const els = Array.from(strip.current?.querySelectorAll(".block-card") ?? []) as HTMLElement[];
-    for (const el of els) {
-      const r = el.getBoundingClientRect();
-      if (clientX < r.left + r.width / 2) return Number(el.dataset.slot);
-    }
-    return channel.blocks.length;
+    return slotAtFor(strip.current, clientX, channel.blocks.length);
   }
 
   /** Content-space x of the insertion boundary before `slot`. */
@@ -177,33 +292,7 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
       onDragLeave={dragLeave}
       onDrop={dropFromBrowser}
     >
-      <div class="channel-head">
-        <span class="channel-name">{channel.name}</span>
-        <input
-          type="range"
-          min={-60}
-          max={12}
-          step={0.1}
-          value={channel.volume}
-          title={`Volume ${channel.volume.toFixed(1)} dB`}
-          onInput={(e) => void setMasterVolume(channel.id, Number((e.target as HTMLInputElement).value))}
-        />
-        <label class="mini">
-          <input
-            type="checkbox"
-            checked={channel.sources.includes("<in>")}
-            onChange={(e) =>
-              void setSources(
-                channel.id,
-                (e.target as HTMLInputElement).checked
-                  ? [...new Set([...channel.sources, "<in>"])]
-                  : channel.sources.filter((x) => x !== "<in>"),
-              )
-            }
-          />
-          In
-        </label>
-      </div>
+      <ChannelHead channel={channel} />
 
       <div class="strip" ref={strip}>
         <div class="io in">In</div>
@@ -291,9 +380,6 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
           class={`block-placeholder${drag && drag.insert === channel.blocks.length && drag.insert !== drag.from ? " active" : ""}`}
         />
         {drop && <div class="drop-indicator" style={{ left: `${drop.x}px` }} />}
-        {channel.blocks.length === 0 && (
-          <div class="strip-empty">Empty channel — press + to search for a block</div>
-        )}
         <button
           class="add-block"
           onClick={() => openBlockPicker(channel.id)}
