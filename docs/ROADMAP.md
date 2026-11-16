@@ -51,9 +51,10 @@ is dormant and must not be reopened absent an explicit product-owner change.
   current critical path. Revisit framework/licensing choices before dispatch.
 - **TONE3000:** API reconnaissance and UX/schema work exist, but network/auth,
   model licensing and download policy should be resolved before implementation.
-- **Cross-channel routing:** model/persistence and engine/UI work are a
-  substantial feature. Keep it behind the architecture/data-model decision;
-  do not make unrelated UI tasks depend on the entire routing fan-in.
+- **Cross-channel routing:** the data model, persistence and IPC surface are
+  decided (`docs/design/cross-channel-routing.md`, landed with `t_21473ff1`);
+  the engine fan-out and UI cards are queued behind it. Do not make unrelated
+  UI tasks depend on the routing fan-in.
 
 ## Board hygiene
 
