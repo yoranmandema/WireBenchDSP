@@ -126,6 +126,11 @@
 
 @layer base {
   :root {
+    color: var(--color-text);
+    background: var(--color-bg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.5;
     --ui-touch: 44px;
     --ui-ctrl: 72px;
     --ui-ctrl-max: 96px;
