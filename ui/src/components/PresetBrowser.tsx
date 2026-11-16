@@ -1,12 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import {
-  deletePreset,
-  loadPreset,
-  presetsOpen,
-  renamePreset,
-  savePreset,
-  state,
-} from "../state";
+import { deletePreset, loadPreset, presetsOpen, renamePreset, savePreset, state } from "../state";
 
 /** Mirror of the engine's file-name slugging, for duplicate checks. */
 function slugify(name: string): string {
@@ -76,78 +69,37 @@ export function PresetBrowser() {
   const duplicate = slug !== "" && s.presets.includes(slug);
 
   return (
-    <div class="modal-backdrop" onClick={close}>
-      <div class="modal" onClick={(e) => e.stopPropagation()}>
-        <header class="modal-head">
-          <h2>Presets</h2>
-          <button class="nav" onClick={close} title="Close">
-            ×
-          </button>
+    <div class="modalBackdrop" onClick={close}>
+      <div class="modalShell" onClick={(e) => e.stopPropagation()}>
+        <header class="modalHead">
+          <h2 class="modalTitle">Presets</h2>
+          <button class="navBtn" onClick={close} title="Close">×</button>
         </header>
 
-        {err && <div class="modal-error">{err}</div>}
+        {err && <div class="modal-error mx-3.5 mt-2.5 px-2.5 py-1.75 rounded-md bg-danger-bg border border-danger-line text-danger-text text-[11px]">{err}</div>}
 
-        <div class="preset-list">
-          {s.presets.length === 0 && (
-            <div class="editor-empty">No presets yet — save the current rig below.</div>
-          )}
+        <div class="preset-list flex-1 overflow-y-auto p-3.5 grid gap-1">
+          {s.presets.length === 0 && <div class="emptyNote">No presets yet — save the current rig below.</div>}
           {s.presets.map((name) => (
-            <div key={name} class={`preset-row${name === s.preset ? " current" : ""}`}>
+            <div key={name} class={`preset-row flex items-center gap-2 px-1 py-1 rounded-lg border transition-[background-color,border-color] ${name === s.preset ? "border-amber-dim" : "border-transparent hover:bg-panel-2 hover:border-[#33363f]"}`}>
               {renaming === name ? (
-                <input
-                  class="preset-rename"
-                  ref={renameRef}
-                  value={renameTo}
-                  title="New preset name"
-                  onInput={(e) => setRenameTo((e.target as HTMLInputElement).value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void rename(name);
-                    if (e.key === "Escape") setRenaming(null);
-                  }}
-                  onBlur={() => setRenaming(null)}
-                />
+                <input class="textField flex-1" ref={renameRef} value={renameTo} title="New preset name" onInput={(e) => setRenameTo((e.target as HTMLInputElement).value)} onKeyDown={(e) => { if (e.key === "Enter") void rename(name); if (e.key === "Escape") setRenaming(null); }} onBlur={() => setRenaming(null)} />
               ) : (
-                <button
-                  class="preset-load"
-                  onClick={() => void run(loadPreset(name))}
-                  title={`Load ${name}`}
-                >
+                <button class="preset-load flex-1 text-left text-base font-medium px-2 py-1.75 rounded-md text-text hover:bg-[#26282f]" onClick={() => void run(loadPreset(name))} title={`Load ${name}`}>
                   {name}
-                  {name === s.preset && <span class="preset-current">current</span>}
+                  {name === s.preset && <span class="preset-current ml-2 text-[9px] tracking-[0.8px] uppercase text-muted">current</span>}
                 </button>
               )}
-              <button
-                class="mini"
-                onClick={() => {
-                  setRenaming(name);
-                  setRenameTo(name);
-                }}
-                title="Rename preset"
-              >
-                Rename
-              </button>
-              <button class="mini danger" onClick={() => void remove(name)} title="Delete preset">
-                Delete
-              </button>
+              <button class="mini min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 text-xs text-muted hover:text-text" onClick={() => { setRenaming(name); setRenameTo(name); }} title="Rename preset">Rename</button>
+              <button class="mini danger min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 text-xs text-muted hover:text-danger" onClick={() => void remove(name)} title="Delete preset">Delete</button>
             </div>
           ))}
         </div>
 
-        <footer class="modal-foot">
-          <input
-            class="preset-new"
-            placeholder="New preset name"
-            value={newName}
-            title="Name for the current rig"
-            onInput={(e) => setNewName((e.target as HTMLInputElement).value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void save();
-            }}
-          />
-          <button class="btn" disabled={!slug || duplicate || busy} onClick={() => void save()}>
-            Save
-          </button>
-          {duplicate && <span class="modal-hint">That name already exists.</span>}
+        <footer class="modalFoot">
+          <input class="textField flex-1" placeholder="New preset name" value={newName} title="Name for the current rig" onInput={(e) => setNewName((e.target as HTMLInputElement).value)} onKeyDown={(e) => { if (e.key === "Enter") void save(); }} />
+          <button class="btn px-3.5 py-1.75 rounded-md text-base font-semibold bg-linear-to-b from-amber-hi to-amber-lo text-amber-ink border border-amber-edge disabled:opacity-40 disabled:cursor-default" disabled={!slug || duplicate || busy} onClick={() => void save()}>Save</button>
+          {duplicate && <span class="modal-hint text-[10px] text-amber">That name already exists.</span>}
         </footer>
       </div>
     </div>
