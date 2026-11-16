@@ -1,6 +1,7 @@
 import { Fragment } from "preact";
 import { useRef, useState } from "preact/hooks";
 import { BlockIcon, CloseIcon, PlusIcon, PowerIcon } from "./Icon";
+import { RoutingLines } from "./RoutingLines";
 import { catStyle } from "../theme";
 import { decodeBlockPayload, isBlockDrag } from "../dnd";
 import {
@@ -301,6 +302,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
                   .filter(Boolean)
                   .join(" ")}
                 data-slot={i}
+                data-block-id={b.id}
                 style={{
                   ...(spec ? catStyle(spec.category) : null),
                   ...(drag?.id === b.id ? { opacity: 0.35 } : null),
@@ -373,10 +375,14 @@ export function Chain() {
   return (
     <div class="chain-panel overflow-auto p-2.5 bg-[radial-gradient(120%_90%_at_50%_0%,#1a1c22_0%,#101116_70%)]">
       <div class="chain-label text-[10px] tracking-[1.4px] text-muted font-semibold mb-2.5">Signal chain</div>
-      <div class="chain-scroll grid gap-2.5">
+      <div class="chain-scroll relative grid gap-2.5">
         {s.channels.map((c) => (
           <ChannelRow key={c.id} channel={c} />
         ))}
+        {/* Cross-channel routing lines. A sibling of the channel rows, so the
+            horizontal strip scrollers do not clip them; `.chain-scroll` is
+            `relative` to give the overlay its positioning context. */}
+        <RoutingLines />
       </div>
       <p class="hint mt-2.5 text-xs text-muted">Drag to reorder · click a block to edit it below.</p>
     </div>

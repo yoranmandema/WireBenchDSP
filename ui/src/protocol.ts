@@ -46,6 +46,25 @@ export interface Channel {
   blocks: Block[];
 }
 
+/** One end of a cross-channel routing: a block instance in a channel. */
+export interface RoutingEndpoint {
+  channel: string;
+  block: string;
+}
+
+/**
+ * A tap from one block's output to a block in another channel. Not an edge:
+ * the source keeps its own downstream wire, and the destination sums the two
+ * feeds. `gain` is linear.
+ */
+export interface Routing {
+  id: string;
+  source: RoutingEndpoint;
+  dest: RoutingEndpoint;
+  enabled: boolean;
+  gain: number;
+}
+
 export interface State {
   /** Monotonic revision. Bumped by the engine on every rebuild; the UI drops
    *  snapshots that are not newer, so a late delivery cannot roll it back. */
@@ -55,6 +74,7 @@ export interface State {
   source: "riff" | "live" | "silence";
   registry: Record<string, BlockSpec>;
   channels: Channel[];
+  routings: Routing[];
 }
 
 export interface Meters {
