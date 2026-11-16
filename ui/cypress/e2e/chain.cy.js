@@ -136,6 +136,50 @@ describe("empty channels", () => {
     });
   });
 
+  it("shows the active drop highlight on an empty channel and clears it on leave", () => {
+    let baseBorder;
+    let baseBackground;
+    const dt = new DataTransfer();
+    dt.setData("application/x-block-type", JSON.stringify({ type: "reverb", name: "Reverb" }));
+    cy.get(".channel").eq(2).then(($channel) => {
+      const channel = $channel[0];
+      const before = getComputedStyle(channel);
+      baseBorder = before.borderTopColor;
+      baseBackground = before.backgroundColor;
+      channel.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      channel.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    cy.get(".channel").eq(2).should("have.class", "drop-target-active").then(($channel) => {
+      const active = getComputedStyle($channel[0]);
+      expect(active.borderTopColor).not.to.equal(baseBorder);
+      expect(active.backgroundColor).not.to.equal(baseBackground);
+      expect(active.boxShadow).not.to.equal("none");
+      $channel[0].dispatchEvent(new DragEvent("dragleave", { bubbles: true, cancelable: true, dataTransfer: dt, relatedTarget: document.body }));
+    });
+    cy.get(".channel").eq(2).should("not.have.class", "drop-target-active");
+  });
+
+  it("shows the active drop highlight on a populated channel", () => {
+    let baseBorder;
+    let baseBackground;
+    cy.get(".channel").eq(0).then(($channel) => {
+      const channel = $channel[0];
+      const before = getComputedStyle(channel);
+      baseBorder = before.borderTopColor;
+      baseBackground = before.backgroundColor;
+      const dt = new DataTransfer();
+      dt.setData("application/x-block-type", JSON.stringify({ type: "reverb", name: "Reverb" }));
+      channel.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: dt }));
+      channel.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    cy.get(".channel").eq(0).should("have.class", "drop-target-active").then(($channel) => {
+      const active = getComputedStyle($channel[0]);
+      expect(active.borderTopColor).not.to.equal(baseBorder);
+      expect(active.backgroundColor).not.to.equal(baseBackground);
+      expect(active.boxShadow).not.to.equal("none");
+    });
+  });
+
   it("has no cards, drag state or drop indicator to pay for", () => {
     cy.get(".channel").eq(2).find(".block-card").should("have.length", 0);
     cy.get(".channel").eq(2).find(".block-placeholder").should("have.length", 0);

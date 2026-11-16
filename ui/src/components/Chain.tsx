@@ -117,7 +117,7 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
 
   return (
     <div
-      class={`channel is-empty flex flex-col rounded-card border border-line-soft bg-[rgba(255,255,255,0.012)] p-2.5 transition-[border-color,box-shadow,background-color] duration-120${dropActive ? " drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : ""}`}
+      class={`channel is-empty flex flex-col rounded-card border ${dropActive ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`}
       onDragEnter={dragEnter}
       onDragOver={dragOver}
       onDragLeave={dragLeave}
@@ -278,7 +278,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
   const dragSpec = dragBlock ? s.registry[dragBlock.type] : undefined;
 
   return (
-    <div class={`channel flex flex-col rounded-card border border-line-soft bg-[rgba(255,255,255,0.012)] p-2.5 transition-[border-color,box-shadow,background-color] duration-120${drop ? " drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : ""}`} onDragEnter={dragEnter} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={dropFromBrowser}>
+    <div class={`channel flex flex-col rounded-card border ${drop ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`} onDragEnter={dragEnter} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={dropFromBrowser}>
       <ChannelHead channel={channel} />
 
       <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
