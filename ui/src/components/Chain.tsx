@@ -81,12 +81,14 @@ function slotAtFor(strip: HTMLDivElement | null, clientX: number, count: number)
 function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
   const s = state.value!;
   const strip = useRef<HTMLDivElement>(null);
+  const [dropActive, setDropActive] = useState(false);
 
   const dragEnter = (e: DragEvent) => {
     const dt = e.dataTransfer;
     if (!dt || !isBlockDrag(dt)) return;
     e.preventDefault();
     dt.dropEffect = "copy";
+    setDropActive(true);
   };
 
   const dragOver = (e: DragEvent) => {
@@ -95,10 +97,18 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
     // Required, or the browser will refuse the drop.
     e.preventDefault();
     dt.dropEffect = "copy";
+    setDropActive(true);
+  };
+
+  const dragLeave = (e: DragEvent) => {
+    const next = e.relatedTarget as Node | null;
+    if (next && (e.currentTarget as HTMLElement).contains(next)) return;
+    setDropActive(false);
   };
 
   const drop = (e: DragEvent) => {
     e.preventDefault();
+    setDropActive(false);
     const payload = decodeBlockPayload(e.dataTransfer);
     // Not a block, or a type the engine does not offer: nothing to insert.
     if (!payload || !s.registry[payload.type]) return;
@@ -106,7 +116,13 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
   };
 
   return (
-    <div class="channel is-empty flex flex-col rounded-card border border-line-soft bg-[rgba(255,255,255,0.012)] p-2.5 transition-[border-color,box-shadow,background-color] duration-120" onDragEnter={dragEnter} onDragOver={dragOver} onDrop={drop}>
+    <div
+      class={`channel is-empty flex flex-col rounded-card border border-line-soft bg-[rgba(255,255,255,0.012)] p-2.5 transition-[border-color,box-shadow,background-color] duration-120${dropActive ? " drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : ""}`}
+      onDragEnter={dragEnter}
+      onDragOver={dragOver}
+      onDragLeave={dragLeave}
+      onDrop={drop}
+    >
       <ChannelHead channel={channel} />
       <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
