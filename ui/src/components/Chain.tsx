@@ -1,23 +1,26 @@
 import { Fragment } from "preact";
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { BlockIcon, CloseIcon, PlusIcon, PowerIcon } from "./Icon";
 import { RoutingLines } from "./RoutingLines";
 import { catStyle } from "../theme";
-import { decodeBlockPayload, isBlockDrag } from "../dnd";
+import { decodeBlockPayload, isBlockDrag, rejectDrop, type BlockPayload } from "../dnd";
+import { registerTouchChannel, registerTouchTarget, useTouchDropRouter, useTouchDrag } from "../touch";
 import {
+  appendSelectedBlock,
   insertBlock,
   moveBlock,
   openBlockPicker,
   removeBlock,
   select,
   selected,
+  selectedBlockType,
   setBypass,
   setMasterVolume,
   setSources,
   state,
 } from "../state";
 
-/** Live state of a pointer-driven block drag. */
+/** Live state of a pointer-driven block drag (a card reorder). */
 interface Drag {
   /** Block being dragged. */
   id: string;
@@ -38,7 +41,38 @@ interface Drop {
   x: number;
 }
 
+/** Warn about a refused drop. One line, never a thrown error. */
+function warnDrop(reason: string): void {
+  console.warn(`[chain] ignoring drop: ${reason}`);
+}
+
+/**
+ * Read and validate a drop's payload. Returns the payload, or null after
+ * logging why it was refused.
+ *
+ * The two refusal cases: no usable payload at all, and a payload whose type id
+ * the engine does not offer.
+ */
+function payloadFromDrop(
+  dt: DataTransfer | null,
+  registry: Record<string, unknown>,
+): BlockPayload | null {
+  const payload = decodeBlockPayload(dt);
+  const rejection = rejectDrop(payload, registry);
+  if (rejection === "no-payload") warnDrop("no block payload on the data transfer");
+  else if (rejection === "bad-type") warnDrop("payload has no block type id");
+  else if (rejection === "unknown-type") warnDrop(`unknown block type "${payload?.type}"`);
+  return rejection ? null : payload;
+}
+
 /** One channel row: header above a horizontally scrolling strip of blocks. */
+// `min-w-0` on the channel (and on its `.strip`) is load-bearing, not
+// defensive: the strip is an `overflow-x-auto` row of fixed-width cards, so its
+// min-content width is the entire row laid out end to end. A grid item
+// defaults to `min-width: auto`, which hands that min-content width to the
+// grid track — the channel then grows past the viewport and the whole chain
+// panel scrolls horizontally instead of the strip scrolling on its own. Both
+// the channel and the strip therefore opt out of the automatic minimum.
 function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
   // An empty channel is a fixed slot that happens to hold nothing, not a missing
   // one. So it still has to be *there*: header, signal path, the empty hint and
@@ -47,12 +81,12 @@ function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
   //
   // Everything below the header is therefore split on this one check. The
   // populated branch is the behaviour this component always had; the empty
-  // branch renders the same shell with no cards, no drag state and no pointer
-  // handlers to bind (it keeps the drop handlers, because an empty channel is
-  // still where a dragged block lands). Dropping a block in flips
+  // branch renders the same shell with no cards and no card pointer handlers to
+  // bind (it keeps the drop handlers, because an empty channel is still where a
+  // dragged block lands, and it registers with the touch router, because a long
+  // press from the rack can land there too). Dropping a block in flips
   // `blocks.length`, the branch swaps on the next snapshot, and the channel
-  // resumes normal processing — no reload, and the channel row itself is not
-  // remounted.
+  // resumes normal processing — no reload, and the row itself is not remounted.
   if (channel.blocks.length === 0) return <EmptyChannel channel={channel} />;
   return <PopulatedChannel channel={channel} />;
 }
@@ -74,7 +108,7 @@ function slotAtFor(strip: HTMLDivElement | null, clientX: number, count: number)
 /**
  * The shell of a channel with nothing in it.
  *
- * Deliberately a separate component: it has no drag state and no pointer
+ * Deliberately a separate component: it has no drag state and no card pointer
  * handlers, so Preact mounts a handful of elements and nothing more. It is not
  * `null` and not `display: none` — the slot stays visible and keeps its height,
  * which is what makes an empty channel "existent" in the layout.
@@ -83,6 +117,22 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
   const s = state.value!;
   const strip = useRef<HTMLDivElement>(null);
   const [dropActive, setDropActive] = useState(false);
+
+  // The touch router resolves the channel under the finger and calls these.
+  useEffect(
+    () =>
+      registerTouchTarget(channel.id, {
+        preview: (slot) => setDropActive(slot !== null),
+        commit: (payload, slot) => {
+          setDropActive(false);
+          void insertBlock(channel.id, slot, payload);
+        },
+      }),
+    [channel.id],
+  );
+
+  // Keep the router's geometry current: it measures `.block-card` children.
+  useEffect(() => registerTouchChannel(channel.id, strip.current), [channel.id]);
 
   const dragEnter = (e: DragEvent) => {
     const dt = e.dataTransfer;
@@ -110,30 +160,55 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
   const drop = (e: DragEvent) => {
     e.preventDefault();
     setDropActive(false);
-    const payload = decodeBlockPayload(e.dataTransfer);
-    // Not a block, or a type the engine does not offer: nothing to insert.
-    if (!payload || !s.registry[payload.type]) return;
+    const payload = payloadFromDrop(e.dataTransfer, s.registry);
+    if (!payload) return;
     void insertBlock(channel.id, slotAtFor(strip.current, e.clientX, 0), payload);
   };
 
   return (
     <div
-      class={`channel is-empty flex flex-col rounded-card border ${dropActive ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`}
+      class={`channel is-empty min-w-0 flex flex-col rounded-card border ${dropActive ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`}
+      data-channel-id={channel.id}
       onDragEnter={dragEnter}
       onDragOver={dragOver}
       onDragLeave={dragLeave}
       onDrop={drop}
     >
       <ChannelHead channel={channel} />
-      <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
+      {/* `min-w-0` is not cosmetic: the strip scrolls its own overflow, so its
+          min-content width (every card laid out in a row) must not be allowed
+          to widen the grid track. Without it the channel grows past the
+          viewport and the whole chain panel scrolls instead. */}
+      <div class="strip flex min-h-[102px] min-w-0 items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         <div class="strip-empty flex-1 text-center text-sm text-muted">Empty channel — press + to search for a block</div>
-        <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" data-add={channel.id} onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
-          <PlusIcon size={16} />
-        </button>
+        <AddBlockButton channel={channel} />
         <div class="io out flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">Out</div>
       </div>
     </div>
+  );
+}
+
+/** The channel's "+" button and the keyboard-insert button. */
+function AddBlockButton({ channel }: { channel: import("../protocol").Channel }) {
+  const chosen = selectedBlockType.value;
+  return (
+    <>
+      <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" data-add={channel.id} onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
+        <PlusIcon size={16} />
+      </button>
+      {/* Keyboard alternative to dragging: the block type selected in the rack
+          (Enter/Space on a row) is inserted at the end of this channel. */}
+      <button
+        class={`add-selected flex-none size-8 rounded-full border text-[9px] font-semibold leading-none transition-[border-color,background-color] ${chosen ? "border-amber-dim text-amber bg-[rgba(232,163,61,0.1)] hover:bg-[rgba(232,163,61,0.18)]" : "border-line-soft text-muted bg-[rgba(255,255,255,0.012)]"}`}
+        disabled={!chosen}
+        onClick={() => { if (chosen) void appendSelectedBlock(channel.id, chosen); }}
+        title={chosen ? `Add ${chosen.name} to ${channel.name} at the end` : `Select a block in the rack (Enter) to add it to ${channel.name}`}
+        aria-label={chosen ? `Add ${chosen.name} to ${channel.name}` : `No block selected for ${channel.name}`}
+      >
+        {chosen ? "Add" : "–"}
+      </button>
+    </>
   );
 }
 
@@ -157,9 +232,6 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
   const [drag, setDrag] = useState<Drag | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
   const strip = useRef<HTMLDivElement>(null);
-  // Pending press (not yet past the drag threshold) and the click/drag verdict.
-  const pending = useRef<{ id: string; from: number; x: number; y: number } | null>(null);
-  const dragged = useRef(false);
 
   /** Slot under the pointer: the first card whose midpoint is to the right. */
   function slotAt(clientX: number): number {
@@ -219,70 +291,93 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
     e.preventDefault();
     const slot = drop?.slot ?? slotAt(e.clientX);
     setDrop(null);
-    const payload = decodeBlockPayload(e.dataTransfer);
-    // Not a block, or a type the engine does not offer: nothing to insert.
-    if (!payload || !s.registry[payload.type]) return;
+    const payload = payloadFromDrop(e.dataTransfer, s.registry);
+    if (!payload) return;
     void insertBlock(channel.id, slot, payload);
   };
 
-  const down = (e: PointerEvent, blockId: string, index: number) => {
-    if (e.button !== 0) return;
+  // --- Pointer reorder -----------------------------------------------------
+  // A card drag (mouse or touch) reorders. `dragCardId` is set by `cardDown`
+  // before the gesture's `onStart`, so the start handler knows which card.
+  // `useTouchDrag` owns the long-press/drag-threshold timing.
+
+  const dragCardId = useRef<string | null>(null);
+  const cardPress = useTouchDrag({
+    onStart: (x, y) => {
+      const id = dragCardId.current;
+      if (!id) return;
+      const from = channel.blocks.findIndex((b) => b.id === id);
+      if (from < 0) return;
+      setDrag({ id, from, insert: slotAt(x), x, y });
+    },
+    onMove: (x, y) => {
+      setDrag((d) => {
+        if (!d) return d;
+        const insert = slotAt(x);
+        if (insert === d.insert && x === d.x && y === d.y) return d;
+        return { ...d, insert, x, y };
+      });
+    },
+    onEnd: (dragged) => {
+      const d = drag;
+      setDrag(null);
+      if (!dragged || !d) return;
+      // `moveBlock` indexes the array *after* the removal, so shift the target
+      // down one slot when the block leaves a position left of its landing slot.
+      const to = Math.min(d.insert > d.from ? d.insert - 1 : d.insert, channel.blocks.length - 1);
+      if (to !== d.from) void moveBlock(channel.id, d.id, to);
+    },
+  });
+
+  const cardDown = (e: PointerEvent, blockId: string) => {
     // The bypass/remove buttons are controls, not drag handles.
     if ((e.target as Element).closest("button")) return;
-    dragged.current = false;
-    pending.current = { id: blockId, from: index, x: e.clientX, y: e.clientY };
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    dragCardId.current = blockId;
+    cardPress.onPointerDown(e);
   };
 
-  const move = (e: PointerEvent) => {
-    if (drag) {
-      const insert = slotAt(e.clientX);
-      if (insert === drag.insert && e.clientX === drag.x && e.clientY === drag.y) return;
-      setDrag({ ...drag, insert, x: e.clientX, y: e.clientY });
-      return;
-    }
-    const p = pending.current;
-    if (!p) return;
-    const dx = Math.abs(e.clientX - p.x);
-    const dy = Math.abs(e.clientY - p.y);
-    if (dx < 4 && dy < 4) return; // still a click
-    dragged.current = true;
-    pending.current = null;
-    setDrag({
-      id: p.id,
-      from: p.from,
-      // The move that crosses the threshold is already a target position.
-      insert: slotAt(e.clientX),
-      x: e.clientX,
-      y: e.clientY,
-    });
-  };
+  // --- Touch drag from the rack -------------------------------------------
+  // `Chain` routes a rack long-press to the channel under the finger; this
+  // channel previews the insertion line and inserts on release.
 
-  const up = () => {
-    const d = drag;
-    pending.current = null;
-    setDrag(null);
-    if (!d || !dragged.current) return; // plain click: onClick selects
-    // `moveBlock` indexes the array *after* the removal, so shift the target
-    // down one slot when the block leaves a position left of its landing slot.
-    const to = Math.min(d.insert > d.from ? d.insert - 1 : d.insert, channel.blocks.length - 1);
-    if (to !== d.from) void moveBlock(channel.id, d.id, to);
-  };
+  useEffect(
+    () =>
+      registerTouchTarget(channel.id, {
+        preview: (slot) => {
+          if (slot === null) {
+            setDrop(null);
+            return;
+          }
+          setDrop((d) => (d && d.slot === slot ? d : { slot, x: boundaryX(slot) }));
+        },
+        commit: (payload, slot) => {
+          setDrop(null);
+          void insertBlock(channel.id, slot, payload);
+        },
+      }),
+    // `boundaryX` closes over the current strip and block count.
+    [channel.id, channel.blocks.length],
+  );
 
-  const cancel = () => {
-    pending.current = null;
-    setDrag(null);
-  };
+  // Keep the router's geometry current: it measures `.block-card` children.
+  useEffect(() => registerTouchChannel(channel.id, strip.current), [channel.id]);
 
   // The dragged block's spec, for the ghost's icon and colour.
   const dragBlock = drag ? channel.blocks.find((b) => b.id === drag.id) : undefined;
   const dragSpec = dragBlock ? s.registry[dragBlock.type] : undefined;
 
   return (
-    <div class={`channel flex flex-col rounded-card border ${drop ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`} onDragEnter={dragEnter} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={dropFromBrowser}>
+    <div
+      class={`channel min-w-0 flex flex-col rounded-card border ${drop ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`}
+      data-channel-id={channel.id}
+      onDragEnter={dragEnter}
+      onDragOver={dragOver}
+      onDragLeave={dragLeave}
+      onDrop={dropFromBrowser}
+    >
       <ChannelHead channel={channel} />
 
-      <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
+      <div class="strip relative flex min-h-[102px] min-w-0 items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         {channel.blocks.map((b, i) => {
           const spec = s.registry[b.type];
@@ -310,10 +405,8 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
                 // Keyboard selection: the card is a button in all but name, so
                 // Tab reaches it and Enter/Space select it.
                 tabIndex={0}
-                onPointerDown={(e) => down(e, b.id, i)}
-                onPointerMove={move}
-                onPointerUp={up}
-                onPointerCancel={cancel}
+                {...cardPress}
+                onPointerDown={(e) => cardDown(e, b.id)}
                 onKeyDown={(e) => {
                   // Enter/Space on the card itself selects it. If the key was
                   // pressed on an inner button (bypass/remove), let the button
@@ -324,15 +417,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
                     select(channel.id, b.id);
                   }
                 }}
-                onClick={() => {
-                  // A drag ends with a synthetic click on the same card; swallow
-                  // that one, but never swallow clicks after it.
-                  if (dragged.current) {
-                    dragged.current = false;
-                    return;
-                  }
-                  select(channel.id, b.id);
-                }}
+                onClick={() => select(channel.id, b.id)}
                 title={`${b.name} (${b.type}) — drag to reorder, click to edit`}
               >
                 <button class={`icon-btn bypass absolute top-1 left-1 size-4 rounded-full grid place-items-center text-[9px] leading-none bg-[#26282f] text-muted border border-line-soft ${b.bypass ? "bg-amber text-amber-ink border-amber-edge" : ""}`} onClick={(e) => { e.stopPropagation(); void setBypass(channel.id, b.id, !b.bypass); }} title={b.bypass ? "Unbypass" : "Bypass"}>
@@ -351,9 +436,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
         })}
         <div class={`block-placeholder flex-none h-[66px] rounded-lg border-[1px] border-dashed border-transparent overflow-hidden transition-[width,margin-right,border-color,background-color] duration-110 ${drag && drag.insert === channel.blocks.length && drag.insert !== drag.from ? "w-[116px] mr-0 border-amber-dim bg-[rgba(232,163,61,0.08)]" : "w-0 mr-[-8px]"}`} />
         {drop && <div class="drop-indicator absolute top-[14px] bottom-[14px] w-[2px] -ml-[1px] rounded rounded-[1px] bg-amber shadow-[0_0_8px_rgba(232,163,61,0.8)] z-20 pointer-events-none" style={{ left: `${drop.x}px` }} />}
-        <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" data-add={channel.id} onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
-          <PlusIcon size={16} />
-        </button>
+        <AddBlockButton channel={channel} />
         <div class="io out flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">Out</div>
       </div>
 
@@ -371,6 +454,9 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
 /** The centre panel: one row per channel, blocks running left to right. */
 export function Chain() {
   const s = state.value;
+  // One window-level router for the whole chain: it resolves the channel under
+  // the finger and forwards preview/commit to that channel.
+  useTouchDropRouter();
   if (!s) return null;
   return (
     <div class="chain-panel overflow-auto p-2.5 bg-[radial-gradient(120%_90%_at_50%_0%,#1a1c22_0%,#101116_70%)]">
