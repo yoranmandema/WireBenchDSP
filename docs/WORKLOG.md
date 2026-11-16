@@ -54,7 +54,6 @@ pedal-dsp/
   dsp/       no_std DSP primitives          (exists)
   graph/     block graph + executor        (exists)
   ffi/       C ABI to the executor          (staticlib + header, for the plugin)
-  app/       egui dev tool                 (thin; re-exports the engine)
   engine/    engine process + library      (audio, channels, store, host, server)
   ui/        Preact + TypeScript + Vite    (shared by every shell)
   shell/     Tauri desktop shell           (done)
@@ -67,7 +66,7 @@ pedal-dsp/
 - `docs/ROADMAP.md` — epics and stories.
 - `docs/IPC-PROTOCOL.md` — the wire contract.
 - `engine/` — `audio`, `channels`, `store`, `host`, and the WebSocket IPC
-  server (`server.rs`). `app/` owns only the egui UI and re-exports the engine.
+  server (`server.rs`).
   `graph::Registry` is `Sync` so the server's async tasks can share it.
 - `ui/` — Preact app: top bar (preset slots, source, meters, DSP load), left
   rack grouped by category, centre chain with drag-to-reorder, bottom knob
