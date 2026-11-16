@@ -47,8 +47,6 @@ pub enum TransportError {
     Timeout(Duration),
     #[error("invalid URL: {0}")]
     Url(String),
-    #[error("TLS error: {0}")]
-    Tls(String),
 }
 
 /// Structured client errors.
@@ -264,7 +262,11 @@ impl Transport for ReqwestTransport {
 fn map_reqwest_error(e: reqwest::Error, timeout: Duration) -> TransportError {
     if e.is_timeout() {
         TransportError::Timeout(timeout)
+    } else if e.is_builder() {
+        // A malformed URL is a configuration error, not a network one.
+        TransportError::Url(e.to_string())
     } else {
+        // DNS, connection resets and TLS handshake failures all surface here.
         TransportError::Network(e.to_string())
     }
 }
@@ -1356,5 +1358,22 @@ mod tests {
         assert_eq!(tones.len(), 1);
         assert_eq!(tones[0].id, 106343);
         assert_eq!(tones[0].title.as_deref(), Some("Mesa"));
+    }
+
+    #[tokio::test]
+    async fn production_transport_classifies_a_malformed_url() {
+        let transport = ReqwestTransport::new(Duration::from_secs(5)).expect("client builds");
+        let error = transport
+            .send(Request {
+                method: Method::Get,
+                url: "not a url".to_string(),
+                query: Vec::new(),
+                headers: Vec::new(),
+                body: None,
+            })
+            .await
+            .expect_err("a malformed URL must fail");
+        assert!(matches!(error, TransportError::Url(_)), "{error:?}");
+        assert!(error.to_string().contains("invalid URL"), "{error}");
     }
 }
