@@ -1,7 +1,8 @@
 # Chorus block — design
 
-Status: frozen for build. Card: `t_e19aebca` (feature), children
-`t_<engine>` / `t_<ui>`. Author: pedal-architect.
+Status: frozen for build. Card: `t_e19aebca` (feature). Children:
+`t_c4a56871` (engine block) then `t_7232014a` (UI catalogue test).
+Author: pedal-architect.
 
 ## 1. What ships
 
