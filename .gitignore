@@ -17,3 +17,4 @@ ui/build-standalone.mjs
 # card branch conflict with every other.
 ui/node_modules/
 ui/dist/
+Cargo.lock

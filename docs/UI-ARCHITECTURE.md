@@ -156,6 +156,31 @@ the parameter state.
 The egui app remains the **developer/debug surface** and the reference for how
 the engine behaves, even after the web UI becomes the product UI.
 
+## Block drag, touch, and keyboard
+
+Adding a block to a channel works three ways, so no input device is a dead
+end. The payload is the same in all three — `ui/src/dnd.ts` (`BLOCK_MIME`,
+`BlockPayload`).
+
+| Route | Gesture | Where |
+|---|---|---|
+| **Mouse** | HTML5 drag from a rack row; the channel highlights and shows an insertion line, the drop lands at the pointer's slot | `BlockList.tsx` (`dragstart`/`dragend`), `Chain.tsx` (`dragover`/`drop`) |
+| **Touch** | Long press (350 ms) on a rack row picks the block up, then drag to a channel and release | `touch.ts` (`useRackLongPress`, `useTouchDropRouter`) |
+| **Keyboard** | Enter/Space on a rack row selects the type; the channel's **Add** button inserts it at the end | `state.ts` (`selectedBlockType`, `appendSelectedBlock`), `Chain.tsx` (`add-selected`) |
+
+Touch is a real fallback, not a gate: HTML5 drag does not fire on a touchscreen
+at all, so the gesture is rebuilt from Pointer Events. `touch-action: none`
+(`touch-none`) on rows and cards is what lets a finger drag reach
+`pointermove` instead of scrolling the panel.
+
+Refused drops are ignored, never thrown: a `drop` with no block payload, a
+payload that is not a block, or a type id the registry does not offer logs a
+`console.warn` and leaves the rig untouched. `dragend` clears the `.dragging`
+marker and the stored payload on every path — delivered, refused, or cancelled.
+
+Reordering within a channel is a pointer drag on the card itself (mouse or
+touch), sharing the timing code with the touch fallback.
+
 ## Tradeoffs
 
 | | Webview shell (Tauri) | egui (current) |

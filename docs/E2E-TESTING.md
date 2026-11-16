@@ -38,6 +38,7 @@ binary on install; `ui/pnpm-workspace.yaml` allows Cypress's postinstall.
 | `rack.cy.js` | catalogue grouping and ordering, click-to-add |
 | `add-block.cy.js` | picker open/autofocus, name and type filtering, Enter-to-add, click-to-add, empty state, Escape/backdrop/× close |
 | `chain.cy.js` | four channels, empty-channel hint, select, bypass, remove, refused-remove toast, channel volume, input source, pointer drag-to-reorder, HTML5 drag from the rack |
+| `dnd-edge-cases.cy.js` | refused drops (no payload, non-block payload, unknown type) with a console warning, `dragend` cleanup after a refused/cancelled drag, a drop outside every channel, the touch long-press fallback, the keyboard insert |
 | `editor.cy.js` | identity header, segmented choice, knob drag, knob double-click reset, reset-all, editor bypass, `<select>` for >5 choices |
 | `keyboard.cy.js` | Enter/Space selection, selection ring |
 
