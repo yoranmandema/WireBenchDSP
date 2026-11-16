@@ -127,7 +127,7 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
       <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         <div class="strip-empty flex-1 text-center text-sm text-muted">Empty channel — press + to search for a block</div>
-        <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
+        <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" data-add={channel.id} onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
           <PlusIcon size={16} />
         </button>
         <div class="io out flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">Out</div>
@@ -349,7 +349,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
         })}
         <div class={`block-placeholder flex-none h-[66px] rounded-lg border-[1px] border-dashed border-transparent overflow-hidden transition-[width,margin-right,border-color,background-color] duration-110 ${drag && drag.insert === channel.blocks.length && drag.insert !== drag.from ? "w-[116px] mr-0 border-amber-dim bg-[rgba(232,163,61,0.08)]" : "w-0 mr-[-8px]"}`} />
         {drop && <div class="drop-indicator absolute top-[14px] bottom-[14px] w-[2px] -ml-[1px] rounded rounded-[1px] bg-amber shadow-[0_0_8px_rgba(232,163,61,0.8)] z-20 pointer-events-none" style={{ left: `${drop.x}px` }} />}
-        <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
+        <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" data-add={channel.id} onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
           <PlusIcon size={16} />
         </button>
         <div class="io out flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">Out</div>
