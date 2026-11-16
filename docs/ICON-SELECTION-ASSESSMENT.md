@@ -4,8 +4,11 @@
 icons that actually fit the blocks they represent (so not just a random UTF/emoji
 character) — maybe this needs a skill/capability?"
 **Sources:** `UI-VERBOSITY-AUDIT.md`, `UI-VERBOSITY-REDESIGN.md`,
-`ui/src/components/Icon.tsx`, `graph/src/blocks.rs`, the existing `icon-generator`
-skill. Assessment only.
+`ui/src/components/Icon.tsx`, `graph/src/blocks.rs` (`builtin_registry()`),
+the existing `icon-generator` skill. Assessment only.
+
+> Committed earlier as `8e9916d`; re-verified on `main` at `6244b24`
+> (Tailwind base) and corrected for the current 15-type palette.
 
 ## (a) What made icons succeed or fail here
 
@@ -30,12 +33,15 @@ accessible name; interactive icons under a 24 px hit area.
 
 ## (b) One-off or recurring?
 
-**Recurring, but bounded.** The current pass covers the 14 block types in
-`graph/src/blocks.rs`; the roadmap adds blocks, and surfaces in flight need glyph
-decisions too — add-block modal, browse/detail (download icon,
-`MODEL-BROWSE-AND-CACHE.md`), drag-to-route and routing lines, preset browser,
-transport. The decision procedure repeats even though the 14-glyph set is a one-time
-pass.
+**Recurring, but bounded.** The palette is 15 block types today (`builtin_registry()`,
+`graph/src/blocks.rs`: `io.input`, `io.output`, `util.gain`, `util.mix`, `util.sum`,
+`util.master`, `dist.overdrive`, `amp.basic`, `cab.sim`, `tone.stack`,
+`time.delay`, `time.pitchdelay`, `time.reverb`, `mod.nam`) — 11 block glyphs are
+drawn in `Icon.tsx` plus 9 category archetypes. The roadmap adds blocks, and
+surfaces in flight need glyph decisions too — add-block modal, browse/detail
+(download icon, `MODEL-BROWSE-AND-CACHE.md`), drag-to-route and routing lines,
+preset browser, transport. The decision procedure repeats even though the current
+glyph set is a one-time pass.
 
 ## (c) Recommendation
 
@@ -75,4 +81,6 @@ hit area; a render is looked at before done.
 
 **Where it lives:** `creative/icon-generator/SKILL.md`. A project-scoped `pedal-ui`
 skill would fragment the icon rules and duplicate the house style — not recommended.
-Patch ready to apply on approval.
+Patch applied on 2026-11-16: the skill's UI-glyph workflow now carries the sourcing
+order (reuse → hand-draw → licensed family), the two-level archetype/override rule
+with a stale-override warning, and the acceptance-check list above.
