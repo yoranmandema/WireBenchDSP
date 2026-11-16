@@ -131,17 +131,17 @@ export function BlockList({
   onSelect: (entry: BlockEntry) => void;
 }) {
   return (
-    <div class="block-list">
+    <div class="block-list phone:flex phone:items-start phone:gap-4">
       {groups.map((g) => (
-        <section key={g.category} class="flex flex-col gap-1">
-          <h2 class="flex items-center gap-1.5 text-[10px] tracking-[1.4px] font-semibold mb-1.5 text-cat" style={catStyle(g.category)}>
+        <section key={g.category} class="flex flex-col gap-1 phone:flex-none">
+          <h2 class="cat-scope flex items-center gap-1.5 text-[10px] tracking-[1.4px] font-semibold mb-1.5 text-cat phone:mb-1 phone:text-[9px] phone:tracking-[1px]" style={catStyle(g.category)}>
             <Icon category={g.category} size={12} />
             <span>{g.category}</span>
           </h2>
           {g.blocks.map((b) => (
             <button
               key={b.type}
-              class="rack-item w-full flex items-center gap-2 px-2.5 py-1.75 rounded-md text-left border border-transparent border-l-3 bg-linear-to-r from-cat-soft to-transparent cursor-grab transition-[background-color,border-color,border-left-color] duration-120 hover:bg-panel-2 hover:border-[#3b3e49] hover:border-l-cat"
+              class="rack-item cat-scope w-full flex items-center gap-2 px-2.5 py-1.75 rounded-md text-left border border-transparent border-l-3 bg-linear-to-r from-cat-soft to-transparent cursor-grab transition-[background-color,border-color,border-left-color] duration-120 hover:bg-panel-2 hover:border-[#3b3e49] hover:border-l-cat phone:flex-none phone:w-[172px] phone:px-2 phone:py-1"
               style={catStyle(b.category)}
               draggable
               onDragStart={(e) => startDrag(e, b)}

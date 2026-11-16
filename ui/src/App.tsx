@@ -39,9 +39,9 @@ export function App() {
   }
 
   return (
-    <div class="app grid h-full" style={{ gridTemplateRows: "auto minmax(0, 1fr) auto" }}>
+    <div class="app grid h-full grid-rows-[auto_minmax(0,1fr)_auto]">
       <TopBar />
-      <div class="main grid min-h-0" style={{ gridTemplateColumns: "240px 1fr" }}>
+      <div class="main grid min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] tab:grid-cols-[240px_minmax(0,1fr)] tab:grid-rows-1">
         <Rack />
         <Chain />
       </div>
@@ -53,7 +53,7 @@ export function App() {
       <SelectionRing />
       {/* Command failures surface here instead of failing silently. */}
       {notice.value && (
-        <div class="toast fixed z-50 rounded-lg bg-danger-bg border border-danger-line text-danger-text text-base cursor-pointer shadow-toast" onClick={() => (notice.value = null)}>
+        <div class="toast fixed right-4 bottom-[calc(var(--ui-bar)+8px)] z-50 max-w-[min(420px,calc(100vw-24px))] rounded-lg bg-danger-bg border border-danger-line px-3 py-2 text-danger-text text-base cursor-pointer shadow-toast" onClick={() => (notice.value = null)}>
           {notice.value}
         </div>
       )}

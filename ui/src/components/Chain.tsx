@@ -106,9 +106,9 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
   };
 
   return (
-    <div class="channel is-empty flex flex-col" onDragEnter={dragEnter} onDragOver={dragOver} onDrop={drop}>
+    <div class="channel is-empty flex flex-col rounded-card border border-line-soft bg-[rgba(255,255,255,0.012)] p-2.5 transition-[border-color,box-shadow,background-color] duration-120" onDragEnter={dragEnter} onDragOver={dragOver} onDrop={drop}>
       <ChannelHead channel={channel} />
-      <div class="strip flex items-center gap-2 overflow-x-auto px-2" ref={strip} style={{ paddingTop: "18px", paddingBottom: "18px" }}>
+      <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         <div class="strip-empty flex-1 text-center text-sm text-muted">Empty channel — press + to search for a block</div>
         <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
@@ -262,10 +262,10 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
   const dragSpec = dragBlock ? s.registry[dragBlock.type] : undefined;
 
   return (
-    <div class={`channel${drop ? " drop-target-active" : ""}`} onDragEnter={dragEnter} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={dropFromBrowser}>
+    <div class={`channel flex flex-col rounded-card border border-line-soft bg-[rgba(255,255,255,0.012)] p-2.5 transition-[border-color,box-shadow,background-color] duration-120${drop ? " drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : ""}`} onDragEnter={dragEnter} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={dropFromBrowser}>
       <ChannelHead channel={channel} />
 
-      <div class="strip flex items-center gap-2 overflow-x-auto px-2" ref={strip} style={{ paddingTop: "18px", paddingBottom: "18px" }}>
+      <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         {channel.blocks.map((b, i) => {
           const spec = s.registry[b.type];
@@ -277,9 +277,9 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
               <div class={`block-placeholder flex-none h-[66px] rounded-lg border-[1px] border-dashed border-transparent overflow-hidden transition-[width,margin-right,border-color,background-color] duration-110 ${drag && drag.insert === i && drag.insert !== drag.from ? "w-[116px] mr-0 border-amber-dim bg-[rgba(232,163,61,0.08)]" : "w-0 mr-[-8px]"}`} />
               <div
                 class={[
-                  "block-card flex-none w-[116px] h-[66px] rounded-lg border border-[#353843] border-l-3 bg-linear-to-r from-cat-soft to-[#1b1c22] shadow-card grid grid-rows-[auto_1fr_auto] items-center justify-items-center gap-0.5 px-2 py-1 cursor-grab select-none relative touch-none transition-[border-color,box-shadow,transform] duration-120",
-                  b.bypass ? "opacity-45" : "",
-                  isSel ? "border-cat shadow-[inset_0_0_0_1px_var(--cat)] -translate-y-0.5" : "",
+                  "block-card cat-scope flex-none w-[116px] h-[66px] rounded-lg border border-[#353843] border-l-3 bg-linear-to-r from-cat-soft to-[#1b1c22] shadow-card grid grid-rows-[auto_1fr_auto] items-center justify-items-center gap-0.5 px-2 py-1 cursor-grab select-none relative touch-none transition-[border-color,box-shadow,transform] duration-120 hover:border-[#4a4d59] before:content-[''] before:absolute before:-left-1 before:top-1/2 before:size-[5px] before:-translate-y-1/2 before:rounded-full before:bg-cat before:shadow-[0_0_5px_var(--cat)] after:content-[''] after:absolute after:-right-1 after:top-1/2 after:size-[5px] after:-translate-y-1/2 after:rounded-full after:bg-cat after:shadow-[0_0_5px_var(--cat)]",
+                  b.bypass ? "bypass opacity-45" : "",
+                  isSel ? "selected border-cat shadow-[inset_0_0_0_1px_var(--cat)] -translate-y-0.5" : "",
                   drag?.id === b.id ? "dragging border-dashed border-[#4a4d59] opacity-35" : "",
                 ]
                   .filter(Boolean)
@@ -326,7 +326,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
                 <span class="block-icon grid place-items-center h-[14px] text-cat">
                   {spec && <BlockIcon type={b.type} category={spec.category} size={26} />}
                 </span>
-                <span class="block-name text-[11px] font-semibold text-center leading-[1.15]">{b.name}</span>
+                <span class={`block-name text-[11px] font-semibold text-center leading-[1.15] ${b.bypass ? "line-through" : ""}`}>{b.name}</span>
               </div>
             </Fragment>
           );

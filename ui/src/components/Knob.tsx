@@ -63,7 +63,7 @@ export function Knob({
   return (
     <div class="knob-unit flex flex-col items-center w-full gap-1 p-0">
       <div
-        class={`knob relative size-[var(--ui-knob)] rounded-full cursor-ns-resize touch-none ${dragging ? "dragging" : ""}`}
+        class={`knob relative size-[var(--ui-knob)] rounded-full bg-[radial-gradient(circle_at_34%_28%,#454956,#1a1b20_72%)] shadow-knob cursor-ns-resize touch-none ${dragging ? "dragging" : ""}`}
         style={{ "--angle": `${angle}deg` }}
         onPointerDown={down}
         onPointerMove={move}
@@ -79,9 +79,10 @@ export function Knob({
           <circle cx="32" cy="32" r={RING_R} fill="none" stroke="#2f323b" strokeWidth={RING_W} pathLength={100} strokeDasharray="75 100" transform={`rotate(${START} 32 32)`} />
           <circle cx="32" cy="32" r={RING_R} fill="none" stroke="var(--amber)" strokeWidth={RING_W} strokeLinecap="round" pathLength={100} strokeDasharray={`${t * 75} 100`} transform={`rotate(${START} 32 32)`} />
         </svg>
+        <span class={`knob-indicator absolute left-1/2 top-[9.26%] h-[33.33%] w-[5.56%] -translate-x-1/2 origin-[50%_122.22%] rounded-sm shadow-[0_0_4px_rgba(0,0,0,0.8)] ${dragging ? "bg-amber" : "bg-[#f4f6fa]"}`} style={{ transform: `translateX(-50%) rotate(${angle}deg)` }} />
         {/* End stops, sitting at the two ends of the travel arc. */}
-        <span class="knob-end lo absolute text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ right: `calc(50% + var(--space-6))`, top: `calc(50% + var(--space-6))`, padding: 0 }}>{endLabel(min)}</span>
-        <span class="knob-end hi absolute text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ left: `calc(50% + var(--space-6))`, top: `calc(50% + var(--space-6))`, padding: 0 }}>{endLabel(max)}</span>
+        <span class="knob-end lo absolute right-[calc(50%+var(--space-6))] top-[calc(50%+var(--space-6))] text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ padding: 0 }}>{endLabel(min)}</span>
+        <span class="knob-end hi absolute left-[calc(50%+var(--space-6))] top-[calc(50%+var(--space-6))] text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ padding: 0 }}>{endLabel(max)}</span>
       </div>
       <div class="knob-name text-center text-2xs tracking-[0.8px] text-muted font-semibold uppercase">{name}</div>
       <div class="knob-value text-xs text-text bg-inset border border-line-soft rounded-sm min-w-[56px] text-center tabular-nums px-2">{display}</div>

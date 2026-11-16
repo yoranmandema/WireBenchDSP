@@ -159,7 +159,7 @@ export function SelectionRing() {
   if (!rect) return null;
   return (
     <div
-      class={`selection-ring${rect.kind === "focus" ? " focus" : ""}`}
+      class={`selection-ring cat-scope fixed z-30 pointer-events-none border${rect.kind === "focus" ? " focus border-text" : " border-cat"}`}
       aria-hidden="true"
       style={{
         // The ring sits *outside* the card's border box, like the outer ring
@@ -173,6 +173,9 @@ export function SelectionRing() {
         borderRadius: `${rect.radius + rect.border}px`,
         ["--cat-h" as string]: String(rect.hue),
         ["--cat" as string]: `hsl(${rect.hue} 62% 58%)`,
+        boxShadow: rect.kind === "focus"
+          ? "0 0 0 1px color-mix(in srgb, var(--color-text) 25%, transparent)"
+          : "0 4px 12px hsl(var(--cat-h) 70% 55% / 0.3)",
       }}
     />
   );

@@ -4,6 +4,7 @@ import { Knob } from "./Knob";
 import { catStyle } from "../theme";
 import { selected, setBypass, setParam, state } from "../state";
 import type { BlockSpec, ParamSpec } from "../protocol";
+import { ctrlName, emptyNote } from "../ui";
 
 /** Format a parameter value with the unit the engine declares. */
 function formatParam(p: ParamSpec, v: number): string {
@@ -34,8 +35,8 @@ function ChoiceControl({
   if (choices.length > 5) {
     return (
       <label class="select-unit grid items-center justify-items-center gap-1 w-full col-span-2">
-        <span class="ctrlName">{p.name}</span>
-        <select class="textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3" value={current} onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}>
+        <span class={`${ctrlName} ctrlName`}>{p.name}</span>
+        <select class="select textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3" value={current} onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}>
           {choices.map((c, i) => (
             <option key={c} value={i}>{c}</option>
           ))}
@@ -46,12 +47,12 @@ function ChoiceControl({
 
   return (
     <div class="choice-unit grid items-center justify-items-center gap-1 w-full col-span-2">
-      <span class="ctrlName">{p.name}</span>
+      <span class={`${ctrlName} ctrlName`}>{p.name}</span>
       <div class="segmented flex border border-line rounded-lg overflow-hidden bg-well" role="radiogroup" aria-label={p.name}>
         {choices.map((c, i) => (
           <button
             key={c}
-            class={`seg flex-1 min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 text-[10px] font-semibold text-muted border-r border-line-soft last:border-r-0 whitespace-nowrap hover:text-text hover:bg-[#1e2027] ${i === current ? "bg-linear-to-b from-amber-hi to-amber-lo border-amber-edge text-amber-ink" : ""}`}
+            class={`seg flex-1 min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 text-[10px] font-semibold text-muted border-r border-line-soft last:border-r-0 whitespace-nowrap hover:text-text hover:bg-[#1e2027] ${i === current ? "on bg-linear-to-b from-amber-hi to-amber-lo border-amber-edge text-amber-ink" : ""}`}
             role="radio"
             aria-checked={i === current}
             onClick={() => onChange(i)}
@@ -73,8 +74,8 @@ export function Editor() {
 
   if (!sel) {
     return (
-      <footer class="editor bg-linear-to-b from-[#1a1b21] to-[#14151a] border-t border-line grid items-center">
-        <div class="emptyNote">Select a block in the chain to edit it.</div>
+      <footer class="editor grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">
+        <div class={`${emptyNote} editor-empty emptyNote`}>Select a block in the chain to edit it.</div>
       </footer>
     );
   }
@@ -83,8 +84,8 @@ export function Editor() {
   const block = channel?.blocks.find((b) => b.id === sel.block);
   if (!block) {
     return (
-      <footer class="editor bg-linear-to-b from-[#1a1b21] to-[#14151a] border-t border-line grid items-center">
-        <div class="emptyNote">That block is gone.</div>
+      <footer class="editor grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">
+        <div class={`${emptyNote} editor-empty emptyNote`}>That block is gone.</div>
       </footer>
     );
   }
@@ -100,7 +101,7 @@ export function Editor() {
 
   const body: JSX.Element = (
     <>
-      <div class="editor-id grid items-center justify-items-start gap-1 pl-3 min-h-0" style={spec ? catStyle(spec.category) : undefined}>
+      <div class="editor-id cat-scope grid items-center justify-items-start gap-1 pl-3 min-h-0 phone:flex phone:flex-wrap phone:items-center phone:gap-x-3 phone:gap-y-1 phone:px-2 phone:py-2" style={spec ? catStyle(spec.category) : undefined}>
         <div class="editor-kind flex items-center gap-1 text-[9px] tracking-[1.4px] font-semibold text-cat">
           {spec && <Icon category={spec.category} size={13} />}
           <span>Selected block</span>
@@ -111,17 +112,17 @@ export function Editor() {
         </div>
         <div class="editor-type text-[9px] text-muted font-mono">{block.type}</div>
         <div class="editor-side flex gap-1 mt-0">
-          <button class={`sideBtn min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 rounded-md text-[11px] font-semibold bg-raised border border-line text-muted hover:text-text hover:border-line-hi ${block.bypass ? "text-amber border-amber-dim bg-[#2a2318]" : ""}`} onClick={() => void setBypass(sel.channel, sel.block, !block.bypass)} title="Bypass this block">
+          <button class={`side-btn sideBtn min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 rounded-md text-[11px] font-semibold bg-raised border border-line text-muted hover:text-text hover:border-line-hi ${block.bypass ? "on text-amber border-amber-dim bg-[#2a2318]" : ""}`} onClick={() => void setBypass(sel.channel, sel.block, !block.bypass)} title="Bypass this block">
             {block.bypass ? "Bypassed" : "Bypass"}
           </button>
-          <button class="sideBtn min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 rounded-md text-[11px] font-semibold bg-raised border border-line text-muted hover:text-text hover:border-line-hi" onClick={resetAll} title="Reset every parameter to its default">
+          <button class="side-btn sideBtn min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 rounded-md text-[11px] font-semibold bg-raised border border-line text-muted hover:text-text hover:border-line-hi" onClick={resetAll} title="Reset every parameter to its default">
             Reset
           </button>
         </div>
       </div>
 
-      <div class="editor-controls grid gap-y-4 gap-x-6 min-w-0 w-full max-w-[var(--ui-ctrl-row)] mx-auto" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(var(--ui-ctrl), 1fr))", justifyContent: "center", alignContent: "center" }}>
-        {params.length === 0 && <div class="emptyNote">This block has no parameters.</div>}
+      <div class="editor-controls grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4 min-w-0 w-full max-w-[var(--ui-ctrl-row)] mx-auto">
+        {params.length === 0 && <div class={`${emptyNote} editor-empty emptyNote`}>This block has no parameters.</div>}
         {choices.map((p) => (
           <ChoiceControl key={p.id} p={p} value={block.params[p.id] ?? p.default} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
         ))}
@@ -132,5 +133,5 @@ export function Editor() {
     </>
   );
 
-  return <footer class="editor bg-linear-to-b from-[#1a1b21] to-[#14151a] border-t border-line grid items-center gap-3 p-4" style={{ gridTemplateColumns: "minmax(0, var(--ui-id-w)) minmax(0, 1fr)", minHeight: 0 }}>{body}</footer>;
+  return <footer class="editor grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 min-h-0 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">{body}</footer>;
 }

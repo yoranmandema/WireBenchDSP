@@ -30,8 +30,8 @@ export function TopBar() {
   };
 
   return (
-    <header class="topbar flex items-center gap-4.5 px-4 min-w-0 bg-linear-to-b from-[#1e2027] to-[#16171c] border-b border-line">
-      <div class="preset flex items-center gap-2 min-w-[230px]">
+    <header class="topbar flex min-h-[var(--ui-topbar-h)] items-center gap-4.5 px-4 min-w-0 bg-linear-to-b from-[#1e2027] to-[#16171c] border-b border-line compact:flex-wrap compact:gap-y-2 compact:px-3 compact:py-2">
+      <div class="preset flex items-center gap-2 min-w-[230px] compact:flex-1 compact:min-w-0">
         <button class="nav size-6.5 rounded-key border border-line bg-raised-2 leading-none text-muted hover:border-line-hi hover:text-text" onClick={() => step(-1)} title="Previous preset">
           ‹
         </button>
@@ -42,7 +42,7 @@ export function TopBar() {
         <button class="nav size-6.5 rounded-key border border-line bg-raised-2 leading-none text-muted hover:border-line-hi hover:text-text" onClick={() => step(1)} title="Next preset">
           ›
         </button>
-        <button class="nav size-6.5 rounded-key border border-line bg-raised-2 leading-none text-muted hover:border-line-hi hover:text-text" onClick={() => (presetsOpen.value = true)} title="Browse, save, rename, and delete presets">
+        <button class="nav presets-open size-6.5 rounded-key border border-line bg-raised-2 leading-none text-muted hover:border-line-hi hover:text-text" onClick={() => (presetsOpen.value = true)} title="Browse, save, rename, and delete presets">
           ☰
         </button>
       </div>
@@ -51,7 +51,7 @@ export function TopBar() {
         {SLOTS.map((s2, i) => (
           <div
             key={s2}
-            class={`slot size-6.5 rounded-key bg-[#22242b] border border-line-soft text-muted text-[11px] font-semibold grid place-items-center ${idx === i ? "bg-linear-to-b from-amber-hi to-amber-lo border-amber-edge text-amber-ink shadow-glow" : ""}`}
+            class={`slot size-6.5 rounded-key bg-[#22242b] border border-line-soft text-muted text-[11px] font-semibold grid place-items-center ${idx === i ? "on bg-linear-to-b from-amber-hi to-amber-lo border-amber-edge text-amber-ink shadow-glow" : ""}`}
             title={s.presets[i] ?? "empty"}
             onClick={() => s.presets[i] && void loadPreset(s.presets[i])}
           >
@@ -60,12 +60,12 @@ export function TopBar() {
         ))}
       </div>
 
-      <div class="top-right flex items-center gap-3.5 ml-auto">
+      <div class="top-right flex items-center gap-3.5 ml-auto compact:flex-wrap compact:gap-y-2">
         <div class="source-toggle flex border border-line rounded-md overflow-hidden">
           {(["riff", "live", "silence"] as const).map((src) => (
             <button
               key={src}
-              class={`chip px-2.5 py-1.25 text-[10px] font-semibold tracking-[0.6px] uppercase bg-[#1a1b21] text-muted border-r border-line-soft last:border-r-0 ${s.source === src ? "bg-[#2f323b] text-text inset-shadow-[0_-2px_0_var(--color-amber)]" : ""}`}
+              class={`chip px-2.5 py-1.25 text-[10px] font-semibold tracking-[0.6px] uppercase bg-[#1a1b21] text-muted border-r border-line-soft last:border-r-0 ${s.source === src ? "on bg-[#2f323b] text-text inset-shadow-[0_-2px_0_var(--color-amber)]" : ""}`}
               onClick={() => void setSource(src)}
             >
               {src}

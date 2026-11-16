@@ -124,6 +124,16 @@
   --shadow-modal: 0 24px 70px rgba(0, 0, 0, 0.6);
 }
 
+/* These values are set per element from the block category. `inline` keeps
+   the generated utilities reading the element-scoped hue variables. */
+@theme inline {
+  --color-cat: var(--cat);
+  --color-cat-soft: var(--cat-soft);
+}
+
+@custom-variant phone (@media (width < 700px));
+@custom-variant compact (@media (width < 820px));
+
 @layer base {
   :root {
     color: var(--color-text);
@@ -139,6 +149,19 @@
     --ui-topbar-h: 58px;
     --ui-id-w: clamp(112px, 16vw, 200px);
     --ui-knob: clamp(54px, 4.2vw, 62px);
+    --amber: var(--color-amber);
+    --space-6: calc(var(--spacing) * 6);
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
   }
 
   /* Preflight borders are `currentColor`; the app's are the line colour. */
