@@ -11,7 +11,7 @@ for its job, so stay in your lane:
 | Assignee | Model | Job |
 |---|---|---|
 | `pedal-architect` | Opus 5.5 (expensive; #1 on frontend leaderboards) | Design and plan, including UI and visual design. Turns a feature into small, precise builder cards. Writes little code. |
-| `pedal-ui-builder` | Sonnet 5.5 (#2 frontend) | Implements one UI card: Preact, TypeScript and CSS in `ui/`. |
+| `pedal-ui-builder` | Haiku 5.5 (cheap) | Implements one UI card: Preact, TypeScript and CSS in `ui/`. |
 | `pedal-builder` | Haiku 5.5 (cheap) | Implements one non-UI card: the Rust engine, DSP, tooling, docs. |
 | `pedal-reviewer` | Sonnet 5.5 | Checks a builder card against its acceptance criteria, then approves or sends it back. |
 
@@ -38,13 +38,16 @@ for its job, so stay in your lane:
   duplicate them. Add your precise spec as a comment on each existing card
   (`hermes kanban --board pedal comment <id> "..."`), and only create cards for
   missing work.
-- Only for a non-UI card that is genuinely hard (real-time audio-thread code, DSP maths,
-  lock-free or concurrency work, or a subtle protocol migration), pin it with
+- Only for a card that is genuinely hard (real-time audio-thread code, DSP maths,
+  lock-free or concurrency work, a subtle protocol migration, or a UI change
+  spanning many components), pin it with
   `model: anthropic/claude-sonnet-5.5`, `provider: nous`. Everything else stays
-  on the builder's default cheap model.
+  on the builders' default cheap model. The daily model allowance is small, so
+  make this rare.
 - For UI cards, state the visual intent precisely: sizes, spacing scale,
   colours or tokens, states (hover, active, disabled, focus), behaviour at
-  ~800 px and ~1440 px wide, and what must not move or change.
+  ~800 px and ~1440 px wide, and what must not move or change. The UI builder
+  is a cheap model: the more exact the card, the better the result.
 - If a product decision is needed, block your own card with `needs_input` (see
   below) before creating cards.
 - Finish with `kanban_complete`, not review. The first line of the summary says
@@ -77,10 +80,8 @@ for its job, so stay in your lane:
   its "Try it" steps.
 - Otherwise call `kanban_request_changes` with a numbered list of specific
   fixes. If you are about to request changes on this card for the **second**
-  time, first escalate it to a stronger model. For a `pedal-builder` card:
+  time, first escalate it to a stronger model (either builder):
   `hermes kanban --board pedal set-model <card id> anthropic/claude-sonnet-5.5 --provider nous`.
-  For a `pedal-ui-builder` card:
-  `hermes kanban --board pedal set-model <card id> anthropic/claude-opus-5.5 --provider nous`.
   For a third time, block with `needs_input` instead.
 - **Feature cards** are the user's original request. Their parents are the build
   steps, so they run only after all of those are done. Check the original ask
