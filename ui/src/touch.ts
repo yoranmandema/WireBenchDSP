@@ -221,6 +221,13 @@ export function registerTouchTarget(id: string, target: TouchDropTarget): () => 
   };
 }
 
+/** Keep the router's geometry for a channel up to date. */
+export function registerTouchChannel(id: string, el: HTMLElement | null): () => void {
+  if (el) channels.set(id, { el });
+  else channels.delete(id);
+  return () => channels.delete(id);
+}
+
 /** The channel currently under the finger. */
 let active: { id: string; target: TouchDropTarget } | null = null;
 
@@ -308,9 +315,3 @@ export function useTouchDropRouter(): void {
   }, []);
 }
 
-/** Keep the router's geometry for a channel up to date. */
-export function registerTouchChannel(id: string, el: HTMLElement | null): () => void {
-  if (el) channels.set(id, { el });
-  else channels.delete(id);
-  return () => channels.delete(id);
-}
