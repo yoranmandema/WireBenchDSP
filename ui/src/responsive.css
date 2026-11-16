@@ -1,15 +1,16 @@
 /* Responsive layer for the pedal UI.
  *
- * `styles.css` holds the desktop layout and `layout.css` (imported after this
- * file) holds the spacing scale and the alignment rules. This file is the
- * *breakpoint* layer: it changes how much room things get, and where the bar's
- * children sit when there is not enough room for them side by side. It does
- * not set gaps, padding or margins — those all come from the scale.
+ * `styles.css` holds the base layout, `layout.css` the spacing scale and the
+ * alignment rules, and this file is the *breakpoint* layer: it changes how much
+ * room things get, and where the bar's children sit when there is not enough
+ * room for them side by side. It is imported last (see `main.tsx`), so inside a
+ * media query it wins over both other files; it does not set gaps, padding or
+ * margins — those all come from the scale.
  *
  * Breakpoints:
- *   >= 820px   desktop — one-row editor, one-row top bar
- *   700–819px  tablet portrait — the editor is one row of fluid control cells,
- *              the identity column narrows, the top bar wraps
+ *   >= 820px   desktop — fixed-height bar, one-row top bar
+ *   700–819px  tablet portrait — content-sized bar, the identity column
+ *              narrows, the top bar wraps
  *   < 700px    phone — the editor stacks (identity above controls), the rack
  *              becomes a horizontal palette strip and the chain goes full width
  *
@@ -23,11 +24,11 @@
   --ui-rack-w: 240px;
   /* The identity column's width, shared with `layout.css` (which uses it for
      the editor's grid). It narrows as the window narrows so the controls keep
-     enough cells to sit on one row. */
-  --ui-id-w: clamp(160px, 18vw, 200px);
+     enough width for their cells to stay at the `--ui-ctrl` floor. */
+  --ui-id-w: clamp(112px, 16vw, 200px);
   /* A knob face scales with the viewport inside a fixed band, so the bar
-     fills a wide window without outgrowing a phone. The tick geometry in
-     `layout.css` derives from the same variable. */
+     fills a wide window without outgrowing a phone. The tick geometry below
+     derives from the same variable. */
   --ui-knob: clamp(54px, 4.2vw, 62px);
 }
 
@@ -89,14 +90,6 @@
   .editor {
     max-height: 62vh;
     overflow-y: auto;
-  }
-
-  /* Fluid cells: a cell is at least as wide as its content needs, and shares
-     any extra width with its row. */
-  .editor-controls {
-    grid-template-columns: repeat(auto-fit, minmax(var(--ui-ctrl), 1fr));
-    justify-content: stretch;
-    align-content: start;
   }
 }
 
@@ -169,19 +162,4 @@
   .select-unit {
     grid-column: 1 / -1;
   }
-}
-
-/* ---- toast -------------------------------------------------------------- */
-
-/* Shares the bottom bar's grid cell, aligned to its top-right corner and then
-   lifted clear of it, so it tracks the bar whatever height the bar takes.
-   `styles.css` hardcoded `bottom: 228px`, which assumed the 208px bar and
-   drifted as soon as the bar changed height. */
-.toast {
-  position: static;
-  grid-row: 3;
-  grid-column: 1;
-  align-self: start;
-  justify-self: end;
-  transform: translateY(calc(-100% - var(--space-2)));
 }

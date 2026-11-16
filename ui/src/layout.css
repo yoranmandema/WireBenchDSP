@@ -1,9 +1,10 @@
 /* Spacing and alignment for the bottom UI (the editor footer) and its children.
  *
- * This file is the *scale* layer. `styles.css` holds the desktop layout and
+ * This file is the *scale* layer. `styles.css` holds the base layout and
  * `responsive.css` the breakpoint layer; this file states the one spacing
- * scale and the alignment rules every bottom-UI child follows, and it is
- * imported last (see `main.tsx`) so it wins at equal specificity.
+ * scale and the alignment rules every bottom-UI child follows. It is imported
+ * between the two (see `main.tsx`), so it wins over `styles.css` at equal
+ * specificity while `responsive.css` still wins inside a media query.
  *
  * THE SCALE — 4 / 8 / 12 / 16 / 24, in px. Every gap, padding and margin in
  * the bottom UI is one of these, or `var()` of one of these. Nothing else
@@ -11,43 +12,52 @@
  * which is why nothing lined up.
  *
  *   --space-1  4px   inside a control: label above its value, icon beside text
- *   --space-2  8px   between sibling controls, and a stacked group's inset
+ *   --space-2  8px   between the parts of one control
  *   --space-3 12px   between the identity column and the controls
  *   --space-4 16px   the bar's inset from the window edge, and the gap between
  *                    two rows of controls when they wrap
- *   --space-6 24px   between the major regions of the bar
+ *   --space-6 24px   the gutter between control cells, and the gap above the
+ *                    bar for the toast
  *
  * Three derived measures, so the geometry is expressed once:
  *
  *   --ui-touch  44px   the minimum hit target (WCAG 2.5.8). Buttons and
  *                      selectors in the bar are never smaller than this in
  *                      either axis.
- *   --ui-ctrl   92px   the width of one control cell. A cell is the knob plus
- *                      the two end-stop pills, which hang 8px past the dial on
- *                      each side (see `.knob-end`) — 64px of dial and pills
- *                      plus the 28px of column gap that absorbs the overhang.
- *                      A choice control spans two cells.
- *   --ui-bar    224px  the bar's height on desktop: one row of controls plus
- *                      the bar's own inset. Below 820px the bar is content-
- *                      sized instead, because there the controls may wrap.
+ *   --ui-ctrl   72px   the narrowest a control cell may be. The end-stop pills
+ *                      hang 24px from the knob centre (`--space-6`) and are at
+ *                      most 23px wide, so two neighbouring pills need
+ *                      2 × (24 + 23) = 94px between knob centres; with the 24px
+ *                      gutter that is a 70px cell, and 72px leaves 2px of
+ *                      slack.
+ *   --ui-ctrl-max 96px the widest a control cell may grow. A wide window would
+ *                      otherwise string the knobs out with several knob-widths
+ *                      of dead space between them.
+ *   --ui-ctrl-row    the widest the controls group may be: the densest block
+ *                      (5 knobs + a choice that spans two = 7 cells) plus the
+ *                      six gutters between them. Past this the group is centred
+ *                      and the bar keeps its margins.
+ *   --ui-bar    224px  the bar's height on desktop. Below 820px the bar is
+ *                      content-sized instead, because there the controls may
+ *                      wrap onto a second row.
  *
  * ALIGNMENT — the rules that replace the old magic numbers:
  *
- *   1. Every control cell is the same height and its contents are centred, so
- *      all knob faces, names and value readouts sit on shared horizontal axes
- *      across a row, and a knob column lines up with a choice column.
+ *   1. Every control cell in a row is the same height (the grid stretches it)
+ *      and its contents are centred, so all knob faces, names and value
+ *      readouts sit on shared horizontal axes across a row, and a knob column
+ *      lines up with a choice column.
  *   2. The identity column and the controls are centred against each other
  *      (`align-items: center`), and the bar's height comes from its content, so
  *      nothing is pushed below the viewport when the controls wrap.
- *   3. The controls group is centred as one block; its rows do not each centre
- *      themselves, which is what made wrapped rows ragged.
+ *   3. The controls are a grid, so every row shares its left edge; the old
+ *      wrapping flex line centred each row on its own, which is what made
+ *      wrapped rows ragged.
  *   4. Long block names truncate inside the identity column, so the column
  *      keeps its share of the bar instead of growing past it.
- *   5. On desktop the bar is exactly one row: the control cells are a fixed
- *      width, so the densest block (5 knobs + a choice = 7 cells) fits the
- *      controls column at 820px and above. Below 820px the cells go fluid and
- *      rows may wrap; the bar then grows, and scrolls internally if the window
- *      is too short for it.
+ *   5. A cell is never narrower than `--ui-ctrl`, so the end-stop pills always
+ *      clear their neighbours; a block that needs more cells than fit wraps
+ *      onto another row rather than crushing the cells.
  */
 
 :root {
@@ -58,12 +68,9 @@
   --space-6: 24px;
 
   --ui-touch: 44px;
-  /* The width of one control cell on desktop, derived from the narrowest
-     desktop window: 820px minus the bar's 16px inset on each side, the 160px
-     identity column and the 12px gap between them leaves 616px; seven cells
-     (the densest block: 5 knobs + a choice that spans two) plus six 8px column
-     gaps fit in that, so a cell is 81px and a row is always one row. */
-  --ui-ctrl: 81px;
+  --ui-ctrl: 72px;
+  --ui-ctrl-max: 96px;
+  --ui-ctrl-row: calc(7 * var(--ui-ctrl-max) + 6 * var(--space-6));
   --ui-bar: 224px;
 }
 
@@ -81,23 +88,12 @@
   min-height: 0;
 }
 
-/* Desktop is one row, always: the control cell is a fixed width here, so the
-   densest block (5 knobs + a choice = 7 cells) fits the controls column at
-   820px and above. The cell width is derived from the width actually available
-   at the narrowest desktop window (820px, minus the bar's inset, the identity
-   column and the gap between them) rather than a number picked by hand. */
+/* Desktop gives the bar a fixed height, so selecting a block does not resize
+   the chain. Everything below 820px is content-sized, because there the
+   controls may wrap onto a second row. */
 @media (min-width: 820px) {
   .editor {
     height: var(--ui-bar);
-  }
-
-  /* Seven cells plus the six column gaps between them, sized so they fit the
-     narrowest desktop window (820px minus the bar's inset, the identity column
-     and the gap between the two). One cell of slack is folded in: the group is
-     centred, so half a cell of slack on each side keeps the last cell inside
-     the bar. */
-  .editor-controls {
-    grid-template-columns: repeat(auto-fit, var(--ui-ctrl));
   }
 }
 
@@ -137,6 +133,7 @@
    touch floor; it never needs one because it is not a target. */
 .editor-bypass {
   flex: none;
+  padding: 0 var(--space-2);
 }
 
 .editor-side {
@@ -148,23 +145,27 @@
 
 /* A grid, not a wrapping flex line: every row shares its left edge, and the
    group is centred as a block. `display: grid` is stated here because
-   `styles.css` still declares the old flex layout. */
+   `styles.css` still declares the old flex layout. The cells are fluid above
+   the `--ui-ctrl` floor, so a row takes as many as fit and wraps rather than
+   crushing the end-stop pills; the group stops growing at `--ui-ctrl-row` so a
+   wide window does not string the knobs out. */
 .editor-controls {
   display: grid;
-  grid-template-columns: repeat(auto-fit, var(--ui-ctrl));
+  grid-template-columns: repeat(auto-fit, minmax(var(--ui-ctrl), 1fr));
   justify-content: center;
   align-content: center;
-  gap: var(--space-4) var(--space-2);
+  gap: var(--space-4) var(--space-6);
   min-width: 0;
+  width: 100%;
+  max-width: var(--ui-ctrl-row);
+  margin-inline: auto;
 }
 
-/* One knob unit: a fixed content height with the contents centred, so a whole
-   row of them lines up. `width: 100%` makes the unit fill its grid cell instead
-   of sitting at a fixed width and leaving a ragged right edge. */
+/* One knob unit: the contents are centred, so a whole row of them lines up.
+   `width: 100%` makes the unit fill its grid cell instead of sitting at a
+   fixed width and leaving a ragged right edge. */
 .knob-unit {
   width: 100%;
-  height: var(--ui-ctrl);
-  min-height: 0;
   padding: 0;
   gap: var(--space-1);
   justify-content: center;
@@ -176,29 +177,40 @@
   margin-top: 0;
 }
 
-/* A choice control is the same height as a knob unit, and its contents are
-   centred, so its segmented row sits on the knob faces' horizontal axis. */
+/* A choice control's contents are centred on the knob faces' axis, so its
+   segmented row sits level with them. */
 .choice-unit,
 .select-unit {
   grid-column: span 2;
   width: 100%;
-  height: var(--ui-ctrl);
-  min-height: 0;
   padding: 0;
   gap: var(--space-1);
   align-content: center;
   justify-content: center;
 }
 
-/* The end-stop pills hang 8px past the dial on each side (see `.knob-end`), so
-   neighbouring cells need that much clearance. The grid's column gap supplies
-   it: a pill reaches 8px into the 8px gap and no further. */
+/* The end-stop pills sit on the ray through the arc ends, 24px per axis from
+   the knob centre, and grow outwards from there. `--space-6` is that offset;
+   the grid's column gap is the same step, which is what keeps two neighbouring
+   pills apart (see the `--ui-ctrl` note above). */
 .knob-end.lo {
-  right: calc(50% + 24px);
+  right: calc(50% + var(--space-6));
 }
 
 .knob-end.hi {
-  left: calc(50% + 24px);
+  left: calc(50% + var(--space-6));
+}
+
+/* The pills are 6.5px type in a 1px border; any inner padding would push their
+   outer edge into the next cell, so the border hugs the digits. */
+.knob-end {
+  padding: 0;
+}
+
+/* The value chip: the scale sets its inset, `min-width` only keeps the readout
+   from jittering as the digits change. */
+.knob-value {
+  padding: 0 var(--space-2);
 }
 
 /* ---- touch targets ------------------------------------------------------ */
@@ -225,9 +237,17 @@
 
 /* ---- the toast ---------------------------------------------------------- */
 
-/* The toast shares the bar's grid cell, so it tracks the bar's height instead
-   of assuming a fixed one. */
+/* The toast is a grid item in the bar's own row, so it tracks the bar's height
+   at every width instead of assuming a fixed one. It is lifted clear of the
+   bar by one `--space-2`, and sits inset from the window's right edge. */
 .toast {
+  position: static;
+  grid-row: 3;
+  grid-column: 1;
+  align-self: start;
+  justify-self: end;
+  transform: translateY(calc(-100% - var(--space-2)));
   margin: 0 var(--space-4) 0 0;
   max-width: min(420px, calc(100% - var(--space-6)));
+  padding: var(--space-2) var(--space-3);
 }
