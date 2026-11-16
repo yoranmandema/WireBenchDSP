@@ -145,7 +145,7 @@
     --ui-ctrl: 72px;
     --ui-ctrl-max: 96px;
     --ui-ctrl-row: calc(7 * var(--ui-ctrl-max) + 6 * var(--spacing) * 6);
-    --ui-bar: 224px;
+    --ui-bar: 128px;
     --ui-topbar-h: 58px;
     --ui-id-w: clamp(112px, 16vw, 200px);
     --ui-knob: clamp(54px, 4.2vw, 62px);
