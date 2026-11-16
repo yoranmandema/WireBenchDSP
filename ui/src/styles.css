@@ -740,16 +740,15 @@ input {
 }
 
 /* --- editor ------------------------------------------------------------- */
+/* Spacing and alignment for the editor and its children live in `layout.css`
+   (the scale layer) and `responsive.css` (the breakpoints). What is left here
+   is the visual styling, so the two never disagree about a distance. */
 
 .editor {
   background: linear-gradient(#1a1b21, #14151a);
   border-top: 1px solid var(--line);
-  padding: 14px 22px;
   display: grid;
-  grid-template-columns: 210px 1fr;
-  gap: 24px;
   align-items: center;
-  min-height: 0;
 }
 
 .editor-empty {
@@ -759,26 +758,18 @@ input {
 
 .editor-id {
   display: grid;
-  gap: 3px;
-  align-content: center;
-  justify-items: start;
-  padding-left: 12px;
   border-left: 3px solid var(--cat);
   background: linear-gradient(90deg, var(--cat-soft), transparent 75%);
   border-radius: 0 6px 6px 0;
-  min-height: 96px;
 }
 
 .editor-side {
   display: flex;
-  gap: 6px;
-  margin-top: 6px;
 }
 
 .editor-kind {
   display: flex;
   align-items: center;
-  gap: 5px;
   font-size: 9px;
   letter-spacing: 1.4px;
   color: var(--cat);
@@ -790,14 +781,12 @@ input {
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 8px;
 }
 
 .editor-bypass {
   font-size: 9px;
   color: var(--amber);
   border: 1px solid var(--amber-dim);
-  padding: 1px 5px;
   border-radius: 4px;
   font-weight: 500;
 }
@@ -808,18 +797,7 @@ input {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-/* The controls fill the panel: knobs and selectors wrap and centre, so a block
-   with three params no longer leaves half the bar empty. */
-.editor-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: center;
-  justify-content: center;
-  gap: 14px 26px;
-}
-
 .side-btn {
-  padding: 7px 10px;
   border-radius: 6px;
   font-size: 11px;
   font-weight: 600;
@@ -839,18 +817,12 @@ input {
   background: #2a2318;
 }
 
+/* One knob unit. `layout.css` sets its box (width, gap, inset) and centres the
+   contents; this is the column itself. */
 .knob-unit {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  width: 84px;
-}
-
-/* The end-stop pills hang in the band between the ring and the name (see
-   `.knob-end`), so the name gets extra room above it. */
-.knob-unit .knob-name {
-  margin-top: 5px;
 }
 
 .knob {
@@ -878,12 +850,11 @@ input {
    Each pill is anchored by its inner corner, which sits on the ray through its
    arc end at (ring outer radius 32 + 2px gap) / sqrt(2) = 24px per axis from
    the knob centre — outside the ring, but still hugging it, and far enough from
-   the centreline that the two pills cannot meet. A pill reaches ~6px past its
-   control cell into the 26px column gap between cells, which is what keeps
-   neighbouring controls clear; the unit's extra room below keeps the name clear. */
+   the centreline that the two pills cannot meet. `layout.css` places them: the
+   offset is `--space-6`, and the grid's column gap is the same step, which is
+   what keeps neighbouring controls clear. */
 .knob-end {
   position: absolute;
-  top: calc(50% + 24px);
   font-size: 6.5px;
   line-height: 1;
   color: var(--muted);
@@ -891,7 +862,6 @@ input {
   background: #14151a;
   border: 1px solid var(--line-soft);
   border-radius: 3px;
-  padding: 1px 2px;
   pointer-events: none;
 }
 
@@ -933,13 +903,14 @@ input {
   text-align: center;
 }
 
+/* The value chip: `layout.css` sets its inset, `min-width` only keeps the
+   readout from jittering as the digits change. */
 .knob-value {
   font-size: 10px;
   color: var(--text);
   background: #121318;
   border: 1px solid var(--line-soft);
   border-radius: 4px;
-  padding: 1px 6px;
   min-width: 56px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -950,7 +921,6 @@ input {
 .choice-unit,
 .select-unit {
   display: grid;
-  gap: 5px;
   align-content: center;
   justify-items: center;
 }
@@ -964,7 +934,6 @@ input {
 }
 
 .seg {
-  padding: 8px 11px;
   font-size: 10px;
   font-weight: 600;
   color: var(--muted);
@@ -994,19 +963,15 @@ input {
   background: #121318;
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 7px 10px;
   max-width: 180px;
 }
 
 /* --- toast -------------------------------------------------------------- */
+/* `layout.css` owns where the toast sits and how much room it takes; this is
+   its look. */
 
 .toast {
-  position: fixed;
-  right: 18px;
-  bottom: 228px;
   z-index: 50;
-  max-width: 420px;
-  padding: 9px 14px;
   border-radius: 7px;
   background: #2a1d1d;
   border: 1px solid #5a3535;

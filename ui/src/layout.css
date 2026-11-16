@@ -204,6 +204,7 @@
 /* The pills are 6.5px type in a 1px border; any inner padding would push their
    outer edge into the next cell, so the border hugs the digits. */
 .knob-end {
+  top: calc(50% + var(--space-6));
   padding: 0;
 }
 
