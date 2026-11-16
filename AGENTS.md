@@ -1,8 +1,9 @@
 # Rules for agents working in pedal-dsp
 
 These rules apply to every agent session in this repo, including kanban workers.
-Kanban runs strictly one worker at a time, because every worker shares this one
-working tree. Spend the budget on code that ends up committed.
+Kanban runs one worker at a time. Every card has its own Git worktree under
+`.worktrees/<card id>`, so the user's main checkout and live app never see
+uncommitted worker edits. Spend the budget on code that ends up committed.
 
 ## Roles (the kanban board)
 Your card's assignee says which role you are. Each role runs on a model sized
@@ -23,7 +24,7 @@ for its job, so stay in your lane:
   - assigned to `pedal-ui-builder` if it touches `ui/` (components, styling,
     layout, interaction), or to `pedal-builder` otherwise. Split a mixed change
     into an engine card and a UI card, with the UI card depending on the engine
-    one. Use `workspace_kind: dir`,
+    one. Use `workspace_kind: worktree`,
     `workspace_path: /Users/yoran/Documents/Repos/pedal-dsp`, and the same
     `priority` as your own card;
   - one session of work: roughly 1–4 files, and it must leave the app working;
@@ -50,10 +51,12 @@ for its job, so stay in your lane:
   is a cheap model: the more exact the card, the better the result.
 - If a product decision is needed, block your own card with `needs_input` (see
   below) before creating cards.
-- Finish with `kanban_complete`, not review. The first line of the summary says
-  what will change for the user once the cards are built, e.g. "Planned
-  cross-channel routing: 5 build steps queued". List the card ids in
-  `created_cards`.
+- Finish with `scripts/kanban-land.sh <your-card-id>` to verify the work and
+  fast-forward it into `main`, then call `kanban_complete`, not review. Only
+  after the card lands should its dependent children run; they start from the
+  updated `main`. The first line of the summary says what will change for the
+  user, e.g. "Planned cross-channel routing: 5 build steps queued". List child
+  card IDs in `created_cards`.
 
 ### pedal-builder and pedal-ui-builder
 - Do what the card says, and only that. If the spec turns out to be wrong or
@@ -65,7 +68,8 @@ for its job, so stay in your lane:
   record the remaining steps as a comment on the card, then block with
   `needs_input`. Don't create cards.
 - When done, hand off with `kanban_request_review` and `reviewer:
-  pedal-reviewer`, using the product-owner summary format below.
+  pedal-reviewer`, using the product-owner summary format below. Do not land
+  the branch yourself; it must pass its review first.
 
 ### pedal-reviewer
 - Find the card's commits with `git log --oneline --grep <card id>`, read the
@@ -76,8 +80,10 @@ for its job, so stay in your lane:
   states. A UI card that builds but looks wrong is not done.
 - Fix trivial issues yourself (typos, a missing import, a few lines) and commit
   them. That costs less than another round trip.
-- Approve with `kanban_complete`. Keep the builder's product-owner summary and
-  its "Try it" steps.
+- Approve with `scripts/kanban-land.sh <card-id>` to run the checks and fast-forward
+  the approved commits to `main`, then `kanban_complete`. Keep the builder's
+  product-owner summary and its "Try it" steps.
+- On `kanban_request_changes`, do not land; the same card worktree returns to its builder.
 - Otherwise call `kanban_request_changes` with a numbered list of specific
   fixes. If you are about to request changes on this card for the **second**
   time, first escalate it to a stronger model (either builder):
@@ -85,42 +91,84 @@ for its job, so stay in your lane:
   For a third time, block with `needs_input` instead.
 - **Feature cards** are the user's original request. Their parents are the build
   steps, so they run only after all of those are done. Check the original ask
-  end to end against the code. If it's met, complete the card with a
+  end to end against the code. If it is met, complete the card with a
   product-owner summary of the whole feature. If something is missing, block
   with `needs_input` and list the gaps so the user can send them back through
   Triage.
+- If you make code changes during review, commit and run `scripts/kanban-land.sh`
+  before approving. Never fast-forward code that has not passed its checks.
 
 ### Everyone
 - Work only on your own card.
 - Never run `hermes kanban specify`/`decompose` or reassign cards. Only the
   architect creates cards.
 
+## Worktrees and landing (read before editing)
+
+Every kanban card runs in `.worktrees/<card-id>` on branch `wt/<card-id>`;
+never edit from the main checkout. At session start, run:
+
+```sh
+source scripts/agent-env.sh
+```
+
+This adds Hermes' Node/pnpm to PATH, gives Rust builds a separate shared target
+directory, installs this worktree's `ui/node_modules`, and merges the latest
+`main` into a clean card branch. Each worktree has its own `node_modules` and
+ignored `ui/dist`; nothing generated is committed. Rust builds share
+`~/.cache/pedal-dsp/target` to avoid rebuilding for every card. This cache and
+all worktrees are separate from `target/` and source files in the user's live
+checkout.
+
+Commit verified work to **your card branch** with the card ID in each message,
+for example `ui: clamp knob labels (t_adc96a8c)`. Stage by path. These commits
+are not visible in the user's app until review passes. Do not switch branches or
+run `git checkout` in the main checkout.
+
+**Do not merge or push by hand.** To land approved changes, run
+`scripts/kanban-land.sh <card-id>` from that card's worktree. It checks the
+worktree is clean, merges the latest main, runs Rust/UI checks for changed
+files, and fast-forwards the user's main checkout. It stops without changing
+main if any check fails, main has user edits, or there is a conflict. Fix the
+issue in your worktree and rerun. A failed land is a reason to block with
+`needs_input`, not to force-push or clean the user's tree.
+
+A `request_changes` handoff keeps the same card branch for the builder to fix.
+After a reviewed card is landed, dependent cards start from the updated main.
+
 ## Commit discipline (non-negotiable)
-- Commit to `main` after every verified step. Use small commits with messages in
-  the style `area: what changed (card id)`, for example `ui: clamp knob labels (t_adc96a8c)`.
-- Commit only what you changed for this card. Stage files by path, never
-  `git add -A`, and never commit `.DS_Store`, `.vscode/`, `ui/standalone-tmp/`,
-  `target/`, or `*.wav`.
-- Never leave the tree dirty when you finish, block, or hit a rate limit:
-  - Commit the work that passes the checks below.
-  - If something doesn't pass, `git stash push -m "<card id> wip"` and say so in a
-    kanban comment.
+- Commit to your card's `wt/<card-id>` branch after every verified step.
+  Stage only your paths; never `git add -A`. Include the card ID in each message.
+- Never commit `.DS_Store`, `.vscode/`, `ui/standalone-tmp/`, `target/`,
+  `ui/node_modules/`, `ui/dist/`, or `*.wav`.
+- Do not checkout, reset, clean, or otherwise modify the user's main checkout.
+- If you hit a rate limit or need to block, leave verified commits in your
+  worktree; note the branch/commit in a Kanban comment. Uncommitted work stays
+  isolated in this card's worktree and can be resumed there.
 - Don't rewrite history or force-push.
 
 ## Verify before you commit
-- Rust: `cargo test --workspace --exclude pedal-shell`. It must stay green.
-- UI: `cd ui && pnpm run build`. This typechecks and builds. Commit the rebuilt
-  `ui/dist/` together with the matching `ui/src` change.
+- Rust: from the worktree root run `source scripts/agent-env.sh` first, then
+  `cargo test --workspace --exclude pedal-shell`. It must stay green.
+- UI: from the worktree root run `source scripts/agent-env.sh` first, then
+  `cd ui && pnpm run build`. This typechecks and builds. `ui/dist/` is ignored;
+  never commit generated build output.
 - If you touch the Tauri shell, note that a plain `cargo build` produces a dev
   build that loads Vite's dev URL. A self-contained binary needs
   `--features custom-protocol`.
 
 ## Looking at the UI (UI builders and reviewers)
-Run a private, silent copy of the app on different ports. Never touch 8737 or
-5173, because the user's own app may be using them:
+Do not commit `ui/dist/` or `ui/node_modules/`; they're locally generated and
+ignored. The user's dev server reads the main checkout live, but card branches
+are isolated, so its source changes become visible only after a reviewer runs
+`scripts/kanban-land.sh <card-id>`.
+
+Each UI worktree has its own dev server. Use separate ports (for example
+engine 18737 and Vite 15173); do not stop or reuse the user's ports 8737/5173.
+Source `scripts/agent-env.sh` first, then:
 
 ```sh
-./target/debug/pedal-engine --headless --port 18737        # background; no audio device, output discarded
+"$PEDAL_ENGINE_BIN" --headless --port 18737                    # background; no audio device, output discarded
 cd ui && VITE_ENGINE_URL=ws://127.0.0.1:18737 pnpm exec vite --port 15173 --strictPort   # background
 ```
 

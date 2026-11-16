@@ -40,8 +40,8 @@ fi
 source "$wt/scripts/agent-env.sh" >/dev/null
 if grep -q -E '(\.rs|Cargo\.(toml|lock))$' <<<"$changed"; then
   echo "kanban-land: Rust changed: cargo test"
-  cargo test --workspace --exclude pedal-shell -q >/tmp/kanban-land-$id.log 2>&1 \
-    || { tail -30 /tmp/kanban-land-$id.log; die "cargo test failed (full log: /tmp/kanban-land-$id.log)"; }
+  cargo test --workspace --exclude pedal-shell -q >"$TMPDIR/kanban-land-$id.log" 2>&1 \
+    || { tail -30 "$TMPDIR/kanban-land-$id.log"; die "cargo test failed (full log: $TMPDIR/kanban-land-$id.log)"; }
 fi
 if grep -q '^ui/' <<<"$changed"; then
   echo "kanban-land: UI changed: typecheck + build"
