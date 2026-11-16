@@ -156,6 +156,44 @@ fn invalid_routings_are_refused() {
     assert_eq!(rig.list_routings().len(), 1, "refused routings must not enter the list");
 }
 
+/// Deleting a block takes its routings with it: a routing whose endpoint is
+/// gone cannot be honoured, so it must not linger in the list or in the save.
+#[test]
+fn deleting_a_block_prunes_its_routings() {
+    let (mut rig, amp, delay, reverb) = rig_with_two_channels();
+    let (a_to_r, a_to_r_dest) = route(("ch1", &amp), ("ch2", &reverb));
+    let _ = rig.create_routing(&a_to_r, &a_to_r_dest).unwrap();
+    // A second routing that does not touch the deleted block survives.
+    let delay_to_reverb = (
+        RoutingEndpoint::new("ch1", delay.clone()),
+        RoutingEndpoint::new("ch2", reverb.clone()),
+    );
+    let keep = rig.create_routing(&delay_to_reverb.0, &delay_to_reverb.1).unwrap();
+
+    rig.remove_block("ch1", &amp);
+    assert!(rig.routing("route1").is_none(), "the routing into the deleted block is gone");
+    assert_eq!(rig.list_routings().len(), 1);
+    assert_eq!(rig.list_routings()[0].id, keep);
+
+    // The survivor round trips, and the pruned one stays gone.
+    let back = Rig::from_doc(&rig.to_doc());
+    assert_eq!(back.list_routings().len(), 1);
+    assert_eq!(back.list_routings()[0].id, keep);
+}
+
+/// Reordering a strip must not disturb routings: they name block ids, not slots.
+#[test]
+fn reordering_a_channel_keeps_its_routings() {
+    let (mut rig, amp, delay, reverb) = rig_with_two_channels();
+    let (source, dest) = route(("ch1", &amp), ("ch2", &reverb));
+    let id = rig.create_routing(&source, &dest).unwrap();
+
+    rig.move_block("ch1", &delay, 0);
+    let r = rig.routing(&id).expect("routing survives a reorder");
+    assert_eq!(r.source, source);
+    assert_eq!(r.dest, dest);
+}
+
 #[test]
 fn load_drops_invalid_routings() {
     let (mut rig, amp, _delay, reverb) = rig_with_two_channels();

@@ -158,15 +158,20 @@ A routing is realised at **compile time**, never by rewriting the saved model:
   `app::ui::rebuild` so the egui dev app matches).
 * For each enabled routing, in list order:
   1. find the edge currently driving `dest.block`'s `in` port;
-  2. insert a `util.mix` node id `rt<{routing.id>}` (params `a = 1.0`,
+  2. insert a `util.mix` node id `__routing_{routing.id}` (params `a = 1.0`,
      `b = 1.0`);
-  3. if `gain != 1.0`, insert a `util.gain` node id `rg<{routing.id>}` with
-     `gain` (dB) `= 20 * log10(clamp(gain, 1e-3, 15.85))`;
+  3. if `gain != 1.0`, insert a `util.gain` node id `__routing_gain_{routing.id}`
+     with `gain` (dB) `= 20 * log10(clamp(gain, 1e-3, 15.85))`;
   4. disconnect `dest.block.in`, then wire
-     `old driver → rt.in_a`, `source.block.out → rg.in` (or `→ rt.in_b` when
-     unity), `rg.out → rt.in_b`, `rt.out → dest.block.in`.
+     `old driver → mix.in_a`, `source.block.out → gain.in` (or `→ mix.in_b` when
+     unity), `gain.out → mix.in_b`, `mix.out → dest.block.in`.
   Chaining is automatic: a second routing into the same block finds the first
   mix as the current driver and nests. Deterministic order = `routings` order.
+  The `__routing_` / `__routing_gain_` prefixes are derived from the reserved
+  `__master` / `__split` convention and cannot collide with a block id (block
+  ids come from the palette's display names, which never start with `__`);
+  `apply_routings` still returns an error rather than panicking if a node id is
+  already taken.
 * `Graph` needs one new method: `disconnect_input(node, port)` (mirror of
   `Doc::disconnect_input`). Nothing else in `dsp-graph` changes.
 * Disabled routing ⇒ no node, no edge: the source returns to its original
