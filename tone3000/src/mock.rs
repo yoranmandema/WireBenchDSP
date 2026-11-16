@@ -80,9 +80,7 @@ pub fn ok_json(url: &str, body: impl Into<String>) -> Response {
 }
 
 pub fn with_header(mut response: Response, name: &str, value: &str) -> Response {
-    response
-        .headers
-        .push((name.to_string(), value.to_string()));
+    response.headers.push((name.to_string(), value.to_string()));
     response
 }
 

@@ -18,8 +18,8 @@
 //! and counts are computed over the result set filtered by the query and every
 //! *other* facet (standard faceted search), before paging.
 
-use std::collections::HashMap;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -145,10 +145,9 @@ impl Query {
 
         let sort = match obj.get("sort") {
             None | Some(Value::Null) => None,
-            Some(v) => Some(
-                serde_json::from_value::<Sort>(v.clone())
-                    .map_err(|e| format!("sort: {e}"))?,
-            ),
+            Some(v) => {
+                Some(serde_json::from_value::<Sort>(v.clone()).map_err(|e| format!("sort: {e}"))?)
+            }
         };
 
         Ok(Self {
@@ -355,15 +354,11 @@ fn search_score(record: &ModelRecord, tokens: &[String]) -> Option<u32> {
 
     let mut total = 0;
     for token in tokens {
-        match fields
+        total += fields
             .iter()
             .filter(|(_, field)| field.contains(token.as_str()))
             .map(|(weight, _)| *weight)
-            .max()
-        {
-            Some(weight) => total += weight,
-            None => return None,
-        }
+            .max()?;
     }
     Some(total)
 }
@@ -405,16 +400,18 @@ fn state_matches(record: &ModelRecord, value: State) -> bool {
 fn matches_filters(record: &ModelRecord, query: &Query, skip: Option<Facet>) -> bool {
     let metadata = &record.metadata;
 
-    if skip != Some(Facet::Kind)
-        && !query.kinds.is_empty()
-        && !query.kinds.contains(&metadata.kind)
+    if skip != Some(Facet::Kind) && !query.kinds.is_empty() && !query.kinds.contains(&metadata.kind)
     {
         return false;
     }
 
     if skip != Some(Facet::Manufacturer) && !query.manufacturers.is_empty() {
-        let manufacturer = metadata.manufacturer.as_deref().map(fold).unwrap_or_default();
-        if !query.manufacturers.iter().any(|m| *m == manufacturer) {
+        let manufacturer = metadata
+            .manufacturer
+            .as_deref()
+            .map(fold)
+            .unwrap_or_default();
+        if !query.manufacturers.contains(&manufacturer) {
             return false;
         }
     }
@@ -454,11 +451,7 @@ fn matches_filters(record: &ModelRecord, query: &Query, skip: Option<Facet>) -> 
 // Sorting
 // ---------------------------------------------------------------------------
 
-fn compare(
-    a: &(u32, &ModelRecord),
-    b: &(u32, &ModelRecord),
-    sort: Sort,
-) -> Ordering {
+fn compare(a: &(u32, &ModelRecord), b: &(u32, &ModelRecord), sort: Sort) -> Ordering {
     let ordering = match sort {
         Sort::Relevance => b.0.cmp(&a.0),
         Sort::Name => fold(&a.1.metadata.name).cmp(&fold(&b.1.metadata.name)),
@@ -514,7 +507,9 @@ fn compute_facets(index: &Index, query: &Query, tokens: &[String]) -> Facets {
                 .collect()
         }),
         cab_ir: facet_counts(index, query, tokens, Facet::CabIr, cab_ir_values),
-        tags: facet_counts(index, query, tokens, Facet::Tags, |r| r.metadata.tags.clone()),
+        tags: facet_counts(index, query, tokens, Facet::Tags, |r| {
+            r.metadata.tags.clone()
+        }),
         format: facet_counts(index, query, tokens, Facet::Format, |r| {
             vec![r.metadata.format.as_wire().to_string()]
         }),
@@ -646,8 +641,8 @@ mod tests {
                 name: name.to_string(),
                 tone_title: Some(name.to_string()),
                 author: Author {
-                    name: "AmalgamAudio".to_string(),
-                    username: Some("amalgamaudio".to_string()),
+                    name: format!("Author {id}"),
+                    username: Some(format!("author_{id}")),
                     url: None,
                     avatar_url: None,
                     verified: Some(true),
@@ -683,9 +678,8 @@ mod tests {
         record.local = Some(LocalState {
             file_name: format!("{}.nam", record.id),
             size_bytes: 10,
-            checksum:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_string(),
+            checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             downloaded_at: downloaded_at.to_string(),
             stale,
         });
@@ -704,17 +698,19 @@ mod tests {
         let mut other = record("t3k:5", "Mesa Car Réctifier", Kind::Other, None);
         other.metadata.manufacturer = Some("Mesa Boogie".to_string());
 
-        let variants: [(&str, &str, &str); 5] = [
-            ("Dual Rectifier", "high gain", "metal"),
-            ("Super Reverb", "clean", "blackface"),
-            ("OD808", "overdrive", "boost"),
-            ("4x12", "cabinet", "ir"),
-            ("Réctifier", "rectifier", "high gain"),
+        let variants: [(&str, &str, &str, &str); 5] = [
+            ("Mesa Boogie", "Dual Rectifier", "high gain", "metal"),
+            ("Fender", "Super Reverb", "clean", "blackface"),
+            ("Maxon", "OD808", "overdrive", "boost"),
+            ("OwnHammer", "4x12", "cabinet", "ir"),
+            ("Mesa Boogie", "Réctifier", "rectifier", "high gain"),
         ];
-        for (record, (model, tag_a, tag_b)) in [&mut mesa, &mut fender, &mut pedal, &mut ir, &mut other]
-            .into_iter()
-            .zip(variants)
+        for (record, (maker, model, tag_a, tag_b)) in
+            [&mut mesa, &mut fender, &mut pedal, &mut ir, &mut other]
+                .into_iter()
+                .zip(variants)
         {
+            record.metadata.manufacturer = Some(maker.to_string());
             record.metadata.gear_model = Some(model.to_string());
             record.metadata.tags = vec![tag_a.to_string(), tag_b.to_string()];
         }
@@ -761,8 +757,12 @@ mod tests {
             query: Some("mesa boogie".to_string()),
             ..Query::default()
         };
-        // "mesa boogie" matches the manufacturer; every record has that maker.
-        assert_eq!(list_models(&index(), &q).total, 5);
+        // Both tokens must match at least one field: t3k:1 and t3k:5 carry
+        // "Mesa Boogie" as manufacturer, the other three do not.
+        let page = list_models(&index(), &q);
+        assert_eq!(page.total, 2);
+        assert!(ids(&page).contains(&"t3k:1"));
+        assert!(ids(&page).contains(&"t3k:5"));
 
         let q = Query {
             query: Some("rectif".to_string()),
@@ -774,23 +774,26 @@ mod tests {
         assert!(ids(&page).contains(&"t3k:1"));
         assert!(ids(&page).contains(&"t3k:5"));
 
+        // A token that only matches one field (gear_model, weight 5) is enough.
+        let q = Query {
+            query: Some("od808".to_string()),
+            ..Query::default()
+        };
+        assert_eq!(list_models(&index(), &q).total, 1);
+
         let q = Query {
             query: Some("mesa od808".to_string()),
             ..Query::default()
         };
-        // AND across tokens: t3k:1 has "mesa" but not "od808".
+        // AND across tokens: no record has both "mesa" and "od808".
         assert_eq!(list_models(&index(), &q).total, 0);
     }
 
     #[test]
     fn relevance_ranks_name_above_description() {
         let mut idx = index();
-        idx.models.push(record(
-            "t3k:6",
-            "Something Else",
-            Kind::Pedal,
-            Some(false),
-        ));
+        idx.models
+            .push(record("t3k:6", "Something Else", Kind::Pedal, Some(false)));
         let last = idx.models.last_mut().unwrap();
         last.metadata.description = Some("mentions mesa boogie in passing".to_string());
         idx.count = idx.models.len();
@@ -911,14 +914,15 @@ mod tests {
         let amp = page.facets.kind.iter().find(|f| f.value == "amp").unwrap();
         assert_eq!(amp.count, 2);
 
-        // The manufacturer facet honours the kind filter: both amps are Mesa.
+        // The manufacturer facet honours the kind filter: only the Mesa amp
+        // remains, so the Mesa Boogie count is 1.
         let mesa = page
             .facets
             .manufacturer
             .iter()
             .find(|f| f.value == "Mesa Boogie")
             .unwrap();
-        assert_eq!(mesa.count, 2);
+        assert_eq!(mesa.count, 1);
     }
 
     #[test]
@@ -950,7 +954,10 @@ mod tests {
         assert_eq!(list_models(&idx, &q).page_size, MAX_PAGE_SIZE);
 
         // A missing page size defaults to 100.
-        assert_eq!(list_models(&idx, &Query::default()).page_size, DEFAULT_PAGE_SIZE);
+        assert_eq!(
+            list_models(&idx, &Query::default()).page_size,
+            DEFAULT_PAGE_SIZE
+        );
     }
 
     #[test]
@@ -962,7 +969,11 @@ mod tests {
             ..Query::default()
         };
         let page = list_models(&idx, &q);
-        let names: Vec<&str> = page.models.iter().map(|r| r.metadata.name.as_str()).collect();
+        let names: Vec<&str> = page
+            .models
+            .iter()
+            .map(|r| r.metadata.name.as_str())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -976,7 +987,10 @@ mod tests {
 
         // Default with no query is most-downloaded; all ties here, so id order.
         let page = list_models(&idx, &Query::default());
-        assert_eq!(ids(&page), vec!["t3k:1", "t3k:2", "t3k:3", "t3k:4", "t3k:5"]);
+        assert_eq!(
+            ids(&page),
+            vec!["t3k:1", "t3k:2", "t3k:3", "t3k:4", "t3k:5"]
+        );
     }
 
     #[test]
@@ -1037,27 +1051,5 @@ mod tests {
         assert!(value.get("facets").is_some());
         assert!(value["facets"].get("cabIr").is_some());
         assert!(value["facets"].get("cab_ir").is_none());
-    }
-
-    #[test]
-    fn zz_probe2() {
-        let idx = index();
-        let q = Query { query: Some("mesa od808".into()), ..Query::default() };
-        println!("mesa od808 total={}", list_models(&idx, &q).total);
-        for r in &idx.models {
-            println!("  {} name={:?} gear_model={:?} tags={:?}", r.id, r.metadata.name, r.metadata.gear_model, r.metadata.tags);
-        }
-        let mut idx = index();
-        let mut extra = idx.models[0].clone();
-        extra.id = "t3k:6".into();
-        extra.metadata.name = "Something Else".into();
-        extra.metadata.description = Some("mentions mesa boogie in passing".into());
-        extra.metadata.tone_title = Some("Something Else".into());
-        extra.metadata.gear_model = Some("Other Model".into());
-        idx.models.push(extra);
-        idx.count = idx.models.len();
-        let q = Query { query: Some("mesa".into()), sort: Some(Sort::Relevance), ..Query::default() };
-        let p = list_models(&idx, &q);
-        println!("relevance ids={:?}", ids(&p));
     }
 }

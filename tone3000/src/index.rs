@@ -270,8 +270,8 @@ impl Index {
 fn validator() -> &'static jsonschema::Validator {
     static VALIDATOR: OnceLock<jsonschema::Validator> = OnceLock::new();
     VALIDATOR.get_or_init(|| {
-        let schema: Value = serde_json::from_str(INDEX_SCHEMA)
-            .expect("the embedded index schema is valid JSON");
+        let schema: Value =
+            serde_json::from_str(INDEX_SCHEMA).expect("the embedded index schema is valid JSON");
         // `format` is an assertion here, matching the schema's own review
         // (a `uri` or `date-time` that does not parse is rejected, not merely
         // annotated). The schema is embedded, so no retrieval is involved.
@@ -296,9 +296,20 @@ pub fn validate_value(value: &Value) -> Result<(), SchemaError> {
 }
 
 /// Validate a typed index against the embedded schema.
+///
+/// The schema cannot express cross-field equality, so the §9.3 invariant
+/// `count == models.len()` is checked here as well.
 pub fn validate_index(index: &Index) -> Result<(), SchemaError> {
     let value = serde_json::to_value(index)?;
-    validate_value(&value)
+    validate_value(&value)?;
+    if index.count != index.models.len() {
+        return Err(SchemaError::Invalid(format!(
+            "count is {} but models has {} record(s)",
+            index.count,
+            index.models.len()
+        )));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +394,10 @@ pub fn build_record(
         ApiFormat::Other => return None,
     };
     let (kind, with_cab) = derive_kind(tone.gear, tone.format);
-    let variant = derive_variant(model.architecture_version.as_deref(), model.model_url.as_deref());
+    let variant = derive_variant(
+        model.architecture_version.as_deref(),
+        model.model_url.as_deref(),
+    );
 
     let name = non_empty_opt(model.name.as_deref())
         .or_else(|| non_empty_opt(tone.title.as_deref()))?
@@ -417,12 +431,12 @@ pub fn build_record(
         .or_else(|| model.meta_string("manufacturer"))
         .and_then(non_empty)
         .map(str::to_string)
-        .or_else(|| first_make.clone());
+        .or(first_make.clone());
     let gear_model = model
         .meta_string("gear_model")
         .and_then(non_empty)
         .map(str::to_string)
-        .or_else(|| first_make);
+        .or(first_make);
 
     let mut tags: Vec<String> = tone
         .tags
@@ -607,7 +621,8 @@ pub fn write_index(paths: &Paths, index: &Index) -> Result<(), Error> {
 /// Which tone listing the index is built from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Source {
-    /// Public/bounded feeds: `trending` + `latest`. Free-tier safe.
+    /// Bounded feeds: `trending` (public) + `latest` (Bearer). Permitted by the
+    /// free-tier terms, but `latest` still needs the user's credential.
     #[default]
     FreeFeeds,
     /// Full `/tones/search` walk. Requires a commercial TONE3000 agreement
@@ -689,7 +704,10 @@ impl<'a> IndexBuilder<'a> {
             for architecture in architectures_for(tone) {
                 let query = vec![
                     ("tone_id".to_string(), tone.id.to_string()),
-                    ("architecture".to_string(), architecture.as_str().to_string()),
+                    (
+                        "architecture".to_string(),
+                        architecture.as_str().to_string(),
+                    ),
                 ];
                 let models: Vec<Model> = self
                     .client
@@ -727,10 +745,11 @@ impl<'a> IndexBuilder<'a> {
                 tones.extend(self.client.get_tone_feed("tones/latest", &[]).await?);
                 Ok(tones)
             }
-            Source::Catalog => self
-                .client
-                .fetch_all_pages("tones/search", &[], self.config.search_page_size)
-                .await,
+            Source::Catalog => {
+                self.client
+                    .fetch_all_pages("tones/search", &[], self.config.search_page_size)
+                    .await
+            }
         }
     }
 }
@@ -833,8 +852,8 @@ mod tests {
 
     #[test]
     fn built_record_validates_against_the_schema() {
-        let record = build_record("t3k", &tone(), &model(), "2026-11-15T09:00:00Z")
-            .expect("record builds");
+        let record =
+            build_record("t3k", &tone(), &model(), "2026-11-15T09:00:00Z").expect("record builds");
         let index = merge(None, vec![record], "2026-11-15T09:00:00Z");
         validate_index(&index).expect("built index validates");
         assert_eq!(index.models[0].metadata.kind, Kind::Outboard);
@@ -854,7 +873,10 @@ mod tests {
             derive_kind(Some(Gear::AmpCab), Some(Nam)),
             (Kind::Amp, Some(true))
         );
-        assert_eq!(derive_kind(Some(Gear::Amp), Some(Nam)), (Kind::Amp, Some(false)));
+        assert_eq!(
+            derive_kind(Some(Gear::Amp), Some(Nam)),
+            (Kind::Amp, Some(false))
+        );
         assert_eq!(
             derive_kind(Some(Gear::Pedal), Some(Nam)),
             (Kind::Pedal, Some(false))
@@ -863,9 +885,15 @@ mod tests {
             derive_kind(Some(Gear::FullRig), Some(Nam)),
             (Kind::Fullrig, Some(true))
         );
-        assert_eq!(derive_kind(Some(Gear::Space), Some(Ir)), (Kind::Ir, Some(false)));
+        assert_eq!(
+            derive_kind(Some(Gear::Space), Some(Ir)),
+            (Kind::Ir, Some(false))
+        );
         // Contradictory pair is never presented as a real kind.
-        assert_eq!(derive_kind(Some(Gear::Pedal), Some(Ir)), (Kind::Other, None));
+        assert_eq!(
+            derive_kind(Some(Gear::Pedal), Some(Ir)),
+            (Kind::Other, None)
+        );
         assert_eq!(derive_kind(None, Some(Ir)), (Kind::Ir, Some(false)));
         assert_eq!(derive_kind(None, Some(Nam)), (Kind::Other, None));
         assert_eq!(derive_kind(None, None), (Kind::Other, None));
@@ -900,7 +928,7 @@ mod tests {
         let refreshed = merge(Some(&existing), vec![unchanged], "2026-11-15T10:00:00Z");
         let r = &refreshed.models[0];
         assert_eq!(r.local_path.as_deref(), Some("t3k/28199/379978_a2.nam"));
-        assert_eq!(r.local.as_ref().unwrap().stale, false);
+        assert!(!r.local.as_ref().unwrap().stale);
 
         // Different hash: still carried forward, now stale.
         let mut changed = model();
@@ -1063,7 +1091,12 @@ mod tests {
             let id = 100 + tone_id.parse::<u64>().unwrap_or(0);
             return Ok(mock::ok_json(
                 &url,
-                mock::paginated(&[model_json(id, tone_id.parse().unwrap_or(0), &architecture)], 1, 300, 1),
+                mock::paginated(
+                    &[model_json(id, tone_id.parse().unwrap_or(0), &architecture)],
+                    1,
+                    300,
+                    1,
+                ),
             ));
         }
         Err(TransportError::Network(format!("unexpected URL {url}")))
@@ -1117,26 +1150,35 @@ mod tests {
         let paths = Paths::from_home(&home);
 
         // A previous good generation.
-        let previous = merge(None, vec![build_record("t3k", &tone(), &model(), "2026-11-15T09:00:00Z").unwrap()], "2026-11-15T09:00:00Z");
+        let previous = merge(
+            None,
+            vec![build_record("t3k", &tone(), &model(), "2026-11-15T09:00:00Z").unwrap()],
+            "2026-11-15T09:00:00Z",
+        );
         write_index(&paths, &previous).expect("seed writes");
         let before = std::fs::read_to_string(&paths.index_file).unwrap();
 
         // Fail the models call for tone 2.
         let handler = Arc::new(|request: &Request| {
             if request.url.contains("/models") {
-                if query_value(&request, "tone_id").as_deref() == Some("2") {
+                if query_value(request, "tone_id").as_deref() == Some("2") {
                     return Ok(mock::response(
-                        &request.url,
+                        request.url.as_str(),
                         500,
                         serde_json::json!({"error": "boom"}).to_string(),
                     ));
                 }
-                let tone_id = query_value(&request, "tone_id").unwrap_or_default();
-                let architecture = query_value(&request, "architecture").unwrap_or_default();
+                let tone_id = query_value(request, "tone_id").unwrap_or_default();
+                let architecture = query_value(request, "architecture").unwrap_or_default();
                 let id = 100 + tone_id.parse::<u64>().unwrap_or(0);
                 return Ok(mock::ok_json(
-                    &request.url,
-                    mock::paginated(&[model_json(id, tone_id.parse().unwrap_or(0), &architecture)], 1, 300, 1),
+                    request.url.as_str(),
+                    mock::paginated(
+                        &[model_json(id, tone_id.parse().unwrap_or(0), &architecture)],
+                        1,
+                        300,
+                        1,
+                    ),
                 ));
             }
             free_feeds_handler(request)
@@ -1144,8 +1186,17 @@ mod tests {
         let (client, _transport) = client_with(handler);
         let builder = IndexBuilder::new(&client, RefreshConfig::default());
 
-        let error = builder.refresh(&paths).await.expect_err("refresh must fail");
-        assert!(matches!(error, Error::Api(crate::client::Error::Http { status: 500, .. })), "{error:?}");
+        let error = builder
+            .refresh(&paths)
+            .await
+            .expect_err("refresh must fail");
+        assert!(
+            matches!(
+                error,
+                Error::Api(crate::client::Error::Http { status: 500, .. })
+            ),
+            "{error:?}"
+        );
 
         // The old index is untouched, and no temp file is left behind.
         let after = std::fs::read_to_string(&paths.index_file).unwrap();
@@ -1191,7 +1242,7 @@ mod tests {
 
         let handler = Arc::new(|request: &Request| {
             if request.url.contains("tones/search") {
-                let page = query_value(&request, "page")
+                let page = query_value(request, "page")
                     .and_then(|v| v.parse::<u32>().ok())
                     .unwrap_or(1);
                 let tones = if page == 1 {
@@ -1200,7 +1251,7 @@ mod tests {
                     vec![tone_json(3, 1)]
                 };
                 return Ok(mock::ok_json(
-                    &request.url,
+                    request.url.as_str(),
                     mock::paginated(&tones, page, 2, 3),
                 ));
             }
@@ -1258,20 +1309,26 @@ mod tests {
                 let mut model = model_json(379978, 28199, "2");
                 model["content_hash"] = serde_json::json!("nam-content-v1:changed");
                 return Ok(mock::ok_json(
-                    &request.url,
+                    request.url.as_str(),
                     mock::paginated(&[model], 1, 300, 1),
                 ));
             }
             if request.url.contains("tones/trending") {
-                return Ok(mock::ok_json(&request.url, mock::tone_list(&[tone()])));
+                return Ok(mock::ok_json(
+                    request.url.as_str(),
+                    mock::tone_list(&[tone()]),
+                ));
             }
             if request.url.contains("tones/latest") {
                 return Ok(mock::ok_json(
-                    &request.url,
+                    request.url.as_str(),
                     mock::tone_list(&Vec::<crate::api::Tone>::new()),
                 ));
             }
-            Err(TransportError::Network(format!("unexpected URL {}", request.url)))
+            Err(TransportError::Network(format!(
+                "unexpected URL {}",
+                request.url
+            )))
         });
         let (client, _transport) = client_with(handler);
         let outcome = IndexBuilder::new(&client, RefreshConfig::default())
@@ -1281,8 +1338,7 @@ mod tests {
         assert_eq!(outcome.count, 1);
 
         let loaded = load_index(&paths).unwrap().unwrap();
-        let record = loaded.find("t3k:379978").expect("record survives")
-            as &ModelRecord;
+        let record = loaded.find("t3k:379978").expect("record survives") as &ModelRecord;
         assert_eq!(
             record.local_path.as_deref(),
             Some("t3k/28199/379978_a2.nam"),
@@ -1316,7 +1372,10 @@ mod tests {
         // local_path without local (or the reverse) must be rejected.
         let mut bad = index.clone();
         bad.models[0].local_path = Some("t3k/1/2_a2.nam".to_string());
-        assert!(validate_index(&bad).is_err(), "local_path without local accepted");
+        assert!(
+            validate_index(&bad).is_err(),
+            "local_path without local accepted"
+        );
 
         // count must match models.length.
         let mut bad = index;

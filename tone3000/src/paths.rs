@@ -138,9 +138,7 @@ fn pedal_models_override(home: &Path) -> PathBuf {
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .filter(|v| !v.trim().is_empty())
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
 #[cfg(test)]

@@ -180,6 +180,7 @@ impl Serialize for Pairs {
 /// Production transport backed by `reqwest` + `rustls` (ring provider).
 pub struct ReqwestTransport {
     client: reqwest::Client,
+    timeout: Duration,
 }
 
 impl ReqwestTransport {
@@ -190,7 +191,7 @@ impl ReqwestTransport {
             .user_agent(concat!("pedal-tone3000/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| Error::Config(format!("failed to build the HTTP client: {e}")))?;
-        Ok(Self { client })
+        Ok(Self { client, timeout })
     }
 }
 
@@ -229,7 +230,10 @@ impl Transport for ReqwestTransport {
             builder = builder.body(body.clone());
         }
 
-        let resp = builder.send().await.map_err(map_reqwest_error)?;
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| map_reqwest_error(e, self.timeout))?;
         let status = resp.status().as_u16();
         let headers = resp
             .headers()
@@ -243,7 +247,7 @@ impl Transport for ReqwestTransport {
             .collect();
         let body = resp.text().await.map_err(|e| {
             if e.is_timeout() {
-                TransportError::Timeout(Duration::from_secs(0))
+                TransportError::Timeout(self.timeout)
             } else {
                 TransportError::Network(e.to_string())
             }
@@ -257,13 +261,9 @@ impl Transport for ReqwestTransport {
     }
 }
 
-fn map_reqwest_error(e: reqwest::Error) -> TransportError {
+fn map_reqwest_error(e: reqwest::Error, timeout: Duration) -> TransportError {
     if e.is_timeout() {
-        TransportError::Timeout(Duration::from_secs(0))
-    } else if e.is_connect() {
-        TransportError::Network(e.to_string())
-    } else if e.is_request() {
-        TransportError::Network(e.to_string())
+        TransportError::Timeout(timeout)
     } else {
         TransportError::Network(e.to_string())
     }
@@ -306,7 +306,10 @@ impl RetryPolicy {
         let exponent = attempt.saturating_sub(1).min(6);
         // `Duration::saturating_mul` takes a u32 factor, so the shift is capped.
         let factor = 1u32 << exponent;
-        let exponential = self.initial_delay.saturating_mul(factor).min(self.max_delay);
+        let exponential = self
+            .initial_delay
+            .saturating_mul(factor)
+            .min(self.max_delay);
         let jittered = if self.jitter {
             apply_jitter(exponential, attempt)
         } else {
@@ -526,8 +529,11 @@ impl Client {
                                 message: error_message(&resp),
                             });
                         }
-                        sleep(self.retry.delay_for(attempt, parse_retry_after_response(&resp)))
-                            .await;
+                        sleep(
+                            self.retry
+                                .delay_for(attempt, parse_retry_after_response(&resp)),
+                        )
+                        .await;
                         continue;
                     }
                     return Err(Error::Http {
@@ -567,10 +573,7 @@ impl Client {
         loop {
             let wait = {
                 // Read-only lock: only the second block below takes a mutable one.
-                let guard = self
-                    .last_request
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let guard = self.last_request.lock().unwrap_or_else(|e| e.into_inner());
                 match *guard {
                     Some(last) => {
                         let elapsed = last.elapsed();
@@ -586,10 +589,7 @@ impl Client {
             match wait {
                 Some(d) => sleep(d).await,
                 None => {
-                    let mut guard = self
-                        .last_request
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
+                    let mut guard = self.last_request.lock().unwrap_or_else(|e| e.into_inner());
                     *guard = Some(Instant::now());
                     return;
                 }
@@ -730,18 +730,12 @@ pub fn parse_retry_after(value: &str) -> Option<Duration> {
     if let Ok(secs) = value.parse::<u64>() {
         return Some(Duration::from_secs(secs));
     }
-    let parsed = time::OffsetDateTime::parse(
-        value,
-        &time::format_description::well_known::Rfc2822,
-    )
-    .or_else(|_| {
-        // IMF-fixdate, e.g. "Wed, 21 Oct 2015 07:28:00 GMT".
-        let normalized = value.replace("GMT", "+00:00");
-        time::OffsetDateTime::parse(
-            &normalized,
-            &time::format_description::well_known::Rfc3339,
-        )
-    });
+    let parsed = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc2822)
+        .or_else(|_| {
+            // IMF-fixdate, e.g. "Wed, 21 Oct 2015 07:28:00 GMT".
+            let normalized = value.replace("GMT", "+00:00");
+            time::OffsetDateTime::parse(&normalized, &time::format_description::well_known::Rfc3339)
+        });
     match parsed {
         Ok(dt) => {
             let now = time::OffsetDateTime::now_utc();
@@ -751,10 +745,7 @@ pub fn parse_retry_after(value: &str) -> Option<Duration> {
             if delta.is_negative() {
                 return Some(Duration::ZERO);
             }
-            Some(
-                std::time::Duration::try_from(delta)
-                    .unwrap_or(std::time::Duration::ZERO),
-            )
+            Some(std::time::Duration::try_from(delta).unwrap_or(std::time::Duration::ZERO))
         }
         Err(_) => None,
     }
@@ -779,10 +770,7 @@ mod tests {
 
     /// A client backed by a scripted transport, plus the transport so the test
     /// can inspect what was sent.
-    fn scripted(
-        responses: Vec<Scripted>,
-        retry: RetryPolicy,
-    ) -> (Client, MockTransport) {
+    fn scripted(responses: Vec<Scripted>, retry: RetryPolicy) -> (Client, MockTransport) {
         let transport = MockTransport::script(responses);
         let client = Client::new(
             Arc::new(transport.clone()),
@@ -904,10 +892,7 @@ mod tests {
             .fetch_all_pages("models", &[], 2)
             .await
             .expect("walk succeeds");
-        assert_eq!(
-            all,
-            vec![json!(1), json!(2), json!(3), json!(4), json!(5)]
-        );
+        assert_eq!(all, vec![json!(1), json!(2), json!(3), json!(4), json!(5)]);
 
         let requests = transport.requests();
         assert_eq!(requests.len(), 3);
@@ -926,8 +911,10 @@ mod tests {
             ))],
             fast_retry(1),
         );
-        let all: Vec<serde_json::Value> =
-            client.fetch_all_pages("models", &[], 25).await.expect("walk succeeds");
+        let all: Vec<serde_json::Value> = client
+            .fetch_all_pages("models", &[], 25)
+            .await
+            .expect("walk succeeds");
         assert!(all.is_empty());
         assert_eq!(transport.requests().len(), 1);
     }
@@ -1021,7 +1008,11 @@ mod tests {
                 }
                 other => panic!("expected Auth, got {other:?}"),
             }
-            assert_eq!(transport.requests().len(), 1, "auth failures are not retried");
+            assert_eq!(
+                transport.requests().len(),
+                1,
+                "auth failures are not retried"
+            );
         }
     }
 
@@ -1029,14 +1020,25 @@ mod tests {
     async fn rate_limit_retries_with_backoff_then_succeeds() {
         let (client, transport) = scripted(
             vec![
-                Ok(mock::response("u", 429, json!({"error": "slow down"}).to_string())),
-                Ok(mock::response("u", 429, json!({"error": "slow down"}).to_string())),
+                Ok(mock::response(
+                    "u",
+                    429,
+                    json!({"error": "slow down"}).to_string(),
+                )),
+                Ok(mock::response(
+                    "u",
+                    429,
+                    json!({"error": "slow down"}).to_string(),
+                )),
                 Ok(mock::ok_json("u", json!({"ok": true}).to_string())),
             ],
             fast_retry(4),
         );
         let started = Instant::now();
-        let response = client.get_raw("user", &[]).await.expect("third attempt works");
+        let response = client
+            .get_raw("user", &[])
+            .await
+            .expect("third attempt works");
         assert_eq!(response.status, 200);
         assert_eq!(transport.requests().len(), 3);
         // 1 ms + 2 ms of exponential backoff.
@@ -1047,9 +1049,21 @@ mod tests {
     async fn rate_limit_exhausts_the_budget() {
         let (client, transport) = scripted(
             vec![
-                Ok(mock::response("u", 429, json!({"error": "slow down"}).to_string())),
-                Ok(mock::response("u", 429, json!({"error": "slow down"}).to_string())),
-                Ok(mock::response("u", 429, json!({"error": "slow down"}).to_string())),
+                Ok(mock::response(
+                    "u",
+                    429,
+                    json!({"error": "slow down"}).to_string(),
+                )),
+                Ok(mock::response(
+                    "u",
+                    429,
+                    json!({"error": "slow down"}).to_string(),
+                )),
+                Ok(mock::response(
+                    "u",
+                    429,
+                    json!({"error": "slow down"}).to_string(),
+                )),
             ],
             fast_retry(3),
         );
@@ -1078,7 +1092,10 @@ mod tests {
             fast_retry(2),
         );
         let started = Instant::now();
-        client.get_raw("user", &[]).await.expect("second attempt works");
+        client
+            .get_raw("user", &[])
+            .await
+            .expect("second attempt works");
         assert!(
             started.elapsed() >= Duration::from_millis(900),
             "Retry-After: 1 must be honoured, waited only {:?}",
@@ -1118,7 +1135,10 @@ mod tests {
             ],
             fast_retry(3),
         );
-        client.get_raw("user", &[]).await.expect("second attempt works");
+        client
+            .get_raw("user", &[])
+            .await
+            .expect("second attempt works");
         assert_eq!(transport.requests().len(), 2);
     }
 
@@ -1154,7 +1174,10 @@ mod tests {
             ],
             fast_retry(2),
         );
-        client.get_raw("user", &[]).await.expect("second attempt works");
+        client
+            .get_raw("user", &[])
+            .await
+            .expect("second attempt works");
         assert_eq!(transport.requests().len(), 2);
         assert_eq!(
             Error::Timeout(Duration::from_secs(30)).to_string(),
@@ -1166,12 +1189,19 @@ mod tests {
     async fn server_errors_retry_then_succeed() {
         let (client, transport) = scripted(
             vec![
-                Ok(mock::response("u", 503, json!({"error": "unavailable"}).to_string())),
+                Ok(mock::response(
+                    "u",
+                    503,
+                    json!({"error": "unavailable"}).to_string(),
+                )),
                 Ok(mock::ok_json("u", "{}")),
             ],
             fast_retry(2),
         );
-        client.get_raw("user", &[]).await.expect("second attempt works");
+        client
+            .get_raw("user", &[])
+            .await
+            .expect("second attempt works");
         assert_eq!(transport.requests().len(), 2);
     }
 
@@ -1179,8 +1209,16 @@ mod tests {
     async fn server_errors_exhaust_as_http() {
         let (client, _transport) = scripted(
             vec![
-                Ok(mock::response("u", 500, json!({"error": "boom"}).to_string())),
-                Ok(mock::response("u", 500, json!({"error": "boom"}).to_string())),
+                Ok(mock::response(
+                    "u",
+                    500,
+                    json!({"error": "boom"}).to_string(),
+                )),
+                Ok(mock::response(
+                    "u",
+                    500,
+                    json!({"error": "boom"}).to_string(),
+                )),
             ],
             fast_retry(2),
         );
@@ -1189,7 +1227,9 @@ mod tests {
             .await
             .expect_err("budget must run out");
         match error {
-            Error::Http { status, message, .. } => {
+            Error::Http {
+                status, message, ..
+            } => {
                 assert_eq!(status, 500);
                 assert_eq!(message, "boom");
             }
@@ -1212,7 +1252,11 @@ mod tests {
             .await
             .expect_err("400 must fail");
         match error {
-            Error::Http { status, message, url } => {
+            Error::Http {
+                status,
+                message,
+                url,
+            } => {
                 assert_eq!(status, 400);
                 assert_eq!(message, "gear must be one of: amp");
                 assert!(url.contains("gear=bogus"), "{url}");
@@ -1255,11 +1299,8 @@ mod tests {
     #[tokio::test]
     async fn credentials_go_in_the_authorization_header_and_nowhere_else() {
         let token = "t3k-super-secret-value";
-        let (client, transport) = scripted_with_credentials(
-            vec![Ok(mock::ok_json("u", "{}"))],
-            fast_retry(1),
-            token,
-        );
+        let (client, transport) =
+            scripted_with_credentials(vec![Ok(mock::ok_json("u", "{}"))], fast_retry(1), token);
         client
             .get_raw("user", &[("q".into(), "secret".into())])
             .await
@@ -1317,4 +1358,3 @@ mod tests {
         assert_eq!(tones[0].title.as_deref(), Some("Mesa"));
     }
 }
-

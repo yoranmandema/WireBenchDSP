@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pedal_tone3000::auth::{AuthKind, Credentials};
-use pedal_tone3000::client::{Client, DEFAULT_BASE_URL, RetryPolicy};
+use pedal_tone3000::client::{Client, RetryPolicy, DEFAULT_BASE_URL};
 use pedal_tone3000::index::{IndexBuilder, RefreshConfig, Source};
 use pedal_tone3000::paths::Paths;
 
@@ -51,6 +51,9 @@ Environment:
   T3K_SECRET_KEY     Account secret key (server-side use only)
   PEDAL_HOME         Where index/models.json lives
   PEDAL_MODELS       Override the downloaded-models directory
+
+Both sources need a credential: every listing except `trending` is
+authenticated (docs/TONE3000-API-RECON.md §3).
 
 Exit codes: 0 ok, 2 usage error, 1 refresh failed.
 ";
@@ -126,9 +129,9 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
             "--page-size" => {
                 let value = take_value(&args, &mut index, arg)?;
                 options.search_page_size = clamp_page_size(
-                    value.parse::<u32>().map_err(|_| {
-                        format!("--page-size must be a number, got '{value}'")
-                    })?,
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| format!("--page-size must be a number, got '{value}'"))?,
                     25,
                 );
             }
@@ -165,20 +168,10 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Fail before doing any work when an authenticated listing is requested
-    // without a credential, so no partial index can be written.
-    match options.source {
-        Source::FreeFeeds => {}
-        Source::Catalog => {
-            if credentials.is_none() {
-                return Err(
-                    "--source catalog needs a credential: set T3K_ACCESS_TOKEN (or \
-                     T3K_SECRET_KEY); see docs/TONE3000-API-RECON.md §2"
-                        .to_string(),
-                );
-            }
-        }
-    }
+    // Every listing endpoint except `trending` is authenticated, so a refresh
+    // always needs a credential; fail before doing any work so no partial
+    // index can be written.
+    check_credentials(options.source, credentials.as_ref())?;
 
     let retry = RetryPolicy {
         max_attempts: 4,
@@ -189,10 +182,8 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
     };
     let client = Client::new(
         Arc::new(
-            pedal_tone3000::client::ReqwestTransport::new(
-                pedal_tone3000::client::DEFAULT_TIMEOUT,
-            )
-            .map_err(|e| format!("could not build the HTTP client: {e}"))?,
+            pedal_tone3000::client::ReqwestTransport::new(pedal_tone3000::client::DEFAULT_TIMEOUT)
+                .map_err(|e| format!("could not build the HTTP client: {e}"))?,
         ),
         options.base_url.clone(),
         credentials,
@@ -211,15 +202,17 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         .build()
         .map_err(|e| format!("could not start the async runtime: {e}"))?;
 
-    let outcome = runtime.block_on(async {
-        IndexBuilder::new(&client, config).refresh(&paths).await
-    });
+    let outcome =
+        runtime.block_on(async { IndexBuilder::new(&client, config).refresh(&paths).await });
 
     match outcome {
         Ok(outcome) => {
             println!(
                 "Refreshed {} record(s) from {} tone(s) into {} (generated {})",
-                outcome.count, outcome.tones, paths.index_file.display(), outcome.generated_at
+                outcome.count,
+                outcome.tones,
+                paths.index_file.display(),
+                outcome.generated_at
             );
             if outcome.skipped > 0 {
                 eprintln!("skipped {} unindexable model(s)", outcome.skipped);
@@ -251,7 +244,14 @@ fn clamp_page_size(value: u32, cap: u32) -> u32 {
 
 fn print_status(options: &Options, credentials: Option<&Credentials>, paths: &Paths) {
     println!("base_url:        {}", options.base_url);
-    println!("source:          {}", if options.source.is_catalog() { "catalog" } else { "feeds" });
+    println!(
+        "source:          {}",
+        if options.source.is_catalog() {
+            "catalog"
+        } else {
+            "feeds"
+        }
+    );
     println!("credential:      {}", describe_credential(credentials));
     println!("pedal_home:      {}", paths.home.display());
     println!("index_file:      {}", paths.index_file.display());
@@ -267,5 +267,58 @@ fn describe_credential(credentials: Option<&Credentials>) -> &'static str {
         Some(AuthKind::AccessToken) => "access token (T3K_ACCESS_TOKEN)",
         Some(AuthKind::SecretKey) => "secret key (T3K_SECRET_KEY)",
         None => "none",
+    }
+}
+
+/// Every listing the indexer can walk is authenticated except `trending`, so
+/// both sources need a credential. Checked before any request is sent.
+fn check_credentials(source: Source, credentials: Option<&Credentials>) -> Result<(), String> {
+    if credentials.is_some() {
+        return Ok(());
+    }
+    let source = if source.is_catalog() {
+        "catalog"
+    } else {
+        "feeds"
+    };
+    Err(format!(
+        "--source {source} needs a credential: set T3K_ACCESS_TOKEN (or T3K_SECRET_KEY); \
+         see docs/TONE3000-API-RECON.md §2"
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credentials_are_required_for_every_source() {
+        let token = Credentials::from_token("t3k-test-token", AuthKind::AccessToken);
+        assert!(check_credentials(Source::FreeFeeds, Some(&token)).is_ok());
+        assert!(check_credentials(Source::Catalog, Some(&token)).is_ok());
+        for source in [Source::FreeFeeds, Source::Catalog] {
+            let error = check_credentials(source, None).expect_err("no credential must fail");
+            assert!(error.contains("T3K_ACCESS_TOKEN"), "{error}");
+            assert!(error.contains("--source"), "{error}");
+        }
+    }
+
+    #[test]
+    fn page_sizes_are_clamped_to_the_api_caps() {
+        assert_eq!(clamp_page_size(0, 25), 1);
+        assert_eq!(clamp_page_size(1, 25), 1);
+        assert_eq!(clamp_page_size(25, 25), 25);
+        assert_eq!(clamp_page_size(500, 25), 25);
+        assert_eq!(clamp_page_size(500, 300), 300);
+    }
+
+    #[test]
+    fn status_never_echoes_a_credential() {
+        let token = Credentials::from_token("t3k-super-secret-value", AuthKind::SecretKey);
+        let described = describe_credential(Some(&token));
+        assert_eq!(described, "secret key (T3K_SECRET_KEY)");
+        assert!(!described.contains("super-secret"));
+        assert!(!described.contains("t3k-super-secret-value"));
+        assert_eq!(describe_credential(None), "none");
     }
 }

@@ -57,10 +57,16 @@ impl Credentials {
     /// work; authenticated ones will fail with [`crate::client::Error::Auth`]).
     pub fn from_env() -> Option<Self> {
         if let Some(token) = non_empty_env("T3K_ACCESS_TOKEN") {
-            return Some(Self { token: Secret::new(token), kind: AuthKind::AccessToken });
+            return Some(Self {
+                token: Secret::new(token),
+                kind: AuthKind::AccessToken,
+            });
         }
         if let Some(token) = non_empty_env("T3K_SECRET_KEY") {
-            return Some(Self { token: Secret::new(token), kind: AuthKind::SecretKey });
+            return Some(Self {
+                token: Secret::new(token),
+                kind: AuthKind::SecretKey,
+            });
         }
         None
     }
@@ -68,7 +74,10 @@ impl Credentials {
     /// Build credentials explicitly (tests, embedded use). Prefer
     /// [`Credentials::from_env`] so nothing secret is written into source.
     pub fn from_token(token: impl Into<String>, kind: AuthKind) -> Self {
-        Self { token: Secret::new(token), kind }
+        Self {
+            token: Secret::new(token),
+            kind,
+        }
     }
 
     pub fn kind(&self) -> AuthKind {
@@ -94,8 +103,14 @@ mod tests {
         let creds = Credentials::from_token("t3k-super-secret-value", AuthKind::AccessToken);
         let dbg = format!("{creds:?}");
         assert!(!dbg.contains("super-secret"));
-        assert_eq!(dbg, "Credentials { token: Secret(\"***\"), kind: AccessToken }");
-        assert_eq!(creds.authorization_header(), "Bearer t3k-super-secret-value");
+        assert_eq!(
+            dbg,
+            "Credentials { token: Secret(\"***\"), kind: AccessToken }"
+        );
+        assert_eq!(
+            creds.authorization_header(),
+            "Bearer t3k-super-secret-value"
+        );
 
         let inner = crate::auth::Secret::new("t3k-inner-secret");
         assert_eq!(format!("{inner}"), "***");
