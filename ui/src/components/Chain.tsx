@@ -193,7 +193,7 @@ function AddBlockButton({ channel }: { channel: import("../protocol").Channel })
   const chosen = selectedBlockType.value;
   return (
     <>
-      <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
+      <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" data-add={channel.id} onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
         <PlusIcon size={16} />
       </button>
       {/* Keyboard alternative to dragging: the block type selected in the rack
