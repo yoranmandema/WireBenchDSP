@@ -12,7 +12,7 @@ export function Rack() {
   };
 
   return (
-    <aside class="rack">
+    <aside class="rack bg-panel border-r border-line overflow-y-auto p-2.5">
       <BlockList groups={groupBlocks(s.registry)} onSelect={pick} />
     </aside>
   );
