@@ -25,6 +25,7 @@ cd "$wt"
 [ "$(git branch --show-current)" = "$br" ] || die "run this inside the card's worktree, on branch $br (you are on '$(git branch --show-current)' in $wt)"
 [ -z "$(git status --porcelain)" ] || die "the worktree has uncommitted changes. Commit them (or stash what doesn't belong), then rerun"
 [ "$(git -C "$REPO" branch --show-current)" = "main" ] || die "the user's checkout ($REPO) is not on main. Block with needs_input; don't switch it yourself"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || die "the user's main checkout has uncommitted changes; leave them untouched and retry after they are committed or safely stashed"
 
 if ! git merge-base --is-ancestor main HEAD; then
   git merge --no-edit -q main || die "merging main into $br conflicts. Resolve it here, commit, rerun"
