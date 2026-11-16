@@ -3,7 +3,7 @@
 <style>
 /* ===========================================================================
    PROPOSED CSS — visual-first block/channel view.
-   Base tokens copied verbatim from ui/src/styles.css; everything below the
+   Tokens match ui/src/tailwind.css (@theme); everything below the
    "proposed" marker is new/changed. Class names are the proposed names.
    =========================================================================== */
 :root {
@@ -210,8 +210,8 @@ svg { display: block; }
   --cat-soft: hsl(var(--cat-h, 222) 45% 20%);
   flex: none;
   width: 116px;
-  height: 64px;
-  border-radius: 8px;
+  height: 66px;
+  border-radius: 7px;
   background: linear-gradient(155deg, var(--cat-soft) 0%, #1b1c22 62%);
   border: 1px solid #353843;
   border-left: 3px solid var(--cat);
@@ -246,9 +246,9 @@ svg { display: block; }
 .block-icon { color: var(--cat); display: grid; place-items: center; }
 .block-icon:empty { display: none; }
 
-/* One line, 10px, ellipsis. Full name lives in the tooltip. */
+/* One line, 11px, ellipsis. Full name lives in the tooltip. */
 .block-name {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1.2;
   max-width: 100%;
@@ -300,9 +300,9 @@ svg { display: block; }
 .empty-zone {
   flex: 1 1 auto;
   min-width: 220px;
-  height: 48px;
+  height: 66px;
   border: 1px dashed #3f424d;
-  border-radius: 8px;
+  border-radius: 7px;
   display: grid;
   place-items: center;
   color: #4a4e5c;
@@ -318,8 +318,8 @@ svg { display: block; }
   flex: none;
   width: 0;
   margin-right: -8px;
-  height: 64px;
-  border-radius: 8px;
+  height: 66px;
+  border-radius: 7px;
   border: 1px dashed transparent;
   overflow: hidden;
   transition: width 110ms ease, margin-right 110ms ease, border-color 110ms ease, background-color 110ms ease;
