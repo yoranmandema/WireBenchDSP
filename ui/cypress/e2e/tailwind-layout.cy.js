@@ -7,8 +7,9 @@ describe("Tailwind layout contracts", () => {
     cy.get(".app").should(($app) => {
       expect($app[0].getBoundingClientRect().height).to.be.closeTo(900, 1);
     });
+    // `--ui-bar` in ui/src/tailwind.css: the bar's fixed desktop height.
     cy.get(".editor").should(($editor) => {
-      expect($editor[0].getBoundingClientRect().height).to.be.closeTo(224, 1);
+      expect($editor[0].getBoundingClientRect().height).to.be.closeTo(128, 1);
     });
   });
 
@@ -41,5 +42,61 @@ describe("Tailwind layout contracts", () => {
       expect(indicator).not.to.equal(null);
       expect(getComputedStyle(indicator).backgroundColor).not.to.equal("rgba(0, 0, 0, 0)");
     });
+  });
+
+  // The bottom bar's spacing contracts, checked at the two ends of the range:
+  // the page never scrolls sideways, the identity column never overflows its
+  // track, every control sits inside the bar, and every target is >= 44px.
+  const barContracts = () => {
+    cy.document().then((doc) => {
+      expect(doc.documentElement.scrollWidth).to.be.at.most(doc.documentElement.clientWidth);
+    });
+    cy.get(".editor").then(($bar) => {
+      const bar = $bar[0].getBoundingClientRect();
+      const controls = $bar[0].querySelector(".editor-controls").getBoundingClientRect();
+      expect(controls.bottom).to.be.at.most(bar.bottom + 0.5);
+    });
+    cy.get(".editor-id").then(($id) => {
+      expect($id[0].scrollWidth).to.be.at.most($id[0].clientWidth);
+    });
+    cy.get(".side-btn, .seg, .select").then(($targets) => {
+      for (const el of $targets) {
+        const r = el.getBoundingClientRect();
+        expect(Math.min(r.width, r.height)).to.be.at.least(44);
+      }
+    });
+  };
+
+  it("keeps the bottom bar inside the window at phone and desktop widths", () => {
+    cy.selectBlock(0, 0);
+    cy.viewport(360, 800);
+    barContracts();
+    cy.viewport(1440, 900);
+    barContracts();
+  });
+
+  it("lifts the toast clear of the bar at phone and desktop widths", () => {
+    // The seeded `locked` block always refuses `removeBlock`.
+    const reject = () => {
+      cy.get(".channel").eq(0).find(".block-card").eq(2).find(".remove").click();
+      cy.get(".toast").should("contain", "no such block");
+    };
+    const gapAboveBar = () => {
+      cy.get(".toast").then(($t) => {
+        const bar = Cypress.$(".editor")[0].getBoundingClientRect();
+        const toast = $t[0].getBoundingClientRect();
+        expect(toast.bottom).to.be.at.most(bar.top);
+        expect(bar.top - toast.bottom).to.be.closeTo(8, 1);
+      });
+      cy.get(".toast").click();
+      cy.get(".toast").should("not.exist");
+    };
+
+    cy.viewport(360, 800);
+    reject();
+    gapAboveBar();
+    cy.viewport(1440, 900);
+    reject();
+    gapAboveBar();
   });
 });
