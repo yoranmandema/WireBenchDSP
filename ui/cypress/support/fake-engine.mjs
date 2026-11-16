@@ -1,0 +1,295 @@
+// A stand-in for `pedal-engine` on the Cypress side.
+//
+// It speaks the real IPC protocol (docs/IPC-PROTOCOL.md) over WebSocket: it
+// greets every connection with a state snapshot, answers `req` messages with
+// `res`, and broadcasts `event: state` after a mutation. The UI therefore runs
+// its normal `WebSocketBridge` code path — only the process on the other end of
+// the socket is a fixture.
+//
+// State is rebuilt from `createSeedState()` on every connection, so each
+// `cy.visit()` starts from the same rig. No audio device is touched.
+
+import http from "node:http";
+import { WebSocketServer } from "ws";
+import { createSeedState, defaultParams, METERS } from "./seed.mjs";
+
+const BLOCK_MIME = "application/x-block-type"; // mirrors ui/src/dnd.ts
+
+function slugify(name) {
+  const s = String(name)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return s || "block";
+}
+
+function clamp(v, min, max) {
+  return Math.min(max, Math.max(min, v));
+}
+
+/** Start the fake engine. Resolves once it is listening. */
+export async function startFakeEngine({ port = 9400, host = "127.0.0.1" } = {}) {
+  let state = createSeedState();
+  let rev = 0;
+  /** @type {Set<import("ws").WebSocket>} */
+  const clients = new Set();
+
+  const stateEvent = () => JSON.stringify({ type: "event", event: "state", payload: state });
+  const metersEvent = () => JSON.stringify({ type: "event", event: "meters", payload: METERS });
+
+  const broadcast = () => {
+    const text = stateEvent();
+    for (const ws of clients) {
+      if (ws.readyState === ws.OPEN) ws.send(text);
+    }
+  };
+
+  const findChannel = (id) => {
+    const ch = state.channels.find((c) => c.id === id);
+    if (!ch) throw new Error(`no such channel: ${id}`);
+    return ch;
+  };
+
+  const findBlock = (channelId, blockId) => {
+    const ch = findChannel(channelId);
+    const b = ch.blocks.find((x) => x.id === blockId);
+    if (!b) throw new Error(`no such block: ${blockId}`);
+    return b;
+  };
+
+  /** Apply a mutation and return the new full snapshot. */
+  const commit = () => {
+    rev += 1;
+    state.rev = rev;
+    return state;
+  };
+
+  const uniqueBlockId = (ch, name) => {
+    const taken = new Set(ch.blocks.map((b) => b.id));
+    const base = slugify(name);
+    let id = base;
+    let n = 2;
+    while (taken.has(id)) id = `${base}${n++}`;
+    return id;
+  };
+
+  const MUTATIONS = new Set([
+    "setParam",
+    "setMasterVolume",
+    "setBypass",
+    "addBlock",
+    "removeBlock",
+    "moveBlock",
+    "setSources",
+    "createRouting",
+    "removeRouting",
+    "setEnabled",
+    "setGain",
+    "setSource",
+    "loadPreset",
+    "savePreset",
+    "deletePreset",
+    "renamePreset",
+  ]);
+
+  /** Run one command. Throws on refusal, like the real engine. */
+  function applyCommand(cmd, args = {}) {
+    switch (cmd) {
+      case "getState":
+        return state;
+
+      case "listPresets":
+        return { presets: state.presets };
+
+      case "listRoutings":
+        return { routings: state.routings };
+
+      case "setParam": {
+        const b = findBlock(args.channel, args.block);
+        const spec = state.registry[b.type];
+        const p = spec?.params.find((x) => x.id === args.param);
+        if (!spec) throw new Error(`unknown block type: ${b.type}`);
+        if (!p) throw new Error(`no such param: ${args.param}`);
+        const value = Number(args.value);
+        if (!Number.isFinite(value)) throw new Error(`bad value: ${args.value}`);
+        b.params[p.id] = p.kind === "choice" ? Math.round(clamp(value, p.min, p.max)) : clamp(value, p.min, p.max);
+        return commit();
+      }
+
+      case "setMasterVolume": {
+        const ch = findChannel(args.channel);
+        ch.volume = clamp(Number(args.value), -60, 12);
+        return commit();
+      }
+
+      case "setBypass": {
+        const b = findBlock(args.channel, args.block);
+        b.bypass = !!args.bypass;
+        return commit();
+      }
+
+      case "addBlock": {
+        const ch = findChannel(args.channel);
+        const spec = state.registry[args.type];
+        if (!spec) throw new Error(`unknown block type: ${args.type}`);
+        const name = args.name ?? spec.name;
+        ch.blocks.push({
+          id: uniqueBlockId(ch, name),
+          type: args.type,
+          name,
+          bypass: false,
+          params: defaultParams(spec),
+        });
+        return commit();
+      }
+
+      case "removeBlock": {
+        // Test hook: the seeded `locked` block always refuses, so the UI's
+        // command-failure toast is reachable.
+        if (args.block === "locked") throw new Error(`no such block: ${args.block}`);
+        const ch = findChannel(args.channel);
+        const i = ch.blocks.findIndex((b) => b.id === args.block);
+        if (i < 0) throw new Error(`no such block: ${args.block}`);
+        ch.blocks.splice(i, 1);
+        return commit();
+      }
+
+      case "moveBlock": {
+        const ch = findChannel(args.channel);
+        const i = ch.blocks.findIndex((b) => b.id === args.block);
+        if (i < 0) throw new Error(`no such block: ${args.block}`);
+        const [b] = ch.blocks.splice(i, 1);
+        const to = clamp(Math.trunc(Number(args.to)), 0, ch.blocks.length);
+        ch.blocks.splice(to, 0, b);
+        return commit();
+      }
+
+      case "setSources": {
+        const ch = findChannel(args.channel);
+        ch.sources = Array.isArray(args.sources) ? args.sources : [];
+        return commit();
+      }
+
+      case "setSource": {
+        state.source = ["riff", "live", "silence"].includes(args.source) ? args.source : "riff";
+        return commit();
+      }
+
+      case "loadPreset": {
+        if (!state.presets.includes(args.name)) throw new Error(`no such preset: ${args.name}`);
+        state.preset = args.name;
+        return commit();
+      }
+
+      case "savePreset": {
+        const name = String(args.name ?? "");
+        if (!name) throw new Error("empty preset name");
+        if (!state.presets.includes(name)) state.presets = [...state.presets, name].sort();
+        state.preset = name;
+        return commit();
+      }
+
+      case "deletePreset": {
+        // Test hook: the seeded `02-lead` preset always refuses.
+        if (args.name === "02-lead") throw new Error("preset is locked");
+        if (!state.presets.includes(args.name)) throw new Error(`no such preset: ${args.name}`);
+        state.presets = state.presets.filter((p) => p !== args.name);
+        if (state.preset === args.name) state.preset = state.presets[0] ?? "";
+        return commit();
+      }
+
+      case "renamePreset": {
+        const from = String(args.from ?? "");
+        const to = String(args.to ?? "");
+        const i = state.presets.indexOf(from);
+        if (i < 0) throw new Error(`no such preset: ${from}`);
+        if (!to) throw new Error("empty preset name");
+        if (to === from) return state;
+        if (state.presets.includes(to)) throw new Error(`preset already exists: ${to}`);
+        state.presets = state.presets.map((p) => (p === from ? to : p)).sort();
+        if (state.preset === from) state.preset = to;
+        return commit();
+      }
+
+      default:
+        throw new Error(`unknown command: ${cmd}`);
+    }
+  }
+
+  const httpServer = http.createServer((req, res) => {
+    if (req.method === "POST" && req.url === "/__reset") {
+      state = createSeedState();
+      rev = 0;
+      res.writeHead(204).end();
+      return;
+    }
+    if (req.method === "GET" && req.url === "/__health") {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true }));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+
+  const wss = new WebSocketServer({ server: httpServer });
+
+  wss.on("connection", (ws) => {
+    // Fresh rig per connection == fresh rig per `cy.visit()`.
+    state = createSeedState();
+    rev = 0;
+    clients.add(ws);
+    ws.send(stateEvent());
+    ws.send(metersEvent());
+    const meters = setInterval(() => {
+      if (ws.readyState === ws.OPEN) ws.send(metersEvent());
+    }, 50);
+
+    ws.on("message", (data) => {
+      let req;
+      try {
+        req = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      if (!req || req.type !== "req") return;
+      let res;
+      try {
+        const payload = applyCommand(req.cmd, req.args ?? {});
+        res = { type: "res", id: req.id, ok: true, payload };
+      } catch (e) {
+        res = { type: "res", id: req.id, ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(res));
+      if (res.ok && MUTATIONS.has(req.cmd)) broadcast();
+    });
+
+    const close = () => {
+      clearInterval(meters);
+      clients.delete(ws);
+    };
+    ws.on("close", close);
+    ws.on("error", close);
+  });
+
+  await new Promise((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(port, host, resolve);
+  });
+
+  return { httpServer, wss, port, host };
+}
+
+/** Stop the fake engine and close every client. */
+export async function stopFakeEngine(engine) {
+  if (!engine) return;
+  for (const ws of engine.wss.clients) ws.terminate();
+  await new Promise((resolve) => {
+    engine.wss.close(() => resolve());
+    engine.httpServer.close(() => resolve());
+    // `httpServer.close` waits for open sockets; the terminate above should
+    // have closed them, but don't hang if one is half-open.
+    setTimeout(resolve, 2000);
+  });
+}
+
+export { BLOCK_MIME };

@@ -179,3 +179,18 @@ alone is enough for shipped mode.
   default `04-rainbow`.
 - Source selector in the top bar: **RIFF** (built-in test riff), **LIVE**
   (your guitar), **SILENCE** (no input — use this if you only want the UI).
+
+## Testing the UI
+
+The UI has a Cypress E2E suite that runs the real app against a fake engine (no
+audio device, no sound):
+
+```bash
+cd ui && pnpm test:e2e
+```
+
+It covers boot, preset navigation and the preset browser, the rack, the
+add-block picker, the signal chain (including both drag interactions), the
+block editor, and keyboard selection. See
+**[docs/E2E-TESTING.md](E2E-TESTING.md)** for what is covered, how to add a
+spec, and how the fake engine works.
