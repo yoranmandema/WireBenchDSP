@@ -10,3 +10,10 @@ index/
 .vscode/
 ui/standalone-tmp/
 ui/build-standalone.mjs
+
+# Kanban workers: one git worktree per card (see AGENTS.md "Worktrees")
+.worktrees/
+# Installed and built locally, never committed: committing them made every
+# card branch conflict with every other.
+ui/node_modules/
+ui/dist/
