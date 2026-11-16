@@ -8,9 +8,10 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 
+use dsp_graph::blocks::builtin_registry;
 use dsp_graph::{Doc, Routing, RoutingEndpoint};
 use futures_util::{SinkExt, StreamExt};
-use pedal_engine::channels::{master_id, Rig, IN};
+use pedal_engine::channels::{master_id, Rig, ROUTING_GAIN_PREFIX, ROUTING_MIX_PREFIX, IN};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -214,6 +215,250 @@ fn load_drops_invalid_routings() {
     assert_eq!(back.list_routings()[0].id, good);
 }
 
+// ---------------------------------------------------------------------------
+// Audio graph
+// ---------------------------------------------------------------------------
+
+/// Build the rig's graph the way the engine does: lay it out as a doc, then
+/// apply the routings. No audio is rendered — these tests assert on structure.
+fn graph_of(rig: &Rig) -> dsp_graph::Graph {
+    let reg = builtin_registry();
+    let mut g = rig
+        .to_doc()
+        .build_in(&reg, std::path::Path::new("."))
+        .expect("rig builds");
+    rig.apply_routings(&mut g, &reg).expect("routings apply");
+    g
+}
+
+/// Is `from`'s output wired into `to`'s `port`?
+fn feeds(g: &dsp_graph::Graph, from: &str, to: &str, port: &str) -> bool {
+    g.edges()
+        .iter()
+        .any(|e| e.from.0 == from && e.from.1 == "out" && e.to.0 == to && e.to.1 == port)
+}
+
+/// How many wires drive `node`'s `port`. An input port takes exactly one.
+fn drivers(g: &dsp_graph::Graph, node: &str, port: &str) -> usize {
+    g.edges()
+        .iter()
+        .filter(|e| e.to.0 == node && e.to.1 == port)
+        .count()
+}
+
+/// The acceptance criterion, on the graph: a routing taps the source and sums
+/// into the destination, and the source's own wire is untouched.
+#[test]
+fn a_routing_taps_the_source_and_sums_into_the_destination() {
+    let (mut rig, amp, delay, reverb) = rig_with_two_channels();
+    let (source, dest) = route(("ch1", &amp), ("ch2", &reverb));
+    let id = rig.create_routing(&source, &dest).unwrap();
+    let g = graph_of(&rig);
+
+    let mix = format!("{ROUTING_MIX_PREFIX}{id}");
+    assert_eq!(g.node(&mix).expect("mix node").spec.id, "util.mix");
+    assert!(
+        g.node(&format!("{ROUTING_GAIN_PREFIX}{id}")).is_none(),
+        "a unity routing inserts no gain node"
+    );
+
+    // The source keeps its own downstream wire, and the tap reaches the mix.
+    assert!(
+        feeds(&g, &amp, &delay, "in"),
+        "the source's own chain is untouched"
+    );
+    assert!(feeds(&g, &amp, &mix, "in_b"), "the tap reaches the mix");
+    // The destination's original driver is preserved as the mix's other input.
+    assert!(
+        feeds(&g, "in", &mix, "in_a"),
+        "the original driver feeds the mix"
+    );
+    assert!(
+        feeds(&g, &mix, &reverb, "in"),
+        "the mix drives the destination"
+    );
+    assert_eq!(drivers(&g, &reverb, "in"), 1);
+}
+
+/// Fan-out: one source can feed several routings, and each gets its own mix.
+#[test]
+fn two_routings_out_of_one_source_both_reach_their_destinations() {
+    let (mut rig, amp, delay, reverb) = rig_with_two_channels();
+    let ch3 = rig.add_block_as("ch3", "time.reverb", "Reverb", [0.0, 0.0]);
+    let (s1, d1) = route(("ch1", &amp), ("ch2", &reverb));
+    let (s2, d2) = route(("ch1", &amp), ("ch3", &ch3));
+    let first = rig.create_routing(&s1, &d1).unwrap();
+    let second = rig.create_routing(&s2, &d2).unwrap();
+    let g = graph_of(&rig);
+
+    for id in [first, second] {
+        let mix = format!("{ROUTING_MIX_PREFIX}{id}");
+        assert_eq!(g.node(&mix).expect("mix node").spec.id, "util.mix");
+        assert!(feeds(&g, &amp, &mix, "in_b"), "the tap reaches its mix");
+    }
+    // The source's own chain is still there, exactly once.
+    assert_eq!(drivers(&g, &delay, "in"), 1);
+}
+
+/// Two routings into one block nest: the second finds the first mix as the
+/// destination's current driver, so the block sums both taps.
+#[test]
+fn two_routings_into_one_destination_chain_two_mixes() {
+    let (mut rig, amp, _delay, reverb) = rig_with_two_channels();
+    let ch3 = rig.add_block_as("ch3", "time.reverb", "Reverb", [0.0, 0.0]);
+    let (s1, d1) = route(("ch1", &amp), ("ch2", &reverb));
+    let (s2, d2) = route(("ch3", &ch3), ("ch2", &reverb));
+    let first = rig.create_routing(&s1, &d1).unwrap();
+    let second = rig.create_routing(&s2, &d2).unwrap();
+    let g = graph_of(&rig);
+
+    let mix1 = format!("{ROUTING_MIX_PREFIX}{first}");
+    let mix2 = format!("{ROUTING_MIX_PREFIX}{second}");
+    assert!(
+        feeds(&g, &mix1, &mix2, "in_a"),
+        "the second routing found the first mix"
+    );
+    assert!(
+        feeds(&g, &ch3, &mix2, "in_b"),
+        "the second tap reaches its mix"
+    );
+    assert!(
+        feeds(&g, &mix2, &reverb, "in"),
+        "the outer mix drives the destination"
+    );
+    assert_eq!(drivers(&g, &reverb, "in"), 1);
+    // The destination's original driver now feeds the first mix.
+    assert!(feeds(&g, "in", &mix1, "in_a"));
+}
+
+/// A non-unity routing gets a `util.gain` expressed in dB, in front of the mix.
+#[test]
+fn a_non_unity_routing_gets_a_gain_stage_in_db() {
+    let (mut rig, amp, _delay, reverb) = rig_with_two_channels();
+    let (source, dest) = route(("ch1", &amp), ("ch2", &reverb));
+    let id = rig.create_routing(&source, &dest).unwrap();
+    rig.set_gain(&id, 0.25).unwrap();
+    let g = graph_of(&rig);
+
+    let gain_id = format!("{ROUTING_GAIN_PREFIX}{id}");
+    let node = g.node(&gain_id).expect("gain node");
+    assert_eq!(node.spec.id, "util.gain");
+    let spec = node.spec.params[0].clone();
+    let db = 20.0 * 0.25f32.log10();
+    assert!(
+        (node.params[0] - spec.normalise(db)).abs() < 1e-6,
+        "gain should be {db} dB"
+    );
+
+    let mix = format!("{ROUTING_MIX_PREFIX}{id}");
+    assert!(
+        feeds(&g, &amp, &gain_id, "in"),
+        "the tap runs through the gain"
+    );
+    assert!(feeds(&g, &gain_id, &mix, "in_b"), "the gain feeds the mix");
+    assert!(feeds(&g, "in", &mix, "in_a"));
+    assert!(feeds(&g, &mix, &reverb, "in"));
+}
+
+/// Disabling a routing removes its nodes and edges: the graph is identical to
+/// one that never had it.
+#[test]
+fn a_disabled_routing_leaves_the_graph_untouched() {
+    let (mut rig, amp, delay, reverb) = rig_with_two_channels();
+    let (source, dest) = route(("ch1", &amp), ("ch2", &reverb));
+    let id = rig.create_routing(&source, &dest).unwrap();
+    let enabled = graph_of(&rig);
+    let plain = graph_of(&rig_with_two_channels().0);
+
+    rig.set_enabled(&id, false).unwrap();
+    let disabled = graph_of(&rig);
+
+    let mix = format!("{ROUTING_MIX_PREFIX}{id}");
+    assert!(enabled.node(&mix).is_some());
+    assert!(
+        disabled.node(&mix).is_none(),
+        "a disabled routing inserts no node"
+    );
+    let mut got = disabled.node_ids();
+    let mut want = plain.node_ids();
+    got.sort();
+    want.sort();
+    assert_eq!(got, want, "a disabled routing changed the node set");
+    assert_eq!(
+        disabled.edges(),
+        plain.edges(),
+        "a disabled routing changed the wires"
+    );
+    assert!(
+        feeds(&disabled, &amp, &delay, "in"),
+        "the source's own chain is back"
+    );
+}
+
+/// A routed graph still validates, and the routing nodes are in the compiled
+/// executor — the fan-out is real signal path, not just a drawn line.
+#[test]
+fn a_routed_graph_validates_and_compiles() {
+    let (mut rig, amp, _delay, reverb) = rig_with_two_channels();
+    let ch3 = rig.add_block_as("ch3", "time.reverb", "Reverb", [0.0, 0.0]);
+    let (s1, d1) = route(("ch1", &amp), ("ch2", &reverb));
+    let (s2, d2) = route(("ch1", &amp), ("ch3", &ch3));
+    let first = rig.create_routing(&s1, &d1).unwrap();
+    let second = rig.create_routing(&s2, &d2).unwrap();
+
+    let mut g = graph_of(&rig);
+    g.validate().expect("a routed graph validates");
+    let ex =
+        dsp_graph::Executor::compile_owned(&mut g, 48_000.0, 256).expect("a routed graph compiles");
+    let ids = ex.node_ids();
+    assert!(ids.contains(&format!("{ROUTING_MIX_PREFIX}{first}")));
+    assert!(ids.contains(&format!("{ROUTING_MIX_PREFIX}{second}")));
+}
+
+/// A destination with no driver cannot be summed into; the routing is refused
+/// rather than silently dropped or panicking.
+#[test]
+fn a_routing_needs_a_destination_that_is_already_driven() {
+    let (mut rig, amp, _delay, reverb) = rig_with_two_channels();
+    let (source, dest) = route(("ch1", &amp), ("ch2", &reverb));
+    rig.create_routing(&source, &dest).unwrap();
+
+    let reg = builtin_registry();
+    let mut g = rig
+        .to_doc()
+        .build_in(&reg, std::path::Path::new("."))
+        .unwrap();
+    g.disconnect_input(&reverb, "in");
+    let err = rig
+        .apply_routings(&mut g, &reg)
+        .expect_err("an undriven destination must be refused");
+    assert!(
+        err.contains("has no input to mix with"),
+        "unexpected error: {err}"
+    );
+    assert!(g.node(&format!("{ROUTING_MIX_PREFIX}route1")).is_none());
+}
+
+/// A routing whose generated node id is already taken is refused, not merged.
+#[test]
+fn a_routing_refuses_a_node_id_that_is_already_taken() {
+    let (mut rig, amp, _delay, reverb) = rig_with_two_channels();
+    let (source, dest) = route(("ch1", &amp), ("ch2", &reverb));
+    rig.create_routing(&source, &dest).unwrap();
+
+    let reg = builtin_registry();
+    let mut g = rig
+        .to_doc()
+        .build_in(&reg, std::path::Path::new("."))
+        .unwrap();
+    let taken = format!("{ROUTING_MIX_PREFIX}route1");
+    g.add(taken.as_str(), reg.build("util.mix").unwrap())
+        .unwrap();
+    let err = rig
+        .apply_routings(&mut g, &reg)
+        .expect_err("a taken node id must be refused");
+    assert!(err.contains("already taken"), "unexpected error: {err}");
+}
 // ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------

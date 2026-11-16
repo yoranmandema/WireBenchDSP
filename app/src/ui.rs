@@ -343,6 +343,8 @@ pub fn rebuild(handle: &Handle, rig: &Rig) -> Result<(), String> {
     let mut g = doc
         .build_in(&handle.registry, &handle.preset_dir)
         .map_err(|e| e.to_string())?;
+    // Routings are realised here, at compile time; `to_doc` only carries them.
+    rig.apply_routings(&mut g, &handle.registry)?;
     let block = handle.block();
     let ex = dsp_graph::Executor::compile_owned(&mut g, handle.sample_rate, block).map_err(|e| e.to_string())?;
     let ids = ex.node_ids().to_vec();

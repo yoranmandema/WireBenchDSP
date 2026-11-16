@@ -72,6 +72,8 @@ fn main() {
             .to_doc()
             .build_in(&handle.registry, &handle.preset_dir)
             .expect("initial rig builds");
+        rig.apply_routings(&mut g, &handle.registry)
+            .expect("initial rig routings apply");
         let ex = dsp_graph::Executor::compile_owned(&mut g, setup.sample_rate, block)
             .expect("initial rig compiles");
         *handle.node_ids.lock().unwrap() = ex.node_ids().to_vec();
@@ -141,6 +143,8 @@ fn selftest_run(handle: Handle, meters: Arc<Meters>, rate: f32, out_channels: us
             .to_doc()
             .build_in(&handle.registry, &handle.preset_dir)
             .expect("selftest rig builds");
+        rig.apply_routings(&mut g, &handle.registry)
+            .expect("selftest rig routings apply");
         let ex = dsp_graph::Executor::compile_owned(&mut g, rate, BLOCK).expect("selftest rig compiles");
         engine.set_executor(ex);
     }
