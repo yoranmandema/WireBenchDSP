@@ -159,3 +159,71 @@ async fn the_ipc_surface_cannot_add_or_remove_a_channel() {
     let after = sh.rig.lock().unwrap().channels.len();
     assert_eq!(after, before, "a refused command changed the channel list");
 }
+
+/// A rig of nothing but empty slots runs the bypass, not a compiled rig, and
+/// every channel-addressed command still works while it is empty.
+///
+/// The empty-rig fast path is what this pins: the executor the audio thread
+/// ends up with has no channel master in it (an empty slot is not compiled),
+/// so a volume move on an empty channel is a no-op rather than an error, and
+/// adding a block to a previously empty channel makes the rig compile normally
+/// again — no reload, no restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_empty_rig_runs_the_bypass_and_resumes_on_the_first_block() {
+    let source = Arc::new(AtomicU8::new(0));
+    let (mut handle, _cmd_rx, _trash_tx, _running) = new_engine(setup(), source.clone());
+    let registry = handle.registry.clone();
+    let store = Store::discover();
+    handle.preset_dir = store.dir.clone();
+
+    let sh = Arc::new(Shared::new(handle, registry, source, store));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(serve_listener(sh.clone(), listener));
+
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
+        .await
+        .expect("connect");
+    let greeting = next_event(&mut ws, "state").await;
+    assert_eq!(greeting["payload"]["channels"].as_array().unwrap().len(), CHANNEL_COUNT);
+
+    // `rebuild` is private, so drive it the way the protocol does: any command
+    // that mutates the rig rebuilds. `setMasterVolume` is the cheap one.
+    // A fresh rig is empty, so the bypass is what is running: no channel master.
+    assert!(!sh.rig.lock().unwrap().has_content(), "a fresh rig has no content");
+    ws.send(Message::Text(
+        json!({ "type": "req", "id": 1, "cmd": "setMasterVolume", "args": { "channel": "ch3", "value": -6.0 } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .expect("send");
+    let res = next_res(&mut ws, 1).await;
+    assert_eq!(res["ok"], true, "a volume move on an empty channel is accepted: {res}");
+    assert_eq!(
+        sh.handle.node_ids.lock().unwrap().iter().filter(|n| n.contains("ch3")).count(),
+        0,
+        "an empty channel has no compiled node"
+    );
+
+    // Populating a previously empty channel compiles it normally: the master
+    // and the block both appear, with no reload and no restart.
+    ws.send(Message::Text(
+        json!({ "type": "req", "id": 2, "cmd": "addBlock", "args": { "channel": "ch3", "type": "amp.basic", "name": "Amp" } })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .expect("send");
+    let res = next_res(&mut ws, 2).await;
+    assert_eq!(res["ok"], true, "adding a block to an empty channel works: {res}");
+    assert!(sh.rig.lock().unwrap().has_content(), "the rig now has content");
+    let ids = sh.handle.node_ids.lock().unwrap().clone();
+    assert!(ids.iter().any(|n| n == "ch3__master"), "the channel master is compiled: {ids:?}");
+    assert!(ids.iter().any(|n| n == "amp"), "the new block is compiled: {ids:?}");
+
+    // And the state the UI sees still carries all four slots, empty ones included.
+    let state = next_event(&mut ws, "state").await;
+    let channels = state["payload"]["channels"].as_array().unwrap();
+    assert_eq!(channels.len(), CHANNEL_COUNT, "the slot count never changes");
+}

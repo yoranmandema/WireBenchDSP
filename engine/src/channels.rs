@@ -13,12 +13,17 @@
 //! carries an `enabled` flag and a `gain`, and it is saved in the project file
 //! beside the edges.
 //!
+//! is the same idea with three.
+//!
 //! A rig always has exactly [`CHANNEL_COUNT`] channels. They are slots, not
 //! something the user adds or removes: an empty one is simply left out of the
 //! compiled graph ([`Rig::to_doc`]), so it costs nothing but still appears in
 //! the UI. With one channel populated this is a pedalboard; with two it is a
 //! parallel rig: channel B's source row has `A` and `In` ticked. A send/return
 //! is the same idea with three.
+//!
+//! A rig with no blocks at all is a bypass, not a dead pedal: [`Rig::has_content`]
+//! is the fast-path test the engine uses to skip compiling a graph for it.
 
 use std::collections::BTreeMap;
 
@@ -88,6 +93,17 @@ impl Rig {
 
     pub fn channel(&self, id: &str) -> Option<&Channel> {
         self.channels.iter().find(|c| c.id == id)
+    }
+
+    /// Whether any channel holds a block.
+    ///
+    /// The empty-rig fast path: a rig of nothing but empty slots compiles to the
+    /// bypass, not to a graph, so an untouched pedalboard costs no compile and
+    /// no blocks are instantiated. A single block anywhere flips this, and from
+    /// then on the rig is compiled normally — including any still-empty slots,
+    /// which simply stay out of the graph.
+    pub fn has_content(&self) -> bool {
+        self.channels.iter().any(|c| !c.blocks.is_empty())
     }
 
     pub fn channel_mut(&mut self, id: &str) -> Option<&mut Channel> {

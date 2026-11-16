@@ -22,6 +22,7 @@ use std::collections::HashMap;
 
 use crate::block::{Block, BlockCtx};
 use crate::graph::{Graph, GraphError, NodeId};
+use crate::registry::Registry;
 use crate::types::{BlockError, BlockSpec, PortKind};
 
 /// A reference to a buffer slot in the pool.
@@ -245,14 +246,46 @@ impl Executor {
     ) -> Result<Self, CompileError> {
         graph.validate().map_err(CompileError::Graph)?;
         let order = graph.topo_sort().map_err(CompileError::Graph)?;
+        Self::plan(graph, None, &order, sample_rate, max_block, true)
+    }
 
+    /// Compile a graph without consuming it: the nodes stay behind, so the same
+    /// graph can be compiled again. Blocks are rebuilt from the registry, which
+    /// is what makes this possible at all — a compiled executor owns its blocks.
+    ///
+    /// Used for the empty-rig fast path, where the tiny bypass graph is kept and
+    /// recompiled whenever the audio thread needs a fresh copy of it.
+    pub fn compile_borrowed(
+        graph: &mut Graph,
+        reg: &Registry,
+        sample_rate: f32,
+        max_block: usize,
+    ) -> Result<Self, CompileError> {
+        graph.validate().map_err(CompileError::Graph)?;
+        let order = graph.topo_sort().map_err(CompileError::Graph)?;
+        Self::plan(graph, Some(reg), &order, sample_rate, max_block, false)
+    }
+
+    /// Validate, sort, latency-pass, plan buffers and emit the step list.
+    ///
+    /// `take` decides whether the nodes are moved out of `graph` (owned) or
+    /// rebuilt from `reg` (borrowed). Either way the executor owns its own
+    /// `Box<dyn Block>` values.
+    fn plan(
+        graph: &mut Graph,
+        reg: Option<&Registry>,
+        order: &[NodeId],
+        sample_rate: f32,
+        max_block: usize,
+        take: bool,
+    ) -> Result<Self, CompileError> {
         // Snapshot specs, params, and each block's declared algorithmic
         // latency, in topological order.
         let mut specs = Vec::with_capacity(order.len());
         let mut params_norm = Vec::with_capacity(order.len());
         let mut params_real: Vec<Vec<f32>> = Vec::with_capacity(order.len());
         let mut own_latency = Vec::with_capacity(order.len());
-        for id in &order {
+        for id in order {
             let node = graph
                 .node(id)
                 .ok_or(CompileError::Graph(GraphError::Cycle(Vec::new())))?;
@@ -280,16 +313,31 @@ impl Executor {
             }
         }
 
-        // Move blocks out of the graph and prepare them.
+        // Move blocks out of the graph, or rebuild them, and prepare them.
         let mut nodes: Vec<Box<dyn Block>> = Vec::with_capacity(order.len());
-        for id in &order {
-            let mut node = graph
-                .take_node(id)
-                .ok_or(CompileError::Graph(GraphError::Cycle(Vec::new())))?;
-            node.block
+        for (id, spec) in order.iter().zip(&specs) {
+            let mut block = if take {
+                graph
+                    .take_node(id)
+                    .ok_or(CompileError::Graph(GraphError::Cycle(Vec::new())))?
+                    .block
+            } else {
+                // A borrowed graph keeps its blocks, so the executor builds its
+                // own from the registry — a fresh instance, no streaming state.
+                reg.expect("a borrowed compile needs the registry")
+                    .build(&spec.id)
+                    .ok_or_else(|| CompileError::Prepare {
+                        node: id.clone(),
+                        error: BlockError::Other(format!(
+                            "no factory for block type '{}'",
+                            spec.id
+                        )),
+                    })?
+            };
+            block
                 .prepare(sample_rate, max_block)
                 .map_err(|error| CompileError::Prepare { node: id.clone(), error })?;
-            nodes.push(node.block);
+            nodes.push(block);
         }
 
         // Sample-rate mismatches, for the UI.
@@ -477,7 +525,7 @@ impl Executor {
             out_latency,
             bypass: vec![false; order.len()],
             rate_mismatches: rate_mismatches,
-            ids: order,
+            ids: order.to_vec(),
             output_node,
             pool,
             input_slot,

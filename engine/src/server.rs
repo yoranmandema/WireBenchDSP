@@ -14,10 +14,10 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use dsp_graph::{Registry, RoutingEndpoint};
+use dsp_graph::{Doc, EdgeDoc, Executor, Graph, NodeDoc, Registry, RoutingEndpoint};
 
 use crate::audio::{read_f32, Cmd, Handle};
-use crate::channels::{master_id, Rig, IN};
+use crate::channels::{master_id, Rig, OUT_MASTER_ID, IN};
 use crate::store::{slugify, Store};
 
 /// Loopback only. Nothing outside this machine can reach the engine.
@@ -36,6 +36,11 @@ pub struct Shared {
     /// Current preset name, `""` when the rig has never been saved.
     pub preset: Mutex<String>,
     clients: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+    /// The bypass graph for a rig with no blocks in any slot. Built once and
+    /// recompiled (cheaply) whenever an empty pedalboard needs an executor, so
+    /// an empty rig never builds a `Doc` or walks the block registry. See
+    /// [`rebuild`].
+    bypass: Mutex<Option<Graph>>,
     /// Bumped on every successful rebuild. The UI uses it to ignore a stale
     /// snapshot, so an out-of-order delivery can never roll the UI backwards.
     pub rev: AtomicU64,
@@ -51,6 +56,7 @@ impl Shared {
             source,
             preset: Mutex::new(String::new()),
             clients: Mutex::new(Vec::new()),
+            bypass: Mutex::new(None),
             rev: AtomicU64::new(0),
         }
     }
@@ -183,15 +189,88 @@ fn broadcast(sh: &Shared, text: String, skip: Option<&mpsc::UnboundedSender<Stri
 // Mutations
 // ---------------------------------------------------------------------------
 
+/// The pedal's global output limiter, as a node. Shared by every command
+/// handler that has no rig left to compile.
+fn out_master() -> NodeDoc {
+    NodeDoc {
+        id: OUT_MASTER_ID.into(),
+        block: "util.master".into(),
+        params: [("volume".to_string(), 0.0), ("ceiling".to_string(), -1.0)].into_iter().collect(),
+        bypass: false,
+        pos: Some([1320.0, 400.0]),
+        model: None,
+    }
+}
+
+/// The graph a rig with no blocks at all still has to run.
+///
+/// A pedalboard with nothing in it is a *bypass*, not a dead pedal: the input
+/// feeds the output limiter directly, so the pedal passes audio until the user
+/// drops a block in. [`Rig::to_doc`] builds the same shape for a loaded preset.
+fn bypass_doc() -> Doc {
+    let mut doc = Doc::new(String::new());
+    doc.nodes.push(NodeDoc {
+        id: "in".into(),
+        block: "io.input".into(),
+        params: BTreeMap::new(),
+        bypass: false,
+        pos: Some([60.0, 400.0]),
+        model: None,
+    });
+    doc.nodes.push(NodeDoc {
+        id: "out".into(),
+        block: "io.output".into(),
+        params: BTreeMap::new(),
+        bypass: false,
+        pos: Some([1400.0, 400.0]),
+        model: None,
+    });
+    doc.nodes.push(out_master());
+    doc.edges.push(EdgeDoc {
+        from: ["in".to_string(), "out".into()],
+        to: ["out__master".to_string(), "in".into()],
+    });
+    doc.edges.push(EdgeDoc {
+        from: ["out__master".to_string(), "out".into()],
+        to: ["out".to_string(), "in".into()],
+    });
+    doc
+}
+
+/// Compile the bypass graph once, at startup, and hold it.
+///
+/// The empty-rig fast path. Building a `Doc` and compiling it costs real time
+/// on the UI thread (every block is instantiated and prepared), so a rig of
+/// only empty channel slots must not pay it — and must not pay it again on
+/// every volume slider move. [`Shared::bypass`] holds the built graph;
+/// `rebuild` recompiles that tiny graph (three blocks) and hands the result to
+/// the audio thread. The moment content appears, `rebuild` compiles the rig's
+/// own graph instead, so an empty channel that gets a block resumes normal
+/// processing without a reload.
+fn bypass_graph(sh: &Shared) -> Result<Graph, String> {
+    let doc = bypass_doc();
+    doc.build_in(&sh.registry, &sh.handle.preset_dir)
+        .map_err(|e| e.to_string())
+}
+
 /// Rebuild the executor from the rig and hand it to the audio thread.
+///
+/// An empty rig recompiles the cached bypass graph (cheap: three blocks, no
+/// instantiating a palette); any other rig compiles its own. That fast path is
+/// the point — while the pedalboard is empty, a rebuild does not walk the block
+/// registry or build a `Doc`, so the volume sliders stay responsive.
 fn rebuild(sh: &Shared) -> Result<(), String> {
-    let doc = sh.rig.lock().unwrap().to_doc();
-    let mut g = doc
-        .build_in(&sh.registry, &sh.handle.preset_dir)
-        .map_err(|e| e.to_string())?;
-    let block = sh.handle.block();
-    let ex = dsp_graph::Executor::compile_owned(&mut g, sh.handle.sample_rate, block)
-        .map_err(|e| e.to_string())?;
+    let ex = if sh.rig.lock().unwrap().has_content() {
+        compile(sh)?
+    } else {
+        let mut guard = sh.bypass.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(bypass_graph(sh)?);
+        }
+        let g = guard.as_mut().expect("just built");
+        Executor::compile_borrowed(g, &sh.registry, sh.handle.sample_rate, sh.handle.block())
+            .map_err(|e| e.to_string())?
+    };
     let ids = ex.node_ids().to_vec();
     let bypass: Vec<(String, bool)> = sh
         .rig
@@ -206,6 +285,16 @@ fn rebuild(sh: &Shared) -> Result<(), String> {
     *sh.handle.rate_mismatches.lock().unwrap() = Vec::new();
     sh.rev.fetch_add(1, Ordering::Release);
     Ok(())
+}
+
+/// Compile the rig's graph into a fresh executor.
+fn compile(sh: &Shared) -> Result<Executor, String> {
+    let doc = sh.rig.lock().unwrap().to_doc();
+    let mut g = doc
+        .build_in(&sh.registry, &sh.handle.preset_dir)
+        .map_err(|e| e.to_string())?;
+    Executor::compile_owned(&mut g, sh.handle.sample_rate, sh.handle.block())
+        .map_err(|e| e.to_string())
 }
 
 fn set_param(sh: &Shared, channel: &str, block: &str, param: &str, value: f32) -> Result<(), String> {
