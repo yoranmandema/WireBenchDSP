@@ -376,7 +376,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
     >
       <ChannelHead channel={channel} />
 
-      <div class="strip flex min-h-[102px] min-w-0 items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
+      <div class="strip relative flex min-h-[102px] min-w-0 items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         {channel.blocks.map((b, i) => {
           const spec = s.registry[b.type];

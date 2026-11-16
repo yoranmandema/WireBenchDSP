@@ -261,15 +261,19 @@ describe("keyboard insert", () => {
       expect($strip[0].scrollWidth).to.be.greaterThan($strip[0].clientWidth);
     });
     cy.get(".channel").eq(0).should(($ch) => {
-      // The channel itself is inside the window.
-      expect($ch[0].getBoundingClientRect().right).to.be.at.most(window.innerWidth + 1);
+      // The channel itself is inside the window. `window` here is the Cypress
+      // runner, not the app under test, so read the width from the AUT document.
+      const win = $ch[0].ownerDocument.defaultView;
+      expect($ch[0].getBoundingClientRect().right).to.be.at.most(win.innerWidth + 1);
     });
-    // The cards are allowed to run past the strip's right edge — that is the
-    // strip's scrollable overflow, not the window's.
+    // The strip scrolls its own overflow: its content (the trailing Out node)
+    // runs past its visible box, while the box itself stays inside the window.
     cy.get(".channel").eq(0).find(".strip").then(($strip) => {
-      const last = $strip[0].querySelectorAll(".block-card");
-      const edge = last[last.length - 1].getBoundingClientRect().right;
-      expect(edge).to.be.greaterThan($strip[0].getBoundingClientRect().right);
+      const strip = $strip[0];
+      const rect = strip.getBoundingClientRect();
+      const out = strip.querySelector(".io.out").getBoundingClientRect();
+      expect(out.right).to.be.greaterThan(rect.right);
+      expect(out.right).to.be.at.most(strip.ownerDocument.defaultView.innerWidth + 1);
     });
   });
 });
