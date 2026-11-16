@@ -46,8 +46,8 @@ if grep -q -E '(\.rs|Cargo\.(toml|lock))$' <<<"$changed"; then
 fi
 if grep -q '^ui/' <<<"$changed"; then
   echo "kanban-land: UI changed: typecheck + build"
-  ( cd ui && pnpm run build ) >/tmp/kanban-land-$id.log 2>&1 \
-    || { tail -30 /tmp/kanban-land-$id.log; die "UI build failed (full log: /tmp/kanban-land-$id.log)"; }
+  ( cd ui && pnpm run build ) >"$TMPDIR/kanban-land-$id.log" 2>&1 \
+    || { tail -30 "$TMPDIR/kanban-land-$id.log"; die "UI build failed (full log: $TMPDIR/kanban-land-$id.log)"; }
 fi
 
 git -C "$REPO" merge --ff-only -q "$br" \
