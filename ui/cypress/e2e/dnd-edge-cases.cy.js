@@ -240,4 +240,36 @@ describe("keyboard insert", () => {
     cy.get(".channel").eq(2).find(".add-selected").should("be.disabled");
     cy.get(".channel").eq(2).find(".block-card").should("have.length", 0);
   });
+
+  it("keeps the chain inside the window when a channel is full", () => {
+    // The strip scrolls its own overflow, so a row of cards must never widen
+    // the grid track: the channel grows past the viewport and the whole chain
+    // panel scrolls horizontally instead. Regression test for the keyboard-insert
+    // button, which pushed the row past the strip and made the grid 820px wide
+    // at an 800px window.
+    cy.viewport(800, 600);
+    cy.get(".channel").eq(0).find(".block-card").should("have.length.at.least", 3);
+
+    cy.get(".chain-panel").should(($panel) => {
+      expect($panel[0].scrollWidth).to.be.at.most($panel[0].clientWidth);
+    });
+    cy.get(".chain-scroll").should(($grid) => {
+      expect($grid[0].scrollWidth).to.be.at.most($grid[0].clientWidth);
+    });
+    cy.get(".channel").eq(0).find(".strip").should(($strip) => {
+      // The strip itself is the scroller now.
+      expect($strip[0].scrollWidth).to.be.greaterThan($strip[0].clientWidth);
+    });
+    cy.get(".channel").eq(0).should(($ch) => {
+      // The channel itself is inside the window.
+      expect($ch[0].getBoundingClientRect().right).to.be.at.most(window.innerWidth + 1);
+    });
+    // The cards are allowed to run past the strip's right edge — that is the
+    // strip's scrollable overflow, not the window's.
+    cy.get(".channel").eq(0).find(".strip").then(($strip) => {
+      const last = $strip[0].querySelectorAll(".block-card");
+      const edge = last[last.length - 1].getBoundingClientRect().right;
+      expect(edge).to.be.greaterThan($strip[0].getBoundingClientRect().right);
+    });
+  });
 });

@@ -65,6 +65,13 @@ function payloadFromDrop(
 }
 
 /** One channel row: header above a horizontally scrolling strip of blocks. */
+// `min-w-0` on the channel (and on its `.strip`) is load-bearing, not
+// defensive: the strip is an `overflow-x-auto` row of fixed-width cards, so its
+// min-content width is the entire row laid out end to end. A grid item
+// defaults to `min-width: auto`, which hands that min-content width to the
+// grid track — the channel then grows past the viewport and the whole chain
+// panel scrolls horizontally instead of the strip scrolling on its own. Both
+// the channel and the strip therefore opt out of the automatic minimum.
 function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
   // An empty channel is a fixed slot that happens to hold nothing, not a missing
   // one. So it still has to be *there*: header, signal path, the empty hint and
@@ -159,7 +166,7 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
 
   return (
     <div
-      class={`channel is-empty flex flex-col rounded-card border ${dropActive ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`}
+      class={`channel is-empty min-w-0 flex flex-col rounded-card border ${dropActive ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`}
       data-channel-id={channel.id}
       onDragEnter={dragEnter}
       onDragOver={dragOver}
@@ -167,7 +174,11 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
       onDrop={drop}
     >
       <ChannelHead channel={channel} />
-      <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
+      {/* `min-w-0` is not cosmetic: the strip scrolls its own overflow, so its
+          min-content width (every card laid out in a row) must not be allowed
+          to widen the grid track. Without it the channel grows past the
+          viewport and the whole chain panel scrolls instead. */}
+      <div class="strip flex min-h-[102px] min-w-0 items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         <div class="strip-empty flex-1 text-center text-sm text-muted">Empty channel — press + to search for a block</div>
         <AddBlockButton channel={channel} />
@@ -188,7 +199,7 @@ function AddBlockButton({ channel }: { channel: import("../protocol").Channel })
       {/* Keyboard alternative to dragging: the block type selected in the rack
           (Enter/Space on a row) is inserted at the end of this channel. */}
       <button
-        class={`add-selected flex-none size-8.5 rounded-full border text-[10px] font-semibold leading-none transition-[border-color,background-color] ${chosen ? "border-amber-dim text-amber bg-[rgba(232,163,61,0.1)] hover:bg-[rgba(232,163,61,0.18)]" : "border-line-soft text-muted bg-[rgba(255,255,255,0.012)]"}`}
+        class={`add-selected flex-none size-8 rounded-full border text-[9px] font-semibold leading-none transition-[border-color,background-color] ${chosen ? "border-amber-dim text-amber bg-[rgba(232,163,61,0.1)] hover:bg-[rgba(232,163,61,0.18)]" : "border-line-soft text-muted bg-[rgba(255,255,255,0.012)]"}`}
         disabled={!chosen}
         onClick={() => { if (chosen) void appendSelectedBlock(channel.id, chosen); }}
         title={chosen ? `Add ${chosen.name} to ${channel.name} at the end` : `Select a block in the rack (Enter) to add it to ${channel.name}`}
@@ -356,7 +367,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
 
   return (
     <div
-      class={`channel flex flex-col rounded-card border ${drop ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`}
+      class={`channel min-w-0 flex flex-col rounded-card border ${drop ? "drop-target-active border-amber-dim bg-[rgba(232,163,61,0.05)] shadow-[0_0_0_1px_var(--color-amber-dim),0_0_22px_rgba(232,163,61,0.22)]" : "border-line-soft bg-[rgba(255,255,255,0.012)]"} p-2.5 transition-[border-color,box-shadow,background-color] duration-120`}
       data-channel-id={channel.id}
       onDragEnter={dragEnter}
       onDragOver={dragOver}
@@ -365,7 +376,7 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
     >
       <ChannelHead channel={channel} />
 
-      <div class="strip flex min-h-[102px] items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
+      <div class="strip flex min-h-[102px] min-w-0 items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
         <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         {channel.blocks.map((b, i) => {
           const spec = s.registry[b.type];
