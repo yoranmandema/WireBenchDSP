@@ -39,10 +39,10 @@ interface Drop {
 
 /** One channel row: header above a horizontally scrolling strip of blocks. */
 function ChannelRow({ channel }: { channel: import("../protocol").Channel }) {
-  // An empty channel is a fixed slot that happens to hold nothing, not a
-  // missing one. So it still has to be *there*: header, signal path, the empty
-  // hint and the "+" button all stay, and the slot keeps its place in the
-  // layout. What it must not do is pay for any of the per-block machinery.
+  // An empty channel is a fixed slot that happens to hold nothing, not a missing
+  // one. So it still has to be *there*: header, signal path, the empty hint and
+  // the "+" button all stay, and the slot keeps its place in the layout. What
+  // it must not do is pay for any of the per-block machinery.
   //
   // Everything below the header is therefore split on this one check. The
   // populated branch is the behaviour this component always had; the empty
@@ -106,19 +106,15 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
   };
 
   return (
-    <div class="channel is-empty" onDragEnter={dragEnter} onDragOver={dragOver} onDrop={drop}>
+    <div class="channel is-empty flex flex-col" onDragEnter={dragEnter} onDragOver={dragOver} onDrop={drop}>
       <ChannelHead channel={channel} />
-      <div class="strip" ref={strip}>
-        <div class="io in">In</div>
-        <div class="strip-empty">Empty channel — press + to search for a block</div>
-        <button
-          class="add-block"
-          onClick={() => openBlockPicker(channel.id)}
-          title="Search and add a block"
-        >
+      <div class="strip flex items-center gap-2 overflow-x-auto px-2" ref={strip} style={{ paddingTop: "18px", paddingBottom: "18px" }}>
+        <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
+        <div class="strip-empty flex-1 text-center text-sm text-muted">Empty channel — press + to search for a block</div>
+        <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
           <PlusIcon size={16} />
         </button>
-        <div class="io out">Out</div>
+        <div class="io out flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">Out</div>
       </div>
     </div>
   );
@@ -127,30 +123,11 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
 /** The always-present header: name, volume, and the input-source toggle. */
 function ChannelHead({ channel }: { channel: import("../protocol").Channel }) {
   return (
-    <div class="channel-head">
-      <span class="channel-name">{channel.name}</span>
-      <input
-        type="range"
-        min={-60}
-        max={12}
-        step={0.1}
-        value={channel.volume}
-        title={`Volume ${channel.volume.toFixed(1)} dB`}
-        onInput={(e) => void setMasterVolume(channel.id, Number((e.target as HTMLInputElement).value))}
-      />
-      <label class="mini">
-        <input
-          type="checkbox"
-          checked={channel.sources.includes("<in>")}
-          onChange={(e) =>
-            void setSources(
-              channel.id,
-              (e.target as HTMLInputElement).checked
-                ? [...new Set([...channel.sources, "<in>"])]
-                : channel.sources.filter((x) => x !== "<in>"),
-            )
-          }
-        />
+    <div class="channel-head flex items-center gap-2.5 mb-2">
+      <span class="channel-name text-[11px] font-semibold tracking-[0.4px]">{channel.name}</span>
+      <input type="range" min={-60} max={12} step={0.1} value={channel.volume} title={`Volume ${channel.volume.toFixed(1)} dB`} onInput={(e) => void setMasterVolume(channel.id, Number((e.target as HTMLInputElement).value))} class="w-[130px] accent-amber" />
+      <label class="mini flex items-center gap-1 text-xs text-muted">
+        <input type="checkbox" checked={channel.sources.includes("<in>")} onChange={(e) => void setSources(channel.id, (e.target as HTMLInputElement).checked ? [...new Set([...channel.sources, "<in>"])] : channel.sources.filter((x) => x !== "<in>"))} />
         In
       </label>
     </div>
@@ -285,17 +262,11 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
   const dragSpec = dragBlock ? s.registry[dragBlock.type] : undefined;
 
   return (
-    <div
-      class={`channel${drop ? " drop-target-active" : ""}`}
-      onDragEnter={dragEnter}
-      onDragOver={dragOver}
-      onDragLeave={dragLeave}
-      onDrop={dropFromBrowser}
-    >
+    <div class={`channel${drop ? " drop-target-active" : ""}`} onDragEnter={dragEnter} onDragOver={dragOver} onDragLeave={dragLeave} onDrop={dropFromBrowser}>
       <ChannelHead channel={channel} />
 
-      <div class="strip" ref={strip}>
-        <div class="io in">In</div>
+      <div class="strip flex items-center gap-2 overflow-x-auto px-2" ref={strip} style={{ paddingTop: "18px", paddingBottom: "18px" }}>
+        <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
         {channel.blocks.map((b, i) => {
           const spec = s.registry[b.type];
           const isSel = selected.value?.block === b.id;
@@ -303,15 +274,13 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
             <Fragment key={b.id}>
               {/* Always-mounted slot so the cards themselves are never added or
                   removed mid-drag (that would break pointer capture). */}
-              <div
-                class={`block-placeholder${drag && drag.insert === i && drag.insert !== drag.from ? " active" : ""}`}
-              />
+              <div class={`block-placeholder flex-none h-[66px] rounded-lg border-[1px] border-dashed border-transparent overflow-hidden transition-[width,margin-right,border-color,background-color] duration-110 ${drag && drag.insert === i && drag.insert !== drag.from ? "w-[116px] mr-0 border-amber-dim bg-[rgba(232,163,61,0.08)]" : "w-0 mr-[-8px]"}`} />
               <div
                 class={[
-                  "block-card",
-                  b.bypass ? "bypass" : "",
-                  isSel ? "selected" : "",
-                  drag?.id === b.id ? "dragging" : "",
+                  "block-card flex-none w-[116px] h-[66px] rounded-lg border border-[#353843] border-l-3 bg-linear-to-r from-cat-soft to-[#1b1c22] shadow-card grid grid-rows-[auto_1fr_auto] items-center justify-items-center gap-0.5 px-2 py-1 cursor-grab select-none relative touch-none transition-[border-color,box-shadow,transform] duration-120",
+                  b.bypass ? "opacity-45" : "",
+                  isSel ? "border-cat shadow-[inset_0_0_0_1px_var(--cat)] -translate-y-0.5" : "",
+                  drag?.id === b.id ? "dragging border-dashed border-[#4a4d59] opacity-35" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -348,58 +317,31 @@ function PopulatedChannel({ channel }: { channel: import("../protocol").Channel 
                 }}
                 title={`${b.name} (${b.type}) — drag to reorder, click to edit`}
               >
-                <button
-                  class={`icon-btn bypass${b.bypass ? " on" : ""}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void setBypass(channel.id, b.id, !b.bypass);
-                  }}
-                  title={b.bypass ? "Unbypass" : "Bypass"}
-                >
+                <button class={`icon-btn bypass absolute top-1 left-1 size-4 rounded-full grid place-items-center text-[9px] leading-none bg-[#26282f] text-muted border border-line-soft ${b.bypass ? "bg-amber text-amber-ink border-amber-edge" : ""}`} onClick={(e) => { e.stopPropagation(); void setBypass(channel.id, b.id, !b.bypass); }} title={b.bypass ? "Unbypass" : "Bypass"}>
                   <PowerIcon size={10} />
                 </button>
-                <button
-                  class="icon-btn remove"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void removeBlock(channel.id, b.id);
-                  }}
-                  title="Remove block"
-                >
+                <button class="icon-btn remove absolute top-1 right-1 size-4 rounded-full grid place-items-center text-[9px] leading-none bg-[#26282f] text-muted border border-line-soft hover:text-[#ff8a7a] hover:border-[#5a3535]" onClick={(e) => { e.stopPropagation(); void removeBlock(channel.id, b.id); }} title="Remove block">
                   <CloseIcon size={9} />
                 </button>
-                <span class="block-icon">
+                <span class="block-icon grid place-items-center h-[14px] text-cat">
                   {spec && <BlockIcon type={b.type} category={spec.category} size={26} />}
                 </span>
-                <span class="block-name">{b.name}</span>
+                <span class="block-name text-[11px] font-semibold text-center leading-[1.15]">{b.name}</span>
               </div>
             </Fragment>
           );
         })}
-        <div
-          class={`block-placeholder${drag && drag.insert === channel.blocks.length && drag.insert !== drag.from ? " active" : ""}`}
-        />
-        {drop && <div class="drop-indicator" style={{ left: `${drop.x}px` }} />}
-        <button
-          class="add-block"
-          onClick={() => openBlockPicker(channel.id)}
-          title="Search and add a block"
-        >
+        <div class={`block-placeholder flex-none h-[66px] rounded-lg border-[1px] border-dashed border-transparent overflow-hidden transition-[width,margin-right,border-color,background-color] duration-110 ${drag && drag.insert === channel.blocks.length && drag.insert !== drag.from ? "w-[116px] mr-0 border-amber-dim bg-[rgba(232,163,61,0.08)]" : "w-0 mr-[-8px]"}`} />
+        {drop && <div class="drop-indicator absolute top-[14px] bottom-[14px] w-[2px] -ml-[1px] rounded rounded-[1px] bg-amber shadow-[0_0_8px_rgba(232,163,61,0.8)] z-20 pointer-events-none" style={{ left: `${drop.x}px` }} />}
+        <button class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber" onClick={() => openBlockPicker(channel.id)} title="Search and add a block">
           <PlusIcon size={16} />
         </button>
-        <div class="io out">Out</div>
+        <div class="io out flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">Out</div>
       </div>
 
       {/* Ghost of the dragged card, following the pointer. */}
       {drag && (
-        <div
-          class="drag-ghost"
-          style={{
-            left: `${drag.x}px`,
-            top: `${drag.y}px`,
-            ...(dragSpec ? catStyle(dragSpec.category) : null),
-          }}
-        >
+        <div class="drag-ghost fixed z-40 transform -translate-x-1/2 -translate-y-1/2 scale-[1.04] px-3.5 py-2 rounded-lg bg-linear-to-b from-[#3a3e49] to-[#23252c] border border-amber shadow-drag text-text text-[11px] font-semibold whitespace-nowrap pointer-events-none" style={{ left: `${drag.x}px`, top: `${drag.y}px`, ...(dragSpec ? catStyle(dragSpec.category) : null) }}>
           {dragSpec && <BlockIcon type={dragBlock!.type} category={dragSpec.category} size={14} />}
           {dragBlock?.name}
         </div>
@@ -413,14 +355,14 @@ export function Chain() {
   const s = state.value;
   if (!s) return null;
   return (
-    <div class="chain-panel">
-      <div class="chain-label">Signal chain</div>
-      <div class="chain-scroll">
+    <div class="chain-panel overflow-auto p-2.5 bg-[radial-gradient(120%_90%_at_50%_0%,#1a1c22_0%,#101116_70%)]">
+      <div class="chain-label text-[10px] tracking-[1.4px] text-muted font-semibold mb-2.5">Signal chain</div>
+      <div class="chain-scroll grid gap-2.5">
         {s.channels.map((c) => (
           <ChannelRow key={c.id} channel={c} />
         ))}
       </div>
-      <p class="hint">Drag to reorder · click a block to edit it below.</p>
+      <p class="hint mt-2.5 text-xs text-muted">Drag to reorder · click a block to edit it below.</p>
     </div>
   );
 }
