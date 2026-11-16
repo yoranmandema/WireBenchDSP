@@ -80,18 +80,16 @@ interface BlockDrag {
   payload: BlockPayload;
 }
 
-/**
- * Module-level handle on the current drag. `dragend` has no other way back to
- * the row that started the gesture, so the source lives here for the duration.
- */
-let dragSource: BlockDrag | null = null;
-
 /** Outcome of the most recent browser drag. `dragend` writes it; the
  *  drop-target side and the edge-case tests read it. */
 export const lastBlockDrag: { dropped: boolean; payload: BlockPayload | null } = {
   dropped: false,
   payload: null,
 };
+
+/** Module-level handle on the current drag. `dragend` has no other way back to
+ * the row that started the gesture, so the source lives here for the duration. */
+let dragSource: BlockDrag | null = null;
 
 /** Publish `b` on the data transfer and mark its row as the drag source. */
 function startDrag(e: DragEvent, b: BlockEntry) {
@@ -135,15 +133,15 @@ export function BlockList({
   return (
     <div class="block-list">
       {groups.map((g) => (
-        <section key={g.category}>
-          <h2 style={catStyle(g.category)}>
+        <section key={g.category} class="flex flex-col gap-1">
+          <h2 class="flex items-center gap-1.5 text-[10px] tracking-[1.4px] font-semibold mb-1.5 text-cat" style={catStyle(g.category)}>
             <Icon category={g.category} size={12} />
             <span>{g.category}</span>
           </h2>
           {g.blocks.map((b) => (
             <button
               key={b.type}
-              class="rack-item"
+              class="rack-item w-full flex items-center gap-2 px-2.5 py-1.75 rounded-md text-left border border-transparent border-l-3 bg-linear-to-r from-cat-soft to-transparent cursor-grab transition-[background-color,border-color,border-left-color] duration-120 hover:bg-panel-2 hover:border-[#3b3e49] hover:border-l-cat"
               style={catStyle(b.category)}
               draggable
               onDragStart={(e) => startDrag(e, b)}
@@ -151,11 +149,11 @@ export function BlockList({
               onClick={() => onSelect(b)}
               title={`Add ${b.name} (${b.type}) — or drag it into a channel`}
             >
-              <span class="rack-icon">
+              <span class="rack-icon grid place-items-center text-cat">
                 <BlockIcon type={b.type} category={b.category} size={18} />
               </span>
-              <span class="rack-text">
-                <span class="rack-name">{b.name}</span>
+              <span class="rack-text grid gap-[1px] min-w-0">
+                <span class="rack-name text-[12px] font-medium">{b.name}</span>
               </span>
             </button>
           ))}
