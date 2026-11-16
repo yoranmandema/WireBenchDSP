@@ -326,6 +326,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The shipped OD808 preset, once migrated, resolves through the index and
+    /// builds — the whole pipeline against the real bundled model.
+    #[test]
+    fn shipped_od808_preset_migrates_and_resolves_through_the_index() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let real_model = repo.join("models/MES DRECF RD Gain2 BAL O808 CAB.nam");
+        let real_preset = repo.join("presets/07-nam-od808.json");
+        if !real_model.is_file() || !real_preset.is_file() {
+            return; // the capture is not bundled in this checkout
+        }
+        let file: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&real_model).unwrap()).unwrap();
+        let hash = file["metadata"]["weights_hash"].as_str().unwrap().to_string();
+        let t3k_id = file["metadata"]["t3k_id"].as_i64().unwrap();
+
+        let dir = temp_dir("od808");
+        let presets = dir.join("presets");
+        let models = dir.join("models");
+        std::fs::create_dir_all(&presets).unwrap();
+        std::fs::create_dir_all(models.join("t3k/106343")).unwrap();
+        std::fs::copy(&real_model, models.join("MES DRECF RD Gain2 BAL O808 CAB.nam")).unwrap();
+        std::fs::write(
+            presets.join("07-nam-od808.json"),
+            std::fs::read_to_string(&real_preset).unwrap(),
+        )
+        .unwrap();
+
+        let index = ModelIndex::from_json(
+            &serde_json::json!({
+                "schema": 1,
+                "provider": "t3k",
+                "count": 1,
+                "models": [{
+                    "id": format!("t3k:{t3k_id}"),
+                    "provider": "t3k",
+                    "local_path": format!("t3k/106343/{t3k_id}_a2.nam"),
+                    "content_hash": hash,
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let report = migrate_preset_models(&presets, &index);
+        assert_eq!(report.migrated, vec!["07-nam-od808".to_string()]);
+
+        // The model is now downloaded at the index's `local_path`.
+        std::fs::copy(&real_model, models.join(format!("t3k/106343/{t3k_id}_a2.nam"))).unwrap();
+
+        let migrated = std::fs::read_to_string(presets.join("07-nam-od808.json")).unwrap();
+        let doc = Doc::from_json(&migrated).unwrap();
+        assert_eq!(doc.node("nam").unwrap().model.as_deref(), Some(format!("t3k:{t3k_id}").as_str()));
+
+        let resolver = IndexResolver::new(index, models.clone());
+        let reg = dsp_graph::blocks::builtin_registry();
+        doc.build_in_with(&reg, &presets, &resolver)
+            .expect("migrated preset resolves through the index");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn index_path_is_under_home() {
         assert_eq!(
