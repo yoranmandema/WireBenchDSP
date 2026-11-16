@@ -10,17 +10,21 @@ for its job, so stay in your lane:
 
 | Assignee | Model | Job |
 |---|---|---|
-| `pedal-architect` | Opus (expensive) | Design and plan. Turns a feature into small, precise builder cards. Writes little code. |
-| `pedal-builder` | Haiku (cheap) | Implements exactly one precisely specified card. |
-| `pedal-reviewer` | Sonnet | Checks a builder card against its acceptance criteria, then approves or sends it back. |
+| `pedal-architect` | Opus 5.5 (expensive; #1 on frontend leaderboards) | Design and plan, including UI and visual design. Turns a feature into small, precise builder cards. Writes little code. |
+| `pedal-ui-builder` | Sonnet 5.5 (#2 frontend) | Implements one UI card: Preact, TypeScript and CSS in `ui/`. |
+| `pedal-builder` | Haiku 5.5 (cheap) | Implements one non-UI card: the Rust engine, DSP, tooling, docs. |
+| `pedal-reviewer` | Sonnet 5.5 | Checks a builder card against its acceptance criteria, then approves or sends it back. |
 
 ### pedal-architect
 - Read the code the feature touches, plus `docs/ARCHITECTURE.md` and
   `docs/IPC-PROTOCOL.md`. If the design is non-trivial (a data model, a protocol
   change, threading, or DSP), write it down in `docs/design/<topic>.md` and commit.
 - Split the work into **builder cards** with `kanban_create`. Each card must be:
-  - `assignee: pedal-builder`, `workspace_kind: dir`,
-    `workspace_path: /Users/yoran/Documents/Repos/pedal-dsp`, with the same
+  - assigned to `pedal-ui-builder` if it touches `ui/` (components, styling,
+    layout, interaction), or to `pedal-builder` otherwise. Split a mixed change
+    into an engine card and a UI card, with the UI card depending on the engine
+    one. Use `workspace_kind: dir`,
+    `workspace_path: /Users/yoran/Documents/Repos/pedal-dsp`, and the same
     `priority` as your own card;
   - one session of work: roughly 1–4 files, and it must leave the app working;
   - concrete: the exact files, types and functions to touch, the approach, and
@@ -34,10 +38,13 @@ for its job, so stay in your lane:
   duplicate them. Add your precise spec as a comment on each existing card
   (`hermes kanban --board pedal comment <id> "..."`), and only create cards for
   missing work.
-- Only for a card that is genuinely hard (real-time audio-thread code, DSP maths,
+- Only for a non-UI card that is genuinely hard (real-time audio-thread code, DSP maths,
   lock-free or concurrency work, or a subtle protocol migration), pin it with
   `model: anthropic/claude-sonnet-5.5`, `provider: nous`. Everything else stays
   on the builder's default cheap model.
+- For UI cards, state the visual intent precisely: sizes, spacing scale,
+  colours or tokens, states (hover, active, disabled, focus), behaviour at
+  ~800 px and ~1440 px wide, and what must not move or change.
 - If a product decision is needed, block your own card with `needs_input` (see
   below) before creating cards.
 - Finish with `kanban_complete`, not review. The first line of the summary says
@@ -45,10 +52,12 @@ for its job, so stay in your lane:
   cross-channel routing: 5 build steps queued". List the card ids in
   `created_cards`.
 
-### pedal-builder
+### pedal-builder and pedal-ui-builder
 - Do what the card says, and only that. If the spec turns out to be wrong or
   ambiguous, don't redesign. Block with `needs_input` and ask one precise
   question.
+- UI builders: look at your result before handing off (see "Looking at the UI"
+  below), at ~800 px and ~1440 px wide.
 - If the card is too big for one session, finish one verifiable slice, commit it,
   record the remaining steps as a comment on the card, then block with
   `needs_input`. Don't create cards.
@@ -58,14 +67,20 @@ for its job, so stay in your lane:
 ### pedal-reviewer
 - Find the card's commits with `git log --oneline --grep <card id>`, read the
   diff, run the verify commands, and check each acceptance criterion.
+- For anything that changes `ui/`, also look at it (see "Looking at the UI"):
+  screenshot it at ~800 px and ~1440 px wide and check it with the vision tool
+  against the card's visual intent. Check alignment, overflow, clipping and
+  states. A UI card that builds but looks wrong is not done.
 - Fix trivial issues yourself (typos, a missing import, a few lines) and commit
   them. That costs less than another round trip.
 - Approve with `kanban_complete`. Keep the builder's product-owner summary and
   its "Try it" steps.
 - Otherwise call `kanban_request_changes` with a numbered list of specific
   fixes. If you are about to request changes on this card for the **second**
-  time, first escalate it to a stronger model:
+  time, first escalate it to a stronger model. For a `pedal-builder` card:
   `hermes kanban --board pedal set-model <card id> anthropic/claude-sonnet-5.5 --provider nous`.
+  For a `pedal-ui-builder` card:
+  `hermes kanban --board pedal set-model <card id> anthropic/claude-opus-5.5 --provider nous`.
   For a third time, block with `needs_input` instead.
 - **Feature cards** are the user's original request. Their parents are the build
   steps, so they run only after all of those are done. Check the original ask
@@ -98,6 +113,22 @@ for its job, so stay in your lane:
 - If you touch the Tauri shell, note that a plain `cargo build` produces a dev
   build that loads Vite's dev URL. A self-contained binary needs
   `--features custom-protocol`.
+
+## Looking at the UI (UI builders and reviewers)
+Run a private, silent copy of the app on different ports. Never touch 8737 or
+5173, because the user's own app may be using them:
+
+```sh
+./target/debug/pedal-engine --headless --port 18737        # background; no audio device, output discarded
+cd ui && VITE_ENGINE_URL=ws://127.0.0.1:18737 pnpm exec vite --port 15173 --strictPort   # background
+```
+
+Open `http://localhost:15173` with the browser tool, set the viewport to
+~1440×900 and then ~800×600, take screenshots, and check them with vision.
+Click through the states the card touches (select a block, open the modal,
+drag). Afterwards, kill both processes (`lsof -ti tcp:18737,15173 | xargs kill`).
+If `pnpm` isn't on PATH, use `~/.hermes/tools/node-*/bin` and
+`~/.hermes/tools/pnpm-*`, like `shell/run.sh` does.
 
 ## Handoffs to the product owner (the user)
 The user is the product owner, not a code reviewer. The `summary` you pass to
