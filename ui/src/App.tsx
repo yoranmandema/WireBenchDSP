@@ -6,6 +6,7 @@ import { Chain } from "./components/Chain";
 import { Editor } from "./components/Editor";
 import { PresetBrowser } from "./components/PresetBrowser";
 import { AddBlockModal } from "./components/AddBlockModal";
+import { TunerModal } from "./components/TunerModal";
 import { SelectionRing } from "./selection";
 
 export function App() {
@@ -46,6 +47,7 @@ export function App() {
         <Chain />
       </div>
       <Editor />
+      <TunerModal />
       <PresetBrowser />
       <AddBlockModal />
       {/* Drawn above the chain but outside every scrolling container, so the
