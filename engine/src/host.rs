@@ -147,6 +147,7 @@ pub fn build_input<T: ToF32 + 'static>(
     config: cpal::StreamConfig,
     channels: usize,
     ring: Arc<Ring>,
+    tuner: Arc<Ring>,
     meters: Arc<Meters>,
 ) -> Result<cpal::Stream, cpal::Error> {
     device.build_input_stream(
@@ -161,6 +162,7 @@ pub fn build_input<T: ToF32 + 'static>(
                 }
                 peak = peak.max(s.abs());
                 ring.push(s);
+                tuner.push(s);
             }
             meters.in_peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
         },
@@ -367,6 +369,11 @@ pub fn start(
     let out_channels = d.out_channels;
     let ring = Arc::new(Ring::new(RING_CAPACITY));
     let ring_in = ring.clone();
+    // The tuner reads its own copy of the input stream (see tuner.rs); the
+    // audio ring above is consumed by the output callback. Returns the tuner
+    // ring so main can spawn the detached tuner thread.
+    let tuner_ring = Arc::new(Ring::new(RING_CAPACITY));
+    let tuner_in = tuner_ring.clone();
 
     // The requested I/O buffer size comes from the engine config (the low-latency
     // default is 128 frames). The fallback ladder then tries progressively larger
@@ -384,7 +391,7 @@ pub fn start(
             sample_rate: d.rate,
             buffer_size: BufferSize::Fixed(frames),
         };
-        build_input::<f32>(&d.in_dev, cfg, in_channels, ring_in.clone(), meters.clone())
+        build_input::<f32>(&d.in_dev, cfg, in_channels, ring_in.clone(), tuner_in.clone(), meters.clone())
     })?;
     in_stream.play().expect("failed to start input");
     std::mem::forget(in_stream);
@@ -426,7 +433,7 @@ pub fn start(
         "pedal-engine: I/O latency one-way = {one_way_ms:.2} ms, round-trip = {round_trip_ms:.2} ms @ {} Hz",
         d.rate
     );
-    Ok(ring)
+    Ok(tuner_ring)
 }
 
 /// Validate the output device accepts each low-latency buffer size, using a

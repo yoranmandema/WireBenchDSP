@@ -132,11 +132,14 @@ async fn main() {
     // until the process exits; dropping it stops the simulated device.
     let mut _headless: Option<headless::Headless> = None;
     let mut headless_stats = None;
-    match devices {
+    let tuner_ring = match devices {
         Some(d) => {
-            if let Err(e) = host::start(&d, &config, cmd_rx, trash_tx, running, meters.clone(), source.clone()) {
-                eprintln!("pedal-engine: failed to start audio streams: {e}");
-                std::process::exit(1);
+            match host::start(&d, &config, cmd_rx, trash_tx, running, meters.clone(), source.clone()) {
+                Ok(tuner_ring) => tuner_ring,
+                Err(e) => {
+                    eprintln!("pedal-engine: failed to start audio streams: {e}");
+                    std::process::exit(1);
+                }
             }
         }
         None => {
@@ -153,12 +156,21 @@ async fn main() {
                 2 => "silence",
                 _ => "riff",
             };
-            let h = headless::start(setup, cmd_rx, trash_tx, running, meters.clone(), source.clone());
+            // Pass handle.source so the "live" tone actually reaches the tuner
+            // ring: new_engine's handle.source was constructed from source.clone()
+            // at engine start, so set_source writes to a different AtomicU8 than
+            // the one passed to the headless thread. Without this, the tuner ring
+            // stays empty and no tuner event reaches the UI.
+            let h = headless::start(setup, cmd_rx, trash_tx, running, meters.clone(), handle.source.clone());
             headless_stats = Some(h.stats.clone());
             eprintln!("pedal-engine: headless (no audio device), source {name}");
+            let tuner_ring = h.tuner_ring.clone();
             _headless = Some(h);
+            tuner_ring
         }
-    }
+    };
+
+    pedal_engine::tuner::spawn(tuner_ring, setup.sample_rate, meters.clone());
 
     // --- IPC ---------------------------------------------------------------
     let sh = Arc::new(Shared::new(handle, registry, source, store));
