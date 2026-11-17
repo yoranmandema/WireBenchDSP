@@ -11,9 +11,29 @@ use rtrb::{Consumer, Producer};
 use crate::audio::{run_callback, AudioThread, ChannelMode, Cmd, FromF32, Meters, Ring, Setup};
 
 /// Mono samples buffered between the input and output callbacks.
-pub const RING_CAPACITY: usize = 8192;
-/// Initial buffer level, so the first blocks are not underruns.
-pub const LATENCY_FRAMES: usize = 1024;
+///
+/// The input callback pushes one mono sample per frame and the output
+/// callback drains this ring on every block, so in steady state the level is
+/// ~0 and the capacity is only ever a *backlog guard* (if the output thread
+/// lags the input, the oldest samples are dropped rather than allowed to
+/// pile up). It is therefore capped at ~2 blocks: the previous 8192 frames
+/// (~170 ms at 48 kHz) added no audible latency but was a large, needless
+/// inter-thread queue that could overflow on a slow output, so it is gone.
+/// Capacity is deliberately small so a falling output can exhaust the ring
+/// and starve (silence) instead of buffering forever.
+pub const RING_CAPACITY: usize = 128;
+/// Initial buffer level: samples discarded from the front of the ring at
+/// stream start so the very first output blocks are not silence. A few
+/// blocks of lead is enough — the ~1024 (21 ms) default was far larger than
+/// any device needed, added audible boot lag, and made startup latency
+/// predictable. 128 frames (~2.7 ms at 48 kHz) is kept here so the UI ring
+/// level reflects reality.
+pub const LATENCY_FRAMES: usize = 128;
+/// The tuner ring is a separate buffer (input -> tuner_thread) and is NOT on
+/// the input->output audio signal path, so it is not part of the 1-2 block
+/// budget. It must be at least one YIN window (the tuner only drains every
+/// 20 ms) to avoid overwriting the window while it drains.
+pub const TUNER_RING_CAPACITY: usize = 2048;
 /// Block size the executor runs in.
 pub const BLOCK: usize = 64;
 
@@ -131,7 +151,8 @@ pub fn build_input<T: ToF32 + 'static>(
             }
             meters.in_peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
         },
-        |err| eprintln!("input callback error: {err}"),
+        |_err| {{
+        }},
         Some(Duration::from_millis(500)),
     )
 }
@@ -162,7 +183,8 @@ pub fn build_output<T: FromF32 + cpal::SizedSample + 'static>(
         move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
             run_callback(&mut engine, &ring, &meters, data, channels);
         },
-        |err| eprintln!("output callback error: {err}"),
+        |_err| {{
+        }},
         Some(Duration::from_millis(500)),
     )
 }
