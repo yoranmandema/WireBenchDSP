@@ -4,7 +4,7 @@
 //! architecture and give the host simulator something to run.
 
 use crate::prelude::*;
-use pedal_dsp::{Biquad, BiquadKind, envelope::EnvelopeFollower};
+use pedal_dsp::{Biquad, BiquadKind, PitchShifter, envelope::EnvelopeFollower};
 
 /// A simple gain stage, in dB.
 pub struct Gain {
@@ -225,6 +225,111 @@ impl Block for Reverb {
     }
 }
 
+
+/// An octaver: blends the input with one or more octave-shifted copies.
+///
+/// Provides three independent mix levels:
+///
+/// * `dry` — the dry (unprocessed) input.
+/// * `oct_down` — one octave below the input.
+/// * `oct_up` — one octave above the input.
+///
+/// Output is `dry*input + oct_down*down + oct_up*up`.  Setting the octave
+/// levels to 0 (and `dry` to 1) gives pass-through; setting the octave levels
+/// to 0 gives a dry-scaled pass-through at any `dry` level.
+pub struct Octaver {
+    /// Octave-down pitch shifter.
+    shifter_down: PitchShifter<2048>,
+    /// Octave-up pitch shifter.
+    shifter_up: PitchShifter<2048>,
+}
+
+impl Default for Octaver {
+    fn default() -> Self {
+        Self {
+            shifter_down: PitchShifter::new(48_000.0),
+            shifter_up: PitchShifter::new(48_000.0),
+        }
+    }
+}
+
+impl Block for Octaver {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "pitch.octaver",
+            name: "Octaver",
+            category: Category::Pitch,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "dry",
+                    name: "Dry",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 100.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "oct_down",
+                    name: "Oct Down",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 0.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "oct_up",
+                    name: "Oct Up",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 0.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.shifter_down = PitchShifter::new(sr);
+        self.shifter_up = PitchShifter::new(sr);
+        // Static pitch shift, instant glide.  -1200 = one octave down,
+        // +1200 = one octave up.
+        self.shifter_down.pitch_cents = -1200.0;
+        self.shifter_up.pitch_cents = 1200.0;
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        // Re-assert the static pitch shift on every block so it stays correct
+        // under dynamic use.  It is a single field write and cheap.
+        self.shifter_down.pitch_cents = -1200.0;
+        self.shifter_up.pitch_cents = 1200.0;
+
+        let dry = ctx.param(0) / 100.0;
+        let oct_down = ctx.param(1) / 100.0;
+        let oct_up = ctx.param(2) / 100.0;
+
+        let input = ctx.inputs[0];
+        let out = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let down = self.shifter_down.process(input[i]);
+            let up = self.shifter_up.process(input[i]);
+            out[i] = input[i] * dry + down * oct_down + up * oct_up;
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.shifter_down.clear();
+        self.shifter_up.clear();
+    }
+}
 /// The graph's input node. The executor writes the raw input into this node's
 /// output buffer before running the steps.
 #[derive(Default)]
@@ -834,6 +939,7 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<Reverb>();
     r.add::<Nam>();
     r.add::<Compressor>();
+    r.add::<Octaver>();
     r
 }
 
