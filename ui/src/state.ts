@@ -4,6 +4,7 @@
 import { signal } from "@preact/signals";
 import { createBridge, type Bridge } from "./bridge";
 import { type BlockPayload } from "./dnd";
+import { type Config } from "./protocol";
 import {
   asState,
   isMeters,
@@ -21,6 +22,8 @@ export const bridge: Bridge = createBridge();
 export const state = signal<State | null>(null);
 export const meters = signal<Meters>({ in: 0, out: 0, cpu: 0, xruns: 0 });
 export const ready = signal(false);
+/** Supported I/O buffer sizes, in frames, from the engine's `getConfig`. */
+export const bufferSizeOptions = signal<number[]>([]);
 /** Fatal: the UI could not reach the engine at all. */
 export const error = signal<string | null>(null);
 /** Transient: the last command was rejected. Shown as a toast, never fatal. */
@@ -109,6 +112,21 @@ export async function init(): Promise<void> {
   });
   try {
     fold(asState(await bridge.request("getState")));
+    // Populate the buffer-size dropdown once; the engine greets every new
+    // connection with a snapshot, which covers the latency readout. If the
+    // second request fails (engine restarting), fall back to the engine's
+    // built-in ladder so the control still renders and works.
+    try {
+      const cfg = await bridge.request("getConfig");
+      if (cfg && typeof cfg === "object" && "supported" in cfg) {
+        bufferSizeOptions.value = (cfg as Config).supported ?? [];
+      }
+    } catch {
+      // ignore: the snapshot already has the current buffer size; the user can
+      // still change it with the fallback list. The engine greets again with
+      // fresh state after a buffer change, so the UI stays in sync.
+      bufferSizeOptions.value = [128, 256, 512];
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     // The engine may still be starting (the shell spawns it alongside the
@@ -155,6 +173,13 @@ const mutate = (cmd: string, args?: Record<string, unknown>) =>
 
 export const setParam = (channel: string, block: string, param: string, value: number) =>
   mutate("setParam", { channel, block, param, value });
+
+export const setConfig = (bufferFrames: number) =>
+  mutate("setConfig", { buffer_frames: bufferFrames });
+
+/** Fetch engine config: supported buffer sizes, current values, and latency. */
+export const getConfig = () =>
+  bridge.request("getConfig").then((payload) => payload as Config);
 
 export const setBypass = (channel: string, block: string, bypass: boolean) =>
   mutate("setBypass", { channel, block, bypass });
