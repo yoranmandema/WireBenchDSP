@@ -34,6 +34,7 @@ binary on install; `ui/pnpm-workspace.yaml` allows Cypress's postinstall.
 | Spec | Flows / components |
 |---|---|
 | `boot.cy.js` | connecting to the engine, the rig rendering, meters, the engine-unavailable screen |
+| `tuner.cy.js` | the tuner top-bar button and modal: open/close, note readout, cents needle, verdict, frequency line, signal bar, idle state, keyboard and viewport geometry |
 | `presets.cy.js` | preset name/source display, next/previous, slot loading, source toggle, preset browser list/load/save/rename/delete, refused-delete error |
 | `rack.cy.js` | catalogue grouping and ordering, click-to-add |
 | `add-block.cy.js` | picker open/autofocus, name and type filtering, Enter-to-add, click-to-add, empty state, Escape/backdrop/× close |

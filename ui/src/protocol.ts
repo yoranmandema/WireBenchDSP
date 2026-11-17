@@ -113,13 +113,33 @@ export interface MetersEvent {
   payload: Meters;
 }
 
+export interface Tuner {
+  active: boolean;
+  freq: number;
+  note: string;
+  octave: number;
+  cents: number;   // -50...+50
+  clarity: number; // 0...1
+  reference: number;
+}
+
+export interface TunerEvent {
+  type: "event";
+  event: "tuner";
+  payload: Tuner;
+}
+
+export function isTuner(msg: ServerMessage): msg is TunerEvent {
+  return msg.type === "event" && msg.event === "tuner";
+}
+
 export interface ErrorEvent {
   type: "event";
   event: "error";
   payload: { message: string };
 }
 
-export type ServerMessage = Response | StateEvent | MetersEvent | ErrorEvent;
+export type ServerMessage = Response | StateEvent | MetersEvent | TunerEvent | ErrorEvent;
 
 export function isState(msg: ServerMessage): msg is StateEvent {
   return msg.type === "event" && msg.event === "state";

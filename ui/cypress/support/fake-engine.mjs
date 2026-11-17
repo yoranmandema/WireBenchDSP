@@ -10,10 +10,21 @@
 // `cy.visit()` starts from the same rig. No audio device is touched.
 
 import http from "node:http";
+import fs from "node:fs";
 import { WebSocketServer } from "ws";
 import { createSeedState, defaultParams, METERS } from "./seed.mjs";
 
 const BLOCK_MIME = "application/x-block-type"; // mirrors ui/src/dnd.ts
+
+const TUNER_DEFAULT = {
+  active: true,
+  freq: 220.0,
+  note: "A",
+  octave: 3,
+  cents: -1.2,
+  clarity: 0.94,
+  reference: 440.0,
+};
 
 function slugify(name) {
   const s = String(name)
@@ -32,11 +43,18 @@ function clamp(v, min, max) {
 export async function startFakeEngine({ port = 9400, host = "127.0.0.1" } = {}) {
   let state = createSeedState();
   let rev = 0;
+  /** The tuner reading, reset to `TUNER_DEFAULT` on every connection. */
+  let tuner = { ...TUNER_DEFAULT };
   /** @type {Set<import("ws").WebSocket>} */
   const clients = new Set();
 
   const stateEvent = () => JSON.stringify({ type: "event", event: "state", payload: state });
   const metersEvent = () => JSON.stringify({ type: "event", event: "meters", payload: METERS });
+  const tunerEvent = () => {
+  // Diagnostic: log the engine's tuner state to a file for the E2E spec to read.
+  fs.appendFileSync("/tmp/tuner_state.json", JSON.stringify({ ts: Date.now(), tuner: { ...tuner } }) + "\n");
+  return JSON.stringify({ type: "event", event: "tuner", payload: tuner });
+};
 
   const broadcast = () => {
     const text = stateEvent();
@@ -224,6 +242,24 @@ export async function startFakeEngine({ port = 9400, host = "127.0.0.1" } = {}) 
       res.writeHead(204).end();
       return;
     }
+    if (req.method === "POST" && req.url === "/__tuner") {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        try {
+          const patch = body ? JSON.parse(body) : {};
+          for (const key of ["active", "freq", "note", "octave", "cents", "clarity", "reference"]) {
+            if (key in patch) tuner[key] = patch[key];
+          }
+          res.writeHead(204).end();
+        } catch {
+          res.writeHead(400).end();
+        }
+      });
+      return;
+    }
     if (req.method === "GET" && req.url === "/__health") {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true }));
       return;
@@ -240,8 +276,12 @@ export async function startFakeEngine({ port = 9400, host = "127.0.0.1" } = {}) 
     clients.add(ws);
     ws.send(stateEvent());
     ws.send(metersEvent());
-    const meters = setInterval(() => {
-      if (ws.readyState === ws.OPEN) ws.send(metersEvent());
+    ws.send(tunerEvent());
+    const heartbeat = setInterval(() => {
+      if (ws.readyState === ws.OPEN) {
+        ws.send(metersEvent());
+        ws.send(tunerEvent());
+      }
     }, 50);
 
     ws.on("message", (data) => {
@@ -264,7 +304,7 @@ export async function startFakeEngine({ port = 9400, host = "127.0.0.1" } = {}) 
     });
 
     const close = () => {
-      clearInterval(meters);
+      clearInterval(heartbeat);
       clients.delete(ws);
     };
     ws.on("close", close);

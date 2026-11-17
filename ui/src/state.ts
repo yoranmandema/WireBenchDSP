@@ -4,7 +4,7 @@
 import { signal } from "@preact/signals";
 import { createBridge, type Bridge } from "./bridge";
 import { type BlockPayload } from "./dnd";
-import { asState, isMeters, isState, type Meters, type Routing, type RoutingEndpoint, type State } from "./protocol";
+import { asState, isMeters, isState, isTuner, type Meters, type Routing, type RoutingEndpoint, type State, type Tuner } from "./protocol";
 
 export const bridge: Bridge = createBridge();
 
@@ -25,6 +25,19 @@ export const presetsOpen = signal(false);
 export const addBlockFor = signal<string | null>(null);
 /** Current filter text of the add-block picker. */
 export const blockQuery = signal("");
+/** The tuner reading, updated on `event: tuner` at 20 Hz. Always-mounted: the
+ *  modal's keyboard effect must persist even when the panel is closed. */
+export const tuner = signal<Tuner>({
+  active: false,
+  freq: 0,
+  note: "",
+  octave: 0,
+  cents: 0,
+  clarity: 0,
+  reference: 440,
+});
+/** Whether the tuner modal is open. */
+export const tunerOpen = signal(false);
 /**
  * The block type selected in the browser (rack or picker), for the keyboard
  * path: Enter/Space on a row selects it here, then the channel view's
@@ -82,6 +95,7 @@ export async function init(): Promise<void> {
   bridge.subscribe((msg) => {
     if (isState(msg)) fold(asState(msg.payload));
     else if (isMeters(msg)) meters.value = msg.payload;
+    else if (isTuner(msg)) tuner.value = msg.payload;
   });
   try {
     fold(asState(await bridge.request("getState")));

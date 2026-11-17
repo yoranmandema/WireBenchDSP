@@ -1,4 +1,5 @@
-import { meters, presetsOpen, state, loadPreset, setSource } from "../state";
+import { meters, presetsOpen, state, loadPreset, setSource, tunerOpen } from "../state";
+import { TunerIcon } from "./Icon";
 
 const SLOTS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
@@ -61,6 +62,16 @@ export function TopBar() {
       </div>
 
       <div class="top-right flex items-center gap-3.5 ml-auto compact:flex-wrap compact:gap-y-2">
+        <button
+          class={`min-h-[var(--ui-touch)] px-2.5 flex items-center gap-1.5 rounded-md border text-[10px] font-semibold tracking-[0.6px] uppercase ${tunerOpen.value ? "on bg-[#2f323b] text-text border-line inset-shadow-[0_-2px_0_var(--color-amber)]" : "bg-[#1a1b21] text-muted border-line hover:text-text hover:border-line-hi"}`}
+          onClick={() => (tunerOpen.value = true)}
+          title="Tuner (T)"
+          aria-label="Open the tuner"
+          aria-expanded={tunerOpen.value}
+        >
+          <TunerIcon size={11} />
+          <span>Tuner</span>
+        </button>
         <div class="source-toggle flex border border-line rounded-md overflow-hidden">
           {(["riff", "live", "silence"] as const).map((src) => (
             <button
