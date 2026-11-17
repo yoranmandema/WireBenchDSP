@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use pedal_engine::audio::{new_engine, Cmd, Setup};
 use pedal_engine::channels::Rig;
 use pedal_engine::headless;
-use pedal_engine::host::{self, BLOCK, LATENCY_FRAMES};
+use pedal_engine::host::{self, BLOCK, Config, LATENCY_FRAMES};
 use pedal_engine::server::{serve_port, Shared, PORT};
 use pedal_engine::store::Store;
 
@@ -77,7 +77,11 @@ async fn main() {
 
     // Pick the devices first: the executor and the audio thread must agree on
     // the sample rate. `--headless` skips this entirely — there is no device.
-    let devices = if headless_mode { None } else { Some(host::pick()) };
+    // The engine asks the device for a low-latency I/O buffer (128 frames,
+    // ~2.7 ms one-way on 48 kHz); the device may still round up, which is
+    // handled by the fallback ladder in `host::start`.
+    let config = Config::low_latency();
+    let devices = if headless_mode { None } else { Some(host::pick(Some(&config))) };
     let setup = match &devices {
         Some(d) => Setup {
             sample_rate: d.rate as f32,
@@ -128,7 +132,10 @@ async fn main() {
     let mut headless_stats = None;
     match devices {
         Some(d) => {
-            host::start(&d, cmd_rx, trash_tx, running, meters.clone(), source.clone());
+            if let Err(e) = host::start(&d, &config, cmd_rx, trash_tx, running, meters.clone(), source.clone()) {
+                eprintln!("pedal-engine: failed to start audio streams: {e}");
+                std::process::exit(1);
+            }
         }
         None => {
             // The riff by default: with no interface there is no live input, and
