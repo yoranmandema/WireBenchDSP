@@ -291,11 +291,189 @@ export function selectBlockType(entry: BlockPayload | null): void {
   selectedBlockType.value = entry;
 }
 
-// Debug hook (removed before shipping).
-if (typeof window !== "undefined") {
-  (window as any).__pedal_bridge = bridge;
-  (window as any).__pedal_init = init;
-  (window as any).__pedal_state = state;
-  (window as any).__pedal_ready = ready;
-  (window as any).__pedal_error = error;
+// --- Model browsing -----------------------------------------------------
+
+import { type ModelPage, type ModelRecord, type Sort, type Kind, type CabIr, type Format, type LocalState, type ModelState, type Facets, PAGE_SIZE } from "./model";
+
+/** Whether the model browser is open. */
+export const modelsOpen = signal(false);
+/** Browse (primary action: Download) or picker (primary action: Use in NAM block). */
+export const modelsMode = signal<"browse" | "picker">("browse");
+/** The NAM channel the picker targets; null when not in picker mode. */
+export const modelsPickerChannel = signal<string | null>(null);
+/** Current search text. */
+export const modelsQuery = signal("");
+/** Active facet selections (multi-select OR within a facet; "all" = no-op for state). */
+export interface ActiveFacets {
+  kinds: Kind[];
+  manufacturers: string[];
+  cabIr: CabIr[];
+  tags: string[];
+  formats: Format[];
+  states: ModelState[];
 }
+export const modelsSelectedFacets = signal<ActiveFacets>({
+  kinds: [],
+  manufacturers: [],
+  cabIr: [],
+  tags: [],
+  formats: [],
+  states: ["all"],
+});
+/** Sort order. */
+export const modelsSort = signal<Sort>("downloads");
+/** List vs grid. */
+export const modelsView = signal<"list" | "grid">("list");
+/** Current page (1-based), server page size 100. */
+export const modelsPage = signal(1);
+/** Server page size (100, never above MAX_PAGE_SIZE). */
+export const modelsPageSize = signal<number>(PAGE_SIZE);
+/** Current page of results (never pulled beyond 500 at once). */
+export const modelsResults = signal<ModelRecord[]>([]);
+/** Total match count (before paging). */
+export const modelsTotal = signal(0);
+/** Facets for the current result set (computed by the engine over the match set). */
+export const modelsFacets = signal<Facets>({});
+/** In-flight request indicator. */
+export const modelsBusy = signal(false);
+/** Refresh in flight. */
+export const modelsRefreshing = signal(false);
+/** Refresh error shown as a toast. */
+export const modelsRefreshError = signal<string | null>(null);
+/** Last refresh result metadata. */
+export const modelsIndexMeta = signal<{ generated_at: string; count: number } | null>(null);
+/** Whether the index is stale (>7 days old). */
+export const modelsStale = signal(false);
+/** Detail record being inspected. */
+export const modelsDetailId = signal<string | null>(null);
+export const modelsDetail = signal<ModelRecord | null>(null);
+/** Cache of successful download responses, so the UI reflects latest index state. `null` means not downloaded. */
+export const modelLocal = signal<Record<string, LocalState | null>>({});
+/** In-flight download ids. */
+export const modelsDownloading = signal<Record<string, boolean>>({});
+/** Per-id download errors. */
+export const modelsDownloadError = signal<Record<string, string | null>>({});
+
+/** Open the model browser; reset query and facets. */
+export function openModels(mode: "browse" | "picker" = "browse"): void {
+  modelsOpen.value = true;
+  modelsQuery.value = "";
+  modelsSelectedFacets.value = { kinds: [], manufacturers: [], cabIr: [], tags: [], formats: [], states: ["all"] };
+  modelsSort.value = "downloads";
+  modelsView.value = modelsMode.value === "picker" ? "list" : (modelsView.value as "list" | "grid");
+  modelsPage.value = 1;
+  modelsDetailId.value = null;
+  modelsDetail.value = null;
+  modelsRefreshError.value = null;
+  if (mode === "picker") modelsPickerChannel.value = "";
+  void requestModels();
+}
+
+/** Close the model browser. */
+export function closeModels(): void {
+  modelsOpen.value = false;
+  modelsPickerChannel.value = null;
+  modelsRefreshError.value = null;
+}
+
+/** Open the model browser in picker mode, targeting `channel`. */
+export function openModelsPicker(channel: string): void {
+  modelsOpen.value = true;
+  modelsPickerChannel.value = channel;
+  modelsSelectedFacets.value = { kinds: [], manufacturers: [], cabIr: [], tags: [], formats: [], states: ["all"] };
+  modelsSort.value = "downloads";
+  modelsPage.value = 1;
+  modelsDetailId.value = null;
+  modelsDetail.value = null;
+  modelsRefreshError.value = null;
+  void requestModels();
+}
+
+/** Request the current page. Idempotent: a second call while busy is ignored. */
+export async function requestModels(): Promise<void> {
+  if (modelsBusy.value) return;
+  const args: Record<string, unknown> = {
+    query: modelsQuery.value.trim() || undefined,
+    kinds: modelsSelectedFacets.value.kinds,
+    manufacturers: modelsSelectedFacets.value.manufacturers,
+    cabIr: modelsSelectedFacets.value.cabIr,
+    tags: modelsSelectedFacets.value.tags,
+    formats: modelsSelectedFacets.value.formats,
+    states: modelsSelectedFacets.value.states,
+    sort: modelsSort.value,
+    page: modelsPage.value,
+    pageSize: modelsPageSize.value,
+  };
+  modelsBusy.value = true;
+  try {
+    const res = (await bridge.request("listModels", args)) as ModelPage;
+    modelsResults.value = res.models ?? [];
+    modelsTotal.value = res.total ?? 0;
+    modelsFacets.value = res.facets ?? {};
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    notice.value = msg;
+  } finally {
+    modelsBusy.value = false;
+  }
+}
+
+/** Pull one record by index id (for the detail pane). */
+export async function requestModel(id: string): Promise<void> {
+  try {
+    const rec = (await bridge.request("getModel", { id })) as ModelRecord;
+    modelsDetail.value = rec ?? null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    notice.value = msg;
+  }
+}
+
+/** Refresh the cached index from disk (the file the UI reads). */
+export async function refreshIndex(): Promise<{ generated_at: string; count: number } | null> {
+  if (modelsRefreshing.value) return modelsIndexMeta.value;
+  modelsRefreshing.value = true;
+  modelsRefreshError.value = null;
+  try {
+    const meta = (await bridge.request("refreshIndex", {})) as { generated_at: string; count: number };
+    modelsIndexMeta.value = meta;
+    modelsStale.value = false;
+    // Re-pull the current page so the list reflects the fresh index. The old
+    // page's models still render: the engine only ever rewrites local blocks,
+    // never their upstream fields, so overlapping records stay valid.
+    void requestModels();
+    return meta;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    modelsRefreshError.value = msg;
+    notice.value = `Couldn't refresh — still showing the cached index (${msg}).`;
+    return null;
+  } finally {
+    modelsRefreshing.value = false;
+  }
+}
+
+/** Hand a model to the download queue (engine protects the queue + index). */
+export async function downloadModel(id: string): Promise<LocalState | null> {
+  if (modelsDownloading.value[id]) return modelLocal.value[id] ?? null;
+  modelsDownloading.value = { ...modelsDownloading.value, [id]: true };
+  modelsDownloadError.value = { ...modelsDownloadError.value, [id]: null };
+  try {
+    const local = (await bridge.request("downloadModel", { id })) as LocalState | null;
+    modelLocal.value = { ...modelLocal.value, [id]: local };
+    return local;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    modelsDownloadError.value = { ...modelsDownloadError.value, [id]: msg };
+    notice.value = `Download failed for ${id}: ${msg}`;
+    return null;
+  } finally {
+    modelsDownloading.value = { ...modelsDownloading.value, [id]: false };
+  }
+}
+
+/** Drop the in-flight download, if any. v1: no-op at the engine. */
+export function cancelDownload(id: string): void {
+  void bridge.request("cancelDownload", { id });
+}
+
