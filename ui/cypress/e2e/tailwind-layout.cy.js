@@ -35,7 +35,7 @@ describe("Tailwind layout contracts", () => {
 
   it("renders a shaded knob face and a visible indicator tick", () => {
     cy.get(".block-card").first().click();
-    cy.get(".knob").should(($knob) => {
+    cy.get(".knob-unit").first().find(".knob").should(($knob) => {
       expect(getComputedStyle($knob[0]).backgroundImage).to.contain("radial-gradient");
       const indicator = $knob[0].querySelector(".knob-indicator");
       expect(indicator).not.to.equal(null);
