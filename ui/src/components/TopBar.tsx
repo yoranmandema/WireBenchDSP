@@ -1,4 +1,4 @@
-import { meters, presetsOpen, state, loadPreset, setSource, setInputGain, setMasterOutVolume, tunerOpen, bufferSizeOptions, setConfig } from "../state";
+import { meters, presetsOpen, state, loadPreset, openModels, setSource, setInputGain, setMasterOutVolume, tunerOpen, bufferSizeOptions, setConfig } from "../state";
 import { HeaderKnob } from "./HeaderKnob";
 import { TunerIcon } from "./Icon";
 
@@ -82,6 +82,15 @@ export function TopBar() {
         >
           <TunerIcon size={11} />
           <span>Tuner</span>
+        </button>
+        <button
+          class={`models-btn min-h-[var(--ui-touch)] px-2.5 flex items-center gap-1.5 rounded-md border text-[10px] font-semibold tracking-[0.6px] uppercase bg-[#1a1b21] text-muted border-line hover:text-text hover:border-line-hi`}
+          onClick={() => openModels()}
+          title="Browse, filter, inspect and download models"
+          aria-label="Open the model browser"
+        >
+          <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="1" y="1" width="14" height="14" rx="3" stroke="currentColor" fill="none"/><line x1="3" y1="8" x2="13" y2="8" stroke="currentColor"/><line x1="6" y1="3" x2="6" y2="8" stroke="currentColor"/><line x1="11" y1="3" x2="11" y2="8" stroke="currentColor"/></svg>
+          <span>Models</span>
         </button>
         <div class="source-toggle flex border border-line rounded-md overflow-hidden">
           {(["riff", "live", "silence"] as const).map((src) => (
