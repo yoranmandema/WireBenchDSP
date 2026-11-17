@@ -302,7 +302,7 @@ impl Block for Octaver {
 /// always behind the write head, so the block never anticipates the input and
 /// its (time-varying) delay is the sound itself, like `time.delay`.
 pub struct Chorus {
-    inner: Option<pedal_dsp::delay::Chorus<2048>>,
+    inner: Option<pedal_dsp::delay::Chorus<1024>>,
 }
 impl Default for Chorus {
     fn default() -> Self {
@@ -328,7 +328,7 @@ impl Block for Chorus {
         }
     }
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
-        let mut c = pedal_dsp::delay::Chorus::<2048>::new(sr, 0.6);
+        let mut c = pedal_dsp::delay::Chorus::<1024>::new(sr, 0.6);
         c.base_ms = 8.0; // fixed centre delay, not a knob (see design §2)
         self.inner = Some(c);
         Ok(())
