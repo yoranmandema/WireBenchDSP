@@ -26,6 +26,8 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use dsp_graph::blocks::builtin_registry;
 use dsp_graph::{Executor, Registry};
 
+use crate::tuner::TunerReading;
+
 pub const MAX_BLOCK: usize = 64;
 
 /// f32 in an atomic. Peaks only ever rise, so no CAS loop is needed.
@@ -44,6 +46,12 @@ pub struct Meters {
     pub out_frames: AtomicUsize,
     #[allow(dead_code)]
     pub dropped_executors: AtomicUsize,
+    /// The latest tuner reading. Written only by the tuner thread (see
+    /// [`pedal_engine::tuner::spawn`]); read by the IPC server to broadcast
+    /// `event: tuner` to every connected client. `Default` is the inactive
+    /// reading: `active: false`, `freq: 0.0`, `note: ""`, `octave: 0`,
+    /// `cents: 0.0`, `clarity: 0.0`.
+    pub tuner: Mutex<TunerReading>,
 }
 
 /// Commands from the UI to the audio thread.
@@ -143,9 +151,22 @@ pub struct AudioThread {
 
 /// SPSC ring of mono samples.
 ///
+/// The engine owns two rings of this type, both written by the input
+/// callback and read by a single consumer:
+///
+/// * The **audio ring**, popped by the output callback. `host::start`
+///   trims it to [`LATENCY_FRAMES`] so the first blocks are not underrun.
+/// * The **tuner ring**, popped by the tuner thread (see
+///   [`pedal_engine::tuner::spawn`]). It is populated by the input callback
+///   in the same callback that populates the audio ring — one extra store
+///   per sample.
+///
 /// # Safety
-/// `push` is called only by the input callback, `pop` only by the output
-/// callback, and the write/read indices carry the happens-before edge.
+/// Both rings are strictly SPSC. For the audio ring, `push` is called only
+/// by the input callback and `pop` only by the output callback; for the
+/// tuner ring, `push` is called only by the input callback and `pop` only
+/// by the tuner thread. In both cases the write/read indices carry the
+/// happens-before edge, so no other synchronisation is needed.
 pub struct Ring {
     data: Box<[UnsafeCell<f32>]>,
     mask: usize,

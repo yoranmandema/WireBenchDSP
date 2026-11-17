@@ -16,6 +16,7 @@ pub mod audio;
 pub mod channels;
 pub mod headless;
 pub mod host;
+pub mod tuner;
 pub mod model_index;
 pub mod server;
 pub mod store;

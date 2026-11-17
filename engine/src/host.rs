@@ -134,6 +134,7 @@ pub fn build_input<T: ToF32 + 'static>(
     config: cpal::StreamConfig,
     channels: usize,
     ring: Arc<Ring>,
+    tuner: Arc<Ring>,
     meters: Arc<Meters>,
 ) -> Result<cpal::Stream, cpal::Error> {
     device.build_input_stream(
@@ -148,6 +149,7 @@ pub fn build_input<T: ToF32 + 'static>(
                 }
                 peak = peak.max(s.abs());
                 ring.push(s);
+                tuner.push(s);
             }
             meters.in_peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
         },
@@ -239,7 +241,8 @@ pub fn pick() -> Devices {
     }
 }
 
-/// Start both streams. The ring is returned so the caller can trim it.
+/// Start both streams. The audio ring is returned so the caller can trim
+/// it; the tuner ring is returned separately for the tuner thread.
 #[allow(clippy::too_many_arguments)]
 pub fn start(
     d: &Devices,
@@ -248,24 +251,26 @@ pub fn start(
     running: Arc<std::sync::atomic::AtomicBool>,
     meters: Arc<Meters>,
     source: Arc<AtomicU8>,
-) -> Arc<Ring> {
+) -> (Arc<Ring>, Arc<Ring>) {
     let in_channels = d.in_channels;
     let out_channels = d.out_channels;
-    let ring = Arc::new(Ring::new(RING_CAPACITY));
-    let ring_in = ring.clone();
+    let audio_ring = Arc::new(Ring::new(RING_CAPACITY));
+    let tuner_ring = Arc::new(Ring::new(RING_CAPACITY));
+    let audio_ring_in = audio_ring.clone();
+    let tuner_ring_in = tuner_ring.clone();
     let in_format = d.in_format;
     let in_stream = match in_format {
-        cpal::SampleFormat::F32 => build_input::<f32>(&d.in_dev, d.in_cfg, in_channels, ring_in, meters.clone()),
-        cpal::SampleFormat::I16 => build_input::<i16>(&d.in_dev, d.in_cfg, in_channels, ring_in, meters.clone()),
-        cpal::SampleFormat::I32 => build_input::<i32>(&d.in_dev, d.in_cfg, in_channels, ring_in, meters.clone()),
-        cpal::SampleFormat::U16 => build_input::<u16>(&d.in_dev, d.in_cfg, in_channels, ring_in, meters.clone()),
+        cpal::SampleFormat::F32 => build_input::<f32>(&d.in_dev, d.in_cfg, in_channels, audio_ring_in, tuner_ring_in, meters.clone()),
+        cpal::SampleFormat::I16 => build_input::<i16>(&d.in_dev, d.in_cfg, in_channels, audio_ring_in, tuner_ring_in, meters.clone()),
+        cpal::SampleFormat::I32 => build_input::<i32>(&d.in_dev, d.in_cfg, in_channels, audio_ring_in, tuner_ring_in, meters.clone()),
+        cpal::SampleFormat::U16 => build_input::<u16>(&d.in_dev, d.in_cfg, in_channels, audio_ring_in, tuner_ring_in, meters.clone()),
         other => panic!("unsupported input format {other:?}"),
     }
     .expect("failed to build input stream");
     in_stream.play().expect("failed to start input");
     std::mem::forget(in_stream);
 
-    let ring_out = ring.clone();
+    let ring_out = audio_ring.clone();
     let out_format = d.out_format;
     let out_stream = match out_format {
         cpal::SampleFormat::F32 => build_output::<f32>(
@@ -285,9 +290,9 @@ pub fn start(
     .expect("failed to build output stream");
     out_stream.play().expect("failed to start output");
     std::mem::forget(out_stream);
-    ring.trim_to(LATENCY_FRAMES);
+    audio_ring.trim_to(LATENCY_FRAMES);
 
     eprintln!("input : {} @ {} Hz, {in_channels} ch", d.in_name, d.rate);
     eprintln!("output: {} @ {} Hz, {out_channels} ch", d.out_name, d.rate);
-    ring
+    (audio_ring, tuner_ring)
 }

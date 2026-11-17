@@ -24,6 +24,8 @@ use crate::store::{slugify, Store};
 pub const PORT: u16 = 8737;
 /// Meters are pushed at this interval.
 const METERS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+/// Tuner readings are pushed at this interval (20 Hz).
+const TUNER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Everything the protocol can touch.
 pub struct Shared {
@@ -304,6 +306,8 @@ fn compile(sh: &Shared) -> Result<Executor, String> {
     let mut g = doc
         .build_in_with(&sh.registry, &sh.handle.preset_dir, &resolver)
         .map_err(|e| e.to_string())?;
+    // Routings are realised here, at compile time; `to_doc` only carries them.
+    sh.rig.lock().unwrap().apply_routings(&mut g, &sh.registry)?;
     Executor::compile_owned(&mut g, sh.handle.sample_rate, sh.handle.block())
         .map_err(|e| e.to_string())
 }
@@ -698,6 +702,37 @@ async fn meters_loop(sh: Arc<Shared>) {
     }
 }
 
+/// Broadcast tuner readings to every connected client at 20 Hz, while any
+/// client is connected. The reading is not part of `state`: it changes far
+/// faster than the rig and must be visible immediately on reconnect.
+async fn tuner_loop(sh: Arc<Shared>) {
+    let mut tick = tokio::time::interval(TUNER_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        eprintln!("DEBUG tuner_loop: clients={}, now", sh.clients.lock().unwrap().len());
+        if sh.clients.lock().unwrap().is_empty() {
+            continue;
+        }
+        let r = sh.handle.meters.tuner.lock().unwrap().clone();
+        eprintln!("DEBUG tuner_loop: broadcasting active={} freq={:?}", r.active, r.freq);
+        let text = json!({
+            "type": "event",
+            "event": "tuner",
+            "payload": {
+                "active": r.active,
+                "freq": r.freq,
+                "note": r.note,
+                "octave": r.octave,
+                "cents": r.cents,
+                "clarity": r.clarity,
+                "reference": crate::tuner::REFERENCE_HZ,
+            }
+        }).to_string();
+        broadcast(&sh, text, None);
+    }
+}
+
 /// Bind loopback and serve until the process exits.
 pub async fn serve(sh: Arc<Shared>) -> Result<(), String> {
     serve_port(sh, PORT).await
@@ -723,6 +758,7 @@ pub async fn serve_listener(sh: Arc<Shared>, listener: TcpListener) -> Result<()
         "pedal-engine: ipc listening on {}",
         listener.local_addr().map_err(|e| e.to_string())?
     );
+    tokio::spawn(tuner_loop(sh.clone()));
     tokio::spawn(meters_loop(sh.clone()));
     loop {
         let (stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
