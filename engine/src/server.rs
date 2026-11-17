@@ -322,6 +322,8 @@ fn compile(sh: &Shared) -> Result<Executor, String> {
     let mut g = doc
         .build_in_with(&sh.registry, &sh.handle.preset_dir, &resolver)
         .map_err(|e| e.to_string())?;
+    // Routings are realised here, at compile time; `to_doc` only carries them.
+    sh.rig.lock().unwrap().apply_routings(&mut g, &sh.registry)?;
     Executor::compile_owned(&mut g, sh.handle.sample_rate, sh.handle.block())
         .map_err(|e| e.to_string())
 }

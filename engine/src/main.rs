@@ -119,6 +119,8 @@ async fn main() {
             .to_doc()
             .build_in_with(&handle.registry, &handle.preset_dir, &resolver)
             .expect("initial rig builds");
+        rig.apply_routings(&mut g, &handle.registry)
+            .expect("initial rig routings apply");
         let ex = dsp_graph::Executor::compile_owned(&mut g, setup.sample_rate, BLOCK)
             .expect("initial rig compiles");
         *handle.node_ids.lock().unwrap() = ex.node_ids().to_vec();

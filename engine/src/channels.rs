@@ -27,12 +27,19 @@
 
 use std::collections::BTreeMap;
 
-use dsp_graph::{Doc, EdgeDoc, NodeDoc, Routing, RoutingEndpoint};
+use dsp_graph::{Doc, EdgeDoc, Graph, NodeDoc, Registry, Routing, RoutingEndpoint};
 
 /// The number of channel slots a rig always has.
 pub const CHANNEL_COUNT: usize = 4;
 /// The pedal's input, as a routing source.
 pub const IN: &str = "<in>";
+
+/// Node id prefix for the summing node a routing inserts at its destination.
+/// Reserved: block ids come from palette display names, which never start with
+/// `__`, so these cannot collide with a block.
+pub const ROUTING_MIX_PREFIX: &str = "__routing_";
+/// Node id prefix for a routing's gain stage.
+pub const ROUTING_GAIN_PREFIX: &str = "__routing_gain_";
 
 #[derive(Clone, Debug)]
 pub struct Channel {
@@ -319,6 +326,116 @@ impl Rig {
             edges.push((s.to_string(), d.to_string()));
         }
         edges
+    }
+
+    /// Apply the enabled routings to a compiled graph.
+    ///
+    /// This is where a routing becomes audio. It runs at compile time, so the
+    /// saved model is never rewritten: the source block keeps its own
+    /// downstream edge, and a `util.mix` is inserted in front of the
+    /// destination block so the original driver and the tapped signal are
+    /// summed. A routing with a gain other than unity gets a `util.gain` of its
+    /// own in front of the mix.
+    ///
+    /// Chaining is automatic and order is [`Rig::routings`] order: a second
+    /// routing into the same block finds the first mix as that block's current
+    /// driver and nests, so the destination sums every feed. A disabled
+    /// routing contributes nothing — no node, no edge — and the graph is
+    /// byte-identical to one that never had it.
+    ///
+    /// See `docs/design/cross-channel-routing.md` §7.
+    pub fn apply_routings(&self, graph: &mut Graph, reg: &Registry) -> Result<(), String> {
+        for r in &self.routings {
+            if !r.enabled {
+                continue;
+            }
+            let dest = r.dest.block.as_str();
+            // The destination's current driver is what the tap is added to, so
+            // it has to be there: a block with no input cannot be summed into.
+            let driver = graph
+                .edges()
+                .iter()
+                .find(|e| e.to.0 == dest && e.to.1 == "in")
+                .map(|e| e.from.clone())
+                .ok_or_else(|| {
+                    format!("routing '{}': '{dest}.in' has no input to mix with", r.id)
+                })?;
+            if graph.node(&r.source.block).is_none() {
+                return Err(format!(
+                    "routing '{}': no such node: {}",
+                    r.id, r.source.block
+                ));
+            }
+
+            let mix_id = format!("{ROUTING_MIX_PREFIX}{}", r.id);
+            if graph.node(&mix_id).is_some() {
+                return Err(format!(
+                    "routing '{}': node id '{mix_id}' is already taken",
+                    r.id
+                ));
+            }
+            let mix = reg
+                .build("util.mix")
+                .ok_or_else(|| "routing: the registry has no 'util.mix' block".to_string())?;
+            graph.add(mix_id.as_str(), mix).map_err(|e| e.to_string())?;
+            graph
+                .set_param_real(&mix_id, "a", 1.0)
+                .map_err(|e| e.to_string())?;
+            graph
+                .set_param_real(&mix_id, "b", 1.0)
+                .map_err(|e| e.to_string())?;
+
+            // Only a non-unity routing carries a gain stage.
+            let tap = if r.gain != 1.0 {
+                let gain_id = format!("{ROUTING_GAIN_PREFIX}{}", r.id);
+                if graph.node(&gain_id).is_some() {
+                    return Err(format!(
+                        "routing '{}': node id '{gain_id}' is already taken",
+                        r.id
+                    ));
+                }
+                let gain = reg
+                    .build("util.gain")
+                    .ok_or_else(|| "routing: the registry has no 'util.gain' block".to_string())?;
+                graph
+                    .add(gain_id.as_str(), gain)
+                    .map_err(|e| e.to_string())?;
+                // Linear gain → dB, clamped to what `util.gain` can express.
+                let db = 20.0 * r.gain.clamp(1e-3, 15.85).log10();
+                graph
+                    .set_param_real(&gain_id, "gain", db)
+                    .map_err(|e| e.to_string())?;
+                Some(gain_id)
+            } else {
+                None
+            };
+
+            // Re-wire: the old driver and the tap meet at the mix, and the mix
+            // alone drives the destination.
+            graph.disconnect_input(dest, "in");
+            graph
+                .connect(&driver.0, &driver.1, &mix_id, "in_a")
+                .map_err(|e| e.to_string())?;
+            match &tap {
+                Some(gain_id) => {
+                    graph
+                        .connect(&r.source.block, "out", gain_id, "in")
+                        .map_err(|e| e.to_string())?;
+                    graph
+                        .connect(gain_id, "out", &mix_id, "in_b")
+                        .map_err(|e| e.to_string())?;
+                }
+                None => {
+                    graph
+                        .connect(&r.source.block, "out", &mix_id, "in_b")
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            graph
+                .connect(&mix_id, "out", dest, "in")
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 
     // --- graph conversion -------------------------------------------------
