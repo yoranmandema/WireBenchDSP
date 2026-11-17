@@ -8,7 +8,7 @@ describe("block rack", () => {
   it("groups the catalogue by category in display order", () => {
     cy.get(".block-list h2")
       .then(($h) => [...$h].map((el) => el.textContent.trim()))
-      .should("deep.equal", ["Modelling", "Distortion", "Tone", "Time", "Pitch", "Utility"]);
+      .should("deep.equal", ["Modelling", "Distortion", "Tone", "Dynamics", "Time", "Modulation", "Pitch", "Utility"]);
   });
 
   it("adds a block to the first channel when its row is clicked", () => {
@@ -23,8 +23,9 @@ describe("block rack", () => {
   it("offers every registry block exactly once", () => {
     cy.get(".rack-item").then(($items) => {
       const names = [...$items].map((el) => el.textContent.trim());
-      expect(names).to.have.length(11);
+      expect(names).to.have.length(12);
       expect(new Set(names).size).to.equal(names.length);
+      expect(names).to.include("Chorus");
     });
   });
 });

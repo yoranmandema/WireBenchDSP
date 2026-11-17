@@ -24,6 +24,8 @@ use crate::store::{slugify, Store};
 pub const PORT: u16 = 8737;
 /// Meters are pushed at this interval.
 const METERS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+/// Tuner readings are pushed at this interval (20 Hz).
+const TUNER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Everything the protocol can touch.
 pub struct Shared {
@@ -35,6 +37,10 @@ pub struct Shared {
     pub source: Arc<AtomicU8>,
     /// Current preset name, `""` when the rig has never been saved.
     pub preset: Mutex<String>,
+    /// Global input trim, dB (header knob). Written by `setInputGain`.
+    pub input_gain: Mutex<f32>,
+    /// Global output volume, dB (header knob). Written by `setMasterOutVolume`.
+    pub master_out_volume: Mutex<f32>,
     clients: Mutex<Vec<mpsc::UnboundedSender<String>>>,
     /// The bypass graph for a rig with no blocks in any slot. Built once and
     /// recompiled (cheaply) whenever an empty pedalboard needs an executor, so
@@ -55,6 +61,8 @@ impl Shared {
             registry,
             source,
             preset: Mutex::new(String::new()),
+            input_gain: Mutex::new(0.0),
+            master_out_volume: Mutex::new(0.0),
             clients: Mutex::new(Vec::new()),
             bypass: Mutex::new(None),
             rev: AtomicU64::new(0),
@@ -162,6 +170,8 @@ fn snapshot(sh: &Shared) -> Value {
         "source": sh.source_name(),
         "registry": registry_json(&sh.registry),
         "channels": channels,
+        "inputGain": *sh.input_gain.lock().unwrap(),
+        "masterOutVolume": *sh.master_out_volume.lock().unwrap(),
         "routings": routings,
     })
 }
@@ -520,7 +530,7 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
     match cmd {
         "getState" | "setParam" | "setMasterVolume" | "setBypass" | "addBlock"
         | "removeBlock" | "moveBlock" | "setSources" | "createRouting"
-        | "removeRouting" | "setEnabled" | "setGain"
+        | "removeRouting" | "setEnabled" | "setGain" | "setInputGain" | "setMasterOutVolume"
         | "loadPreset" | "setSource" | "savePreset" | "deletePreset" | "renamePreset" => {
             match cmd {
                 "getState" => {}
@@ -529,6 +539,12 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                 }
                 "setMasterVolume" => {
                     set_master_volume(sh, &s("channel").ok_or("channel")?, f("value"))?;
+                }
+                "setInputGain" => {
+                    *sh.input_gain.lock().unwrap() = f("value").clamp(-60.0, 24.0);
+                }
+                "setMasterOutVolume" => {
+                    *sh.master_out_volume.lock().unwrap() = f("value").clamp(-60.0, 12.0);
                 }
                 "setBypass" => {
                     set_bypass(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, b("bypass"))?;
@@ -586,6 +602,14 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                     rename_preset(sh, &s("from").ok_or("from")?, &s("to").ok_or("to")?)?;
                 }
                 _ => unreachable!(),
+            }
+            // Bump for EVERY mutation, not just the structural ones: `setParam`
+            // and friends hand the change straight to the audio thread and never
+            // call `rebuild`, so without this the snapshot's `rev` is unchanged
+            // and the UI's rev guard discards the update -- knobs would move the
+            // sound but not the indicator.
+            if cmd != "getState" {
+                sh.rev.fetch_add(1, Ordering::Release);
             }
             Ok(snapshot(sh))
         }
@@ -676,6 +700,37 @@ async fn meters_loop(sh: Arc<Shared>) {
     }
 }
 
+/// Broadcast tuner readings to every connected client at 20 Hz, while any
+/// client is connected. The reading is not part of `state`: it changes far
+/// faster than the rig and must be visible immediately on reconnect.
+async fn tuner_loop(sh: Arc<Shared>) {
+    let mut tick = tokio::time::interval(TUNER_INTERVAL);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        eprintln!("DEBUG tuner_loop: clients={}, now", sh.clients.lock().unwrap().len());
+        if sh.clients.lock().unwrap().is_empty() {
+            continue;
+        }
+        let r = sh.handle.meters.tuner.lock().unwrap().clone();
+        eprintln!("DEBUG tuner_loop: broadcasting active={} freq={:?}", r.active, r.freq);
+        let text = json!({
+            "type": "event",
+            "event": "tuner",
+            "payload": {
+                "active": r.active,
+                "freq": r.freq,
+                "note": r.note,
+                "octave": r.octave,
+                "cents": r.cents,
+                "clarity": r.clarity,
+                "reference": crate::tuner::REFERENCE_HZ,
+            }
+        }).to_string();
+        broadcast(&sh, text, None);
+    }
+}
+
 /// Bind loopback and serve until the process exits.
 pub async fn serve(sh: Arc<Shared>) -> Result<(), String> {
     serve_port(sh, PORT).await
@@ -701,6 +756,7 @@ pub async fn serve_listener(sh: Arc<Shared>, listener: TcpListener) -> Result<()
         "pedal-engine: ipc listening on {}",
         listener.local_addr().map_err(|e| e.to_string())?
     );
+    tokio::spawn(tuner_loop(sh.clone()));
     tokio::spawn(meters_loop(sh.clone()));
     loop {
         let (stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
