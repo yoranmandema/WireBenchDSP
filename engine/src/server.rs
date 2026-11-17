@@ -601,6 +601,14 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                 }
                 _ => unreachable!(),
             }
+            // Bump for EVERY mutation, not just the structural ones: `setParam`
+            // and friends hand the change straight to the audio thread and never
+            // call `rebuild`, so without this the snapshot's `rev` is unchanged
+            // and the UI's rev guard discards the update -- knobs would move the
+            // sound but not the indicator.
+            if cmd != "getState" {
+                sh.rev.fetch_add(1, Ordering::Release);
+            }
             Ok(snapshot(sh))
         }
         "listPresets" => Ok(json!({ "presets": sh.presets() })),
