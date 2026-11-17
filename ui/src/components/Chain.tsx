@@ -1,12 +1,11 @@
 import { Fragment } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { BlockIcon, CloseIcon, PlusIcon, PowerIcon } from "./Icon";
+import { BlockIcon, CloseIcon, PlusIcon, PowerIcon, PortIcon, SpeakerIcon, SourceIcon } from "./Icon";
 import { RoutingLines, routeCurve, ROUTING_AMBER } from "./RoutingLines";
 import { catStyle } from "../theme";
 import { decodeBlockPayload, isBlockDrag, rejectDrop, type BlockPayload } from "../dnd";
 import { registerTouchChannel, registerTouchTarget, useTouchDropRouter, useTouchDrag } from "../touch";
 import {
-  appendSelectedBlock,
   insertBlock,
   moveBlock,
   openBlockPicker,
@@ -14,8 +13,9 @@ import {
   select,
   createRouting,
   selected,
-  selectedBlockType,
   setBypass,
+  setMasterVolume,
+  setSources,
   state,
 } from "../state";
 
@@ -188,48 +188,77 @@ function EmptyChannel({ channel }: { channel: import("../protocol").Channel }) {
           to widen the grid track. Without it the channel grows past the
           viewport and the whole chain panel scrolls instead. */}
       <div class="strip flex min-h-[102px] min-w-0 items-center gap-2 overflow-x-auto px-2 py-[18px]" ref={strip}>
-        <div class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">In</div>
-        <div class="strip-empty flex-1 text-center text-sm text-muted">Empty channel — press + to search for a block</div>
+        <span class="port flex-none" aria-hidden="true">
+          <PortIcon size={14} />
+        </span>
+        <div class="empty-zone flex-1" />
         <AddBlockButton channel={channel} />
-        <div class="io out flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]">Out</div>
+        <span class="port flex-none" aria-hidden="true">
+          <PortIcon size={14} />
+        </span>
       </div>
     </div>
   );
 }
 
-/** The channel's "+" button and the keyboard-insert button. */
+/** The channel's "+" button: opens the block picker. */
 function AddBlockButton({ channel }: { channel: import("../protocol").Channel }) {
-  const chosen = selectedBlockType.value;
   return (
-    <>
-      <button
-        class="add-block flex-none size-8.5 rounded-full border-[1px] border-dashed border-[#3f424d] text-muted text-[17px] leading-none hover:text-text hover:border-amber"
-        data-add={channel.id}
-        onClick={() => openBlockPicker(channel.id)}
-        title="Search and add a block"
-      >
-        <PlusIcon size={16} />
-      </button>
-      {/* Keyboard alternative to dragging: the block type selected in the rack
-          (Enter/Space on a row) is inserted at the end of this channel. */}
-      <button
-        class={`add-selected flex-none size-8 rounded-full border text-[9px] font-semibold leading-none transition-[border-color,background-color] ${chosen ? "border-amber-dim text-amber bg-[rgba(232,163,61,0.1)] hover:bg-[rgba(232,163,61,0.18)]" : "border-line-soft text-muted bg-[rgba(255,255,255,0.012)]"}`}
-        disabled={!chosen}
-        onClick={() => { if (chosen) void appendSelectedBlock(channel.id, chosen); }}
-        title={chosen ? `Add ${chosen.name} to ${channel.name} at the end` : `No block selected for ${channel.name}`}
-        aria-label={chosen ? `Add ${chosen.name} to ${channel.name}` : `No block selected for ${channel.name}`}
-      >
-        {chosen ? "Add" : "–"}
-      </button>
-    </>
+    <button
+      class="add-block flex-none size-8 rounded-full border border-dashed border-[#3f424d] text-muted hover:text-text hover:border-amber"
+      data-add={channel.id}
+      onClick={() => openBlockPicker(channel.id)}
+      title="Search and add a block"
+      aria-label="Search and add a block"
+    >
+      <PlusIcon size={18} />
+    </button>
   );
 }
 
 /** The always-present header: the channel name. */
 function ChannelHead({ channel }: { channel: import("../protocol").Channel }) {
+  const numeral = channel.name.replace(/\D/g, "");
+  const inputOn = channel.sources.includes("<in>");
   return (
-    <div class="channel-head flex items-center gap-2.5 mb-2">
-      <span class="channel-name text-[11px] font-semibold tracking-[0.4px]">{channel.name}</span>
+    <div class="channel-head flex items-center gap-2 h-8 mb-2">
+      <span
+        class="channel-chip flex-none w-6 h-6 rounded-md bg-[#1a1b21] border border-line text-[12px] font-semibold tracking-[0.4px] tabular-nums text-muted"
+        title={channel.name}
+        aria-label={channel.name}
+      >
+        {numeral || channel.name}
+      </span>
+      <div
+        class="channel-vol flex items-center gap-1.5 text-muted"
+        title={`${channel.name} volume`}
+        aria-label={`${channel.name} volume`}
+      >
+        <SpeakerIcon size={16} />
+        <input
+          class="w-24"
+          type="range"
+          min={-60}
+          max={12}
+          step={0.1}
+          value={channel.volume}
+          title={`${channel.name} volume, ${channel.volume.toFixed(1)} dB`}
+          aria-label={`${channel.name} volume`}
+          onChange={(e) => {
+            const el = e.target as HTMLInputElement;
+            void setMasterVolume(channel.id, parseFloat(el.value));
+          }}
+        />
+      </div>
+      <button
+        class={`channel-src flex-none w-6 h-6 rounded-md bg-[#1a1b21] border border-line grid place-items-center text-muted ${inputOn ? "bg-[#2a2318] border-amber-dim text-amber border-amber-dim" : ""}`}
+        aria-pressed={inputOn}
+        title={`${channel.name} input source ${inputOn ? "on" : "off"}`}
+        aria-label={`${channel.name} input source`}
+        onClick={() => setSources(channel.id, inputOn ? ["<in>"] : [])}
+      >
+        <SourceIcon size={16} />
+      </button>
     </div>
   );
 }
@@ -255,7 +284,7 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
     const rect = el.getBoundingClientRect();
     const cards = Array.from(el.querySelectorAll(".block-card")) as HTMLElement[];
     if (cards.length === 0) {
-      const io = el.querySelector(".io.in") as HTMLElement | null;
+      const io = el.querySelector(".port") as HTMLElement | null;
       const r = io?.getBoundingClientRect();
       return r ? r.right - rect.left + el.scrollLeft : 0;
     }
@@ -540,11 +569,9 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
         class="strip relative flex min-h-[102px] min-w-0 items-center gap-2 overflow-x-auto px-2 py-[18px]"
         ref={strip}
       >
-        <div
-          class="io in flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]"
-        >
-          In
-        </div>
+        <span class="port flex-none" aria-hidden="true">
+          <PortIcon size={14} />
+        </span>
         {channel.blocks.map((b, i) => {
           const spec = s.registry[b.type];
           const isSel = selected.value?.block === b.id;
@@ -557,7 +584,7 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
               />
               <div
                 class={[
-                  "block-card cat-scope flex-none w-[116px] h-[66px] rounded-lg border border-[#353843] border-l-3 bg-linear-to-r from-cat-soft to-[#1b1c22] shadow-card grid grid-rows-[auto_1fr_auto] items-center justify-items-center gap-0.5 px-2 py-1 cursor-grab select-none relative touch-none transition-[border-color,box-shadow,transform] duration-120 hover:border-[#4a4d59]",
+                  "block-card cat-scope flex-none w-[116px] h-[66px] rounded-lg border border-[#353843] border-l-3 bg-linear-to-r from-cat-soft to-[#1b1c22] shadow-card grid grid-rows-[32px_1fr] items-center justify-items-center gap-0.5 px-2 py-1 cursor-grab select-none relative touch-none transition-[border-color,box-shadow,transform] duration-120 hover:border-[#4a4d59]",
                   b.bypass ? "bypass opacity-45" : "",
                   isSel ? "selected border-cat shadow-[inset_0_0_0_1px_var(--cat)] -translate-y-0.5" : "",
                   drag?.id === b.id ? "dragging border-dashed border-[#4a4d59] opacity-35" : "",
@@ -586,33 +613,41 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
                   }
                 }}
                 onClick={() => select(channel.id, b.id)}
-                title={`${b.name} (${b.type}) — drag to reorder, click to edit`}
+                title={`${b.name} — drag to reorder, click to edit`}
+                aria-label={b.name}
               >
-                <button
-                  class={`icon-btn bypass absolute top-1 left-1 size-4 rounded-full grid place-items-center text-[9px] leading-none bg-[#26282f] text-muted border border-line-soft ${b.bypass ? "bg-amber text-amber-ink border-amber-edge" : ""}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void setBypass(channel.id, b.id, !b.bypass);
-                  }}
-                  title={b.bypass ? "Unbypass" : "Bypass"}
+                <div
+                  class="card-actions absolute top-1 right-1 flex gap-1 opacity-0 pointer-events-none transition-opacity hover:opacity-100 hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto selected:opacity-100 selected:pointer-events-auto"
                 >
-                  <PowerIcon size={10} />
-                </button>
-                <button
-                  class="icon-btn remove absolute top-1 right-1 size-4 rounded-full grid place-items-center text-[9px] leading-none bg-[#26282f] text-muted border border-line-soft hover:text-[#ff8a7a] hover:border-[#5a3535]"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void removeBlock(channel.id, b.id);
-                  }}
-                  title="Remove block"
-                >
-                  <CloseIcon size={9} />
-                </button>
-                <span class="block-icon grid place-items-center h-[14px] text-cat">
-                  {spec && <BlockIcon type={b.type} category={spec.category} size={26} />}
+                  <button
+                    class={`icon-btn bypass absolute top-1 left-1 size-6 rounded-full grid place-items-center bg-[#26282f] text-muted border border-line-soft ${b.bypass ? "bg-amber text-amber-ink border-amber-edge" : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void setBypass(channel.id, b.id, !b.bypass);
+                    }}
+                    title={b.bypass ? "Unbypass" : "Bypass"}
+                    aria-label={b.bypass ? "Unbypass" : "Bypass"}
+                    aria-pressed={b.bypass}
+                  >
+                    <PowerIcon size={14} />
+                  </button>
+                  <button
+                    class="icon-btn remove absolute top-1 right-1 size-6 rounded-full grid place-items-center bg-[#26282f] text-muted border border-line-soft hover:text-[#ff8a7a] hover:border-[#5a3535]"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void removeBlock(channel.id, b.id);
+                    }}
+                    title="Remove block"
+                    aria-label="Remove block"
+                  >
+                    <CloseIcon size={13} />
+                  </button>
+                </div>
+                <span class="block-icon grid place-items-center text-cat">
+                  {spec && <BlockIcon type={b.type} category={spec.category} size={32} />}
                 </span>
                 <span
-                  class={`block-name text-[11px] font-semibold text-center leading-[1.15] ${b.bypass ? "line-through" : ""}`}
+                  class={`block-name max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-[11px] font-semibold text-center leading-[1.2] ${b.bypass ? "line-through" : ""}`}
                 >
                   {b.name}
                 </span>
@@ -658,11 +693,9 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
           />
         )}
         <AddBlockButton channel={channel} />
-        <div
-          class="io out flex-none text-xs text-muted px-2 py-1.5 border border-line-soft rounded-key bg-[#1a1b21]"
-        >
-          Out
-        </div>
+        <span class="port flex-none" aria-hidden="true">
+          <PortIcon size={14} />
+        </span>
       </div>
 
       {/* Ghost of the dragged card, following the pointer. */}
@@ -675,7 +708,7 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
             ...(dragSpec ? catStyle(dragSpec.category) : null),
           }}
         >
-          {dragSpec && <BlockIcon type={dragBlock!.type} category={dragSpec.category} size={14} />}
+          {dragSpec && <BlockIcon type={dragBlock!.type} category={dragSpec.category} size={20} />}
           {dragBlock?.name}
         </div>
       )}
@@ -695,9 +728,7 @@ export function Chain() {
     <div
       class="chain-panel overflow-auto p-2.5 bg-[radial-gradient(120%_90%_at_50%_0%,#1a1c22_0%,#101116_70%)]"
     >
-      <div class="chain-label text-[10px] tracking-[1.4px] text-muted font-semibold mb-2.5">
-        Signal chain
-      </div>
+
       <div class="chain-scroll relative grid gap-2.5" ref={chain}>
         {s.channels.map((c) => (
           <ChannelRow key={c.id} channel={c} chain={chain} />
@@ -707,7 +738,7 @@ export function Chain() {
             `relative` to give the overlay its positioning context. */}
         <RoutingLines />
       </div>
-      <p class="hint mt-2.5 text-xs text-muted">Drag to reorder · click a block to edit it below.</p>
+
     </div>
   );
 }

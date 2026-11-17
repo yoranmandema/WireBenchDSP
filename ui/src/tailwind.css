@@ -23,11 +23,11 @@
  *
  * BREAKPOINTS (mobile-first, so a class with no prefix is the phone layout):
  *   (none)   < 700px   phone: the editor stacks, the rack is a palette strip
- *   tab:    >= 700px   tablet: rack becomes a column, editor is two columns,
- *                      the bar is content-sized (the controls may wrap)
- *   desk:   >= 832px   desktop: fixed-height bar, one control row. 832 is the
- *                      narrowest width at which the densest block (7 cells)
- *                      still fits one row, so the fixed bar never clips.
+ *   tab:    >= 700px   tablet: rack becomes a column, editor is two columns
+ *   desk:   >= 840px   desktop: fixed-height bar, one-row top bar.
+ *                        The floor is the width at which the densest block's
+ *                        seven control cells still fit one row next to the
+ *                        identity column; below it the bar is content-sized.
  *
  * GEOMETRY (the `--ui-*` variables below):
  *   --ui-touch     44px  minimum hit target (WCAG 2.5.8): buttons and selectors
@@ -42,17 +42,22 @@
  *   --ui-ctrl-row        the widest the controls group may be: the densest
  *                        block (5 knobs + a choice spanning two = 7 cells) plus
  *                        the six gutters. Past this the group is centred.
- *   --ui-bar      128px  the bar's height on desktop. Below 832px it is
- *                        content-sized, because the controls may wrap.
- *   --ui-id-w            the identity column's width; it narrows with the
- *                        window so the controls keep their cell floor, and
- *                        its floor (140px) is what Bypass + Reset need.
+ *   --ui-bar      128px  the bar's height on desktop. Below the `desk`
+ *                        breakpoint it is content-sized, because there the
+ *                        controls may wrap onto a second row.
+ *   --ui-id-w            the identity column's width. Its floor is set by the
+ *                        Bypass/Reset row (12px inset + two 44px targets and
+ *                        the 4px between them), so the buttons never spill out
+ *                        of their column; it then narrows with the window so
+ *                        the controls keep their cell floor.
  *   --ui-knob            a knob face scales with the viewport inside a band.
  *
  * ALIGNMENT: every control cell in a row is the same height and its contents
  * are centred, so knob faces, names and readouts share axes; the controls are
  * a grid, so wrapped rows share a left edge; long block names truncate inside
- * the identity column; a cell is never narrower than `--ui-ctrl`.
+ * the identity column; a cell is never narrower than `--ui-ctrl`; the toast
+ * shares the bar's grid cell, so it sits one `--space-2` above the bar at every
+ * width instead of assuming the bar is `--ui-bar` tall.
  */
 
 @import "tailwindcss";
@@ -63,7 +68,7 @@
   /* Only the project's own breakpoints. */
   --breakpoint-*: initial;
   --breakpoint-tab: 700px;
-  --breakpoint-desk: 832px;
+  --breakpoint-desk: 840px;
 
   /* Only the project's own palette. */
   --color-*: initial;
@@ -151,9 +156,10 @@
     --ui-ctrl-row: calc(7 * var(--ui-ctrl-max) + 6 * var(--spacing) * 6);
     --ui-bar: 128px;
     --ui-topbar-h: 58px;
-    --ui-id-w: clamp(140px, 16vw, 200px);
+    --ui-id-w: clamp(144px, 16vw, 200px);
     --ui-knob: clamp(54px, 4.2vw, 62px);
     --amber: var(--color-amber);
+    --space-2: calc(var(--spacing) * 2);
     --space-6: calc(var(--spacing) * 6);
   }
 

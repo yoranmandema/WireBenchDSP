@@ -168,6 +168,36 @@ const BLOCK_GLYPHS: Partial<Record<string, JSX.Element>> = {
   ),
 };
 
+// Mapping of every block type the engine registry offers to its glyph.
+//
+// 14 of the 17 registry block types carry an explicit glyph in `BLOCK_GLYPHS`;
+// the remaining 3 inherit their category's glyph from `GLYPHS`.
+//
+//   Block type          | Category      | Glyph
+//   -------------------- | ------------- | ----------------------------
+//   io.input            | I/O           | jack arrow into a terminal
+//   io.output           | I/O           | jack arrow out of a terminal
+//   util.gain           | Utility       | level meter, 4 bars climbing
+//   util.mix            | Utility       | two streams merging into one
+//   util.sum            | Split/Merge   | two streams merging into one
+//   util.master         | Utility       | master knob, circle + cardinal ticks
+//   dist.overdrive      | Distortion    | soft clip, flattened wave
+//   amp.basic           | Modelling     | amp head
+//   cab.sim             | Modelling     | speaker cabinet
+//   tone.stack          | Tone          | three-band EQ stack
+//   time.delay          | Time          | three echoes climbing
+//   time.pitchdelay     | Pitch         | pitch climbing a staircase
+//   time.reverb         | Time          | diffusion: source + expanding arcs
+//   mod.nam             | Modelling     | network: 5 nodes + links
+//   dynamics.compressor | Dynamics      | category default: compressor knee
+//   mod.tremolo         | Modulation    | category default: modulation LFO
+//   pitch.octaver       | Pitch         | category default: rising arrow
+//
+// All glyphs share one stroke/fill style: 24x24 viewBox, fill="none",
+// currentColor, stroke-width 1.7, round caps/joins, no emoji and no text, so the
+// set stays coherent at 16 px and 32 px and every glyph inherits the block's
+// category hue from the parent.
+
 function Svg({
   size,
   children,
@@ -253,3 +283,29 @@ export function TunerIcon({ size = 16 }: { size?: number }) {
     </Svg>
   );
 }
+
+/** Speaker with a sound wave: the volume indicator. */
+export function SpeakerIcon({ size = 11 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M4 9v6h4l5 4V5L8 9H4z" />
+      <path d="M15.5 9.5a3.5 3.5 0 0 1 0 5" />
+    </Svg>
+  );
+}
+
+/** Input source: an arrow pointing into a terminal — reuses the `io.input` glyph. */
+export function SourceIcon({ size = 11 }: { size?: number }) {
+  return <Svg size={size}>{BLOCK_GLYPHS["io.input"] ?? GLYPHS.Utility}</Svg>;
+}
+
+/** Jack socket endpoint: a filled dot in a ring. */
+export function PortIcon({ size = 11 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="7" stroke-opacity="0.45" />
+    </Svg>
+  );
+}
+

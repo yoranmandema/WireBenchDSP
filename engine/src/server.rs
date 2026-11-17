@@ -18,6 +18,7 @@ use dsp_graph::{Doc, EdgeDoc, Executor, Graph, NodeDoc, Registry, RoutingEndpoin
 
 use crate::audio::{read_f32, Cmd, Handle};
 use crate::channels::{master_id, Rig, OUT_MASTER_ID, IN};
+use crate::host::{self, BLOCK, LATENCY_FRAMES, DEFAULT_IO_BUFFER_FRAMES, IOBUFFER_FALLBACK, one_way_latency_ms, round_trip_latency_ms};
 use crate::store::{slugify, Store};
 
 /// Loopback only. Nothing outside this machine can reach the engine.
@@ -37,11 +38,13 @@ pub struct Shared {
     pub source: Arc<AtomicU8>,
     /// Current preset name, `""` when the rig has never been saved.
     pub preset: Mutex<String>,
-    /// Global input trim, dB (header knob). Written by `setInputGain`.
-    pub input_gain: Mutex<f32>,
-    /// Global output volume, dB (header knob). Written by `setMasterOutVolume`.
-    pub master_out_volume: Mutex<f32>,
-    clients: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+    /// The I/O buffer size in frames (the low-latency default is 128; the
+    /// fallback ladder is [128, 256, 512]).
+    pub buffer_frames: Mutex<u32>,
+    /// Sample rate in Hz, `None` keeps the device default.
+    pub sample_rate: Mutex<Option<u32>>,
+    pub clients: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+    /// Cross-channel routings.
     /// The bypass graph for a rig with no blocks in any slot. Built once and
     /// recompiled (cheaply) whenever an empty pedalboard needs an executor, so
     /// an empty rig never builds a `Doc` or walks the block registry. See
@@ -61,8 +64,8 @@ impl Shared {
             registry,
             source,
             preset: Mutex::new(String::new()),
-            input_gain: Mutex::new(0.0),
-            master_out_volume: Mutex::new(0.0),
+            buffer_frames: Mutex::new(DEFAULT_IO_BUFFER_FRAMES),
+            sample_rate: Mutex::new(None),
             clients: Mutex::new(Vec::new()),
             bypass: Mutex::new(None),
             rev: AtomicU64::new(0),
@@ -163,6 +166,9 @@ fn snapshot(sh: &Shared) -> Value {
     let routings = serde_json::to_value(&rig.routings).unwrap_or_else(|_| json!([]));
     let preset = sh.preset.lock().unwrap().clone();
     let rev = sh.rev.load(Ordering::Acquire);
+    let sample_rate = sh.sample_rate.lock().unwrap().unwrap_or(48_000);
+    let one_way_ms = one_way_latency_ms(*sh.buffer_frames.lock().unwrap(), sample_rate);
+    let round_trip_ms = round_trip_latency_ms(*sh.buffer_frames.lock().unwrap(), sample_rate);
     json!({
         "rev": rev,
         "preset": preset,
@@ -170,9 +176,13 @@ fn snapshot(sh: &Shared) -> Value {
         "source": sh.source_name(),
         "registry": registry_json(&sh.registry),
         "channels": channels,
-        "inputGain": *sh.input_gain.lock().unwrap(),
-        "masterOutVolume": *sh.master_out_volume.lock().unwrap(),
+        "inputGain": rig.input_gain,
+        "masterOutVolume": rig.master_volume,
         "routings": routings,
+        "bufferFrames": *sh.buffer_frames.lock().unwrap(),
+        "sampleRate": sample_rate,
+        "oneWayLatencyMs": (one_way_ms * 100.0).round() / 100.0,
+        "roundTripLatencyMs": (round_trip_ms * 100.0).round() / 100.0,
     })
 }
 
@@ -342,6 +352,38 @@ fn set_master_volume(sh: &Shared, channel: &str, value: f32) -> Result<(), Strin
     if let Some(nidx) = nidx {
         sh.handle.push(Cmd::SetParam { node: nidx, param: 0, value }).map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+fn set_input_gain(sh: &Shared, value: f32) -> Result<(), String> {
+    let value = value.clamp(-60.0, 24.0);
+    let nidx = {
+        let mut rig = sh.rig.lock().unwrap();
+        rig.input_gain = value;
+        sh.handle.node_index("in")
+    };
+    if let Some(nidx) = nidx {
+        sh.handle.push(Cmd::SetParam { node: nidx, param: 0, value }).map_err(|e| e.to_string())?;
+    }
+    // The cached bypass graph was built with the old trim; drop it so the next
+    // rebuild picks up the new value.
+    *sh.bypass.lock().unwrap() = None;
+    Ok(())
+}
+
+fn set_master_out_volume(sh: &Shared, value: f32) -> Result<(), String> {
+    let value = value.clamp(-60.0, 12.0);
+    let nidx = {
+        let mut rig = sh.rig.lock().unwrap();
+        rig.master_volume = value;
+        sh.handle.node_index(OUT_MASTER_ID)
+    };
+    if let Some(nidx) = nidx {
+        sh.handle.push(Cmd::SetParam { node: nidx, param: 0, value }).map_err(|e| e.to_string())?;
+    }
+    // The cached bypass graph was built with the old volume; drop it so the
+    // next rebuild picks up the new value.
+    *sh.bypass.lock().unwrap() = None;
     Ok(())
 }
 
@@ -535,7 +577,7 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
         | "removeRouting" | "setEnabled" | "setGain" | "setInputGain" | "setMasterOutVolume"
         | "loadPreset" | "setSource" | "savePreset" | "deletePreset" | "renamePreset" => {
             match cmd {
-                "getState" => {}
+                "getState" => {},
                 "setParam" => {
                     set_param(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, &s("param").ok_or("param")?, f("value"))?;
                 }
@@ -543,10 +585,10 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                     set_master_volume(sh, &s("channel").ok_or("channel")?, f("value"))?;
                 }
                 "setInputGain" => {
-                    *sh.input_gain.lock().unwrap() = f("value").clamp(-60.0, 24.0);
+                    set_input_gain(sh, f("value"))?;
                 }
                 "setMasterOutVolume" => {
-                    *sh.master_out_volume.lock().unwrap() = f("value").clamp(-60.0, 12.0);
+                    set_master_out_volume(sh, f("value"))?;
                 }
                 "setBypass" => {
                     set_bypass(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, b("bypass"))?;
@@ -555,7 +597,7 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                     add_block(sh, &s("channel").ok_or("channel")?, &s("type").ok_or("type")?, &s("name").unwrap_or_default())?;
                 }
                 "removeBlock" => {
-                    remove_block(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?)?;
+                    remove_block(sh, &s("channel").ok_or("channel")?.as_str(), &s("block").ok_or("block")?.as_str())?;
                 }
                 "moveBlock" => {
                     let to = args.get("to").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -594,14 +636,16 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                     };
                     sh.source.store(v, Ordering::Relaxed);
                 }
-                "savePreset" => {
-                    save_preset(sh, &s("name").ok_or("name")?)?;
+                "loadPreset" => {
+                    load_preset(sh, &s("name").ok_or("name")?)?;
                 }
-                "deletePreset" => {
-                    delete_preset(sh, &s("name").ok_or("name")?)?;
-                }
-                "renamePreset" => {
-                    rename_preset(sh, &s("from").ok_or("from")?, &s("to").ok_or("to")?)?;
+                "setSource" => {
+                    let v = match s("source").as_deref() {
+                        Some("live") => 1u8,
+                        Some("silence") => 2u8,
+                        _ => 0u8,
+                    };
+                    sh.source.store(v, Ordering::Relaxed);
                 }
                 _ => unreachable!(),
             }
@@ -614,6 +658,26 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                 sh.rev.fetch_add(1, Ordering::Release);
             }
             Ok(snapshot(sh))
+        }
+        "setConfig" => {
+            // The I/O buffer size is the only config the UI can change at runtime.
+            // The sample rate is set once at startup; changing it would require
+            // rebuilding the audio streams, so it is exposed read-only.
+            *sh.buffer_frames.lock().unwrap() = f("buffer_frames").clamp(32.0, 1024.0) as u32;
+            Ok(Value::Null)
+        }
+        "getConfig" => {
+            let buffer_frames = *sh.buffer_frames.lock().unwrap();
+            let sample_rate = sh.sample_rate.lock().unwrap().unwrap_or(48_000);
+            let one_way_ms = one_way_latency_ms(buffer_frames, sample_rate);
+            let round_trip_ms = round_trip_latency_ms(buffer_frames, sample_rate);
+            Ok(json!({
+                "bufferFrames": buffer_frames,
+                "sampleRate": sample_rate,
+                "supported": IOBUFFER_FALLBACK,
+                "oneWayLatencyMs": (one_way_ms * 100.0).round() / 100.0,
+                "roundTripLatencyMs": (round_trip_ms * 100.0).round() / 100.0,
+            }))
         }
         "listPresets" => Ok(json!({ "presets": sh.presets() })),
         "listRoutings" => Ok(list_routings(sh)),
