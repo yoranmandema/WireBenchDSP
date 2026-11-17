@@ -330,6 +330,69 @@ impl Block for Octaver {
         self.shifter_up.clear();
     }
 }
+
+/// A modulated short delay: chorus, and with feedback a flanger.
+///
+/// Wraps `pedal_dsp::delay::Chorus`. No latency is declared: the read head is
+/// always behind the write head, so the block never anticipates the input and
+/// its (time-varying) delay is the sound itself, like `time.delay`.
+pub struct Chorus {
+    inner: Option<pedal_dsp::delay::Chorus<2048>>,
+}
+
+impl Default for Chorus {
+    fn default() -> Self {
+        Self { inner: None }
+    }
+}
+
+impl Block for Chorus {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "mod.chorus",
+            name: "Chorus",
+            category: Category::Modulation,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec { id: "rate",     name: "Rate",     unit: Unit::Hertz,         min: 0.1,  max: 5.0,   default: 0.6,  curve: Curve::Log },
+                ParamSpec { id: "depth",    name: "Depth",    unit: Unit::Milliseconds,  min: 0.5,  max: 5.0,   default: 3.0,  curve: Curve::Linear },
+                ParamSpec { id: "mix",      name: "Mix",      unit: Unit::Percent,       min: 0.0,  max: 100.0, default: 50.0, curve: Curve::Linear },
+                ParamSpec { id: "feedback", name: "Feedback", unit: Unit::Percent,       min: 0.0,  max: 80.0,  default: 0.0,  curve: Curve::Linear },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        let mut c = pedal_dsp::delay::Chorus::<2048>::new(sr, 0.6);
+        c.base_ms = 8.0; // fixed centre delay, not a knob (see design §2)
+        self.inner = Some(c);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let c = self.inner.as_mut().ok_or(BlockError::NotPrepared("mod.chorus"))?;
+        c.set_rate_hz(ctx.param(0));
+        c.depth_ms = ctx.param(1).clamp(0.0, 8.0);
+        c.mix = (ctx.param(2) / 100.0).clamp(0.0, 1.0);
+        c.feedback = (ctx.param(3) / 100.0).clamp(0.0, 0.95);
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            output[i] = c.process(input[i]);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        if let Some(c) = &mut self.inner {
+            c.clear();
+        }
+    }
+}
+
 /// The graph's input node. The executor writes the raw input into this node's
 /// output buffer before running the steps.
 #[derive(Default)]
@@ -1049,6 +1112,7 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<Compressor>();
     r.add::<Tremolo>();
     r.add::<Octaver>();
+    r.add::<Chorus>();
     r
 }
 
