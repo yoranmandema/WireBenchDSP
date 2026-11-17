@@ -121,10 +121,10 @@ async fn the_ipc_surface_cannot_add_or_remove_a_channel() {
     let store = Store::discover();
     handle.preset_dir = store.dir.clone();
 
-    let sh = Arc::new(Shared::new(handle, registry, source, store));
+    let sh = Arc::new(Shared::new(handle, registry, source, store, Arc::new(pedal_engine::models::Models::new())));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().unwrap().port();
-    tokio::spawn(serve_listener(sh.clone(), listener));
+    tokio::spawn(serve_listener(sh.clone(), &listener));
 
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
         .await
@@ -176,10 +176,10 @@ async fn an_empty_rig_runs_the_bypass_and_resumes_on_the_first_block() {
     let store = Store::discover();
     handle.preset_dir = store.dir.clone();
 
-    let sh = Arc::new(Shared::new(handle, registry, source, store));
+    let sh = Arc::new(Shared::new(handle, registry, source, store, Arc::new(pedal_engine::models::Models::new())));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().unwrap().port();
-    tokio::spawn(serve_listener(sh.clone(), listener));
+    tokio::spawn(serve_listener(sh.clone(), &listener));
 
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
         .await

@@ -116,12 +116,12 @@ async fn the_ipc_commands_report_and_clamp() {
     let store = Store::discover();
     handle.preset_dir = store.dir.clone();
 
-    let sh = Arc::new(Shared::new(handle, registry, source, store));
+    let sh = Arc::new(Shared::new(handle, registry, source, store, Arc::new(pedal_engine::models::Models::new())));
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
     let port = listener.local_addr().unwrap().port();
-    tokio::spawn(serve_listener(sh.clone(), listener));
+    tokio::spawn(serve_listener(sh.clone(), &listener));
 
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}"))
         .await
