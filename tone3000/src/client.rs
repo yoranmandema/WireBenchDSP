@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
 use serde_json::Value;
 use tokio::time::sleep;
 
@@ -112,16 +111,37 @@ pub enum Method {
     Delete,
 }
 
-/// A transport-agnostic request. `headers` are already redacted-safe: the only
-/// sensitive value the client adds is `Authorization`, and it is never copied
-/// into [`Request::url`].
-#[derive(Clone, Debug)]
+/// A transport-agnostic request. ``Debug` redacts `Authorization`; the credential is
+/// never copied into [`Request::url`].
+#[derive(Clone)]
 pub struct Request {
     pub method: Method,
     pub url: String,
     pub query: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let headers: Vec<(&str, &str)> = self
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                let sensitive = k.eq_ignore_ascii_case("authorization")
+                    || k.eq_ignore_ascii_case("proxy-authorization")
+                    || k.eq_ignore_ascii_case("cookie");
+                (k.as_str(), if sensitive { "***" } else { v.as_str() })
+            })
+            .collect();
+        f.debug_struct("Request")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("query", &self.query)
+            .field("headers", &headers)
+            .field("body", &self.body.as_ref().map(|_| "<body>"))
+            .finish()
+    }
 }
 
 /// A transport-agnostic response.
@@ -156,23 +176,6 @@ impl Response {
 #[async_trait]
 pub trait Transport: Send + Sync {
     async fn send(&self, request: Request) -> Result<Response, TransportError>;
-}
-
-/// Adapter so a `Vec<(String, String)>` can be handed to
-/// [`reqwest::RequestBuilder::query`], which needs any `Serialize` type.
-struct Pairs(Vec<(String, String)>);
-
-impl Serialize for Pairs {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeSeq;
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
-        for (key, value) in &self.0 {
-            // A sequence of two-element sequences is how `serde_urlencoded`
-            // represents query pairs.
-            seq.serialize_element(&(key, value))?;
-        }
-        seq.end()
-    }
 }
 
 /// Production transport backed by `reqwest` + `rustls` (ring provider).
@@ -218,9 +221,8 @@ impl Transport for ReqwestTransport {
             Method::Delete => reqwest::Method::DELETE,
         };
         let mut builder = self.client.request(method, &request.url);
-        if !request.query.is_empty() {
-            builder = builder.query(&Pairs(request.query.clone()));
-        }
+        // `request.url` already carries the percent-encoded query string
+        // (see `Client::url_for`); do not append `request.query` again.
         for (k, v) in &request.headers {
             builder = builder.header(k, v);
         }
@@ -759,6 +761,51 @@ mod tests {
     use crate::auth::AuthKind;
     use crate::mock::{self, MockTransport, Scripted};
     use serde_json::json;
+
+    #[test]
+    fn request_debug_redacts_authorization() {
+        let r = Request {
+            method: Method::Get,
+            url: "https://x/y".into(),
+            query: vec![],
+            headers: vec![("Authorization".into(), "Bearer s3cret-canary".into())],
+            body: None,
+        };
+        let shown = format!("{r:?}");
+        assert!(!shown.contains("s3cret-canary"), "{shown}");
+    }
+
+    #[tokio::test]
+    async fn reqwest_transport_sends_each_query_parameter_exactly_once() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = sock.read(&mut buf).unwrap();
+            let head = String::from_utf8_lossy(&buf[..n]).to_string();
+            let body = r#"{"data":[],"page":1,"page_size":300,"total":0,"total_pages":0}"#;
+            let _ = write!(
+                sock,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            head.lines().next().unwrap_or_default().to_string()
+        });
+        let client = Client::new(
+            Arc::new(ReqwestTransport::default()),
+            format!("http://{addr}/v1"),
+            None,
+            fast_retry(1),
+        );
+        let _ = client
+            .get_raw("models", &pairs(&[("tone_id", "1"), ("page", "2")]))
+            .await;
+        let line = server.join().unwrap();
+        assert_eq!(line, "GET /v1/models?tone_id=1&page=2 HTTP/1.1");
+    }
 
     fn fast_retry(max_attempts: u32) -> RetryPolicy {
         RetryPolicy {

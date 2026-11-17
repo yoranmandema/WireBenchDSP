@@ -120,14 +120,15 @@ host-sim/                             CLI simulator (no platform deps)
   src/main.rs                         rig builder, bench, palette, impulse, WAV
   src/blocks.rs                       re-exports dsp-graph blocks
 
-app/                                  pedal-app — the Mac/Pi pedal editor
-  src/main.rs                         cpal streams, device pick, eframe app
-  src/audio.rs                        engine: executor in the output callback,
-                                      lock-free cmd queue, riff/silence source
+engine/                               pedal-engine — the audio process
+  src/audio.rs                        CoreAudio/cpal streams, device pick
   src/channels.rs                     Rig: channels of blocks, routing, to/from Doc
-  src/ui.rs                           egui channel strips, palette, inspector
   src/store.rs                        preset directory, test riff
-presets/                              *.json, shared by app and host-sim
+  src/server.rs                       WebSocket IPC + state snapshots
+  src/headless.rs                     simulated device (no audio hardware)
+shell/                                Tauri desktop app: embeds ui/, spawns the engine
+ui/                                   Preact + TypeScript frontend (shared by every shell)
+presets/                              *.json, shared by engine and host-sim
 
 firmware/                             STM32H723 firmware (separate workspace)
   src/main.rs, audio.rs, board.rs, codec.rs, controls.rs
@@ -184,7 +185,10 @@ shifters).
   `Overdrive`, `Amp` (2-stage oversampled, 3 voices), `Cab`, `ToneStack`,
   `Delay`, `PitchDelay`, `Reverb`, **`Nam`**.
 
-**`app` crate** — the Mac/Pi pedal editor (`cargo run -p pedal-app`):
+**Engine + shell** — the shipped app. `shell/` is a Tauri window hosting the
+Preact UI in `ui/`; it spawns `engine/` as a child process on launch and stops
+it on exit. The UI never touches the audio path — it sends commands over
+`ws://127.0.0.1:8737` and the engine applies them between blocks.
 
 - **Channel strips.** A channel is an ordered strip of blocks; drag to
   reorder, click to select, `+ Block` palette, Delete to remove. The **Source**
@@ -315,9 +319,13 @@ cd ~/Documents/Repos/pedal-dsp
 cargo test --workspace
 cargo build --workspace --release
 
-# the pedal editor (Mac, needs a display and an audio interface)
-cargo run -p pedal-app
-cargo run -q -p pedal-app -- --selftest --rig 02-crunch
+# the desktop app (see docs/RUN-THE-APP.md)
+./shell/run.sh dev        # live UI: Vite + the debug shell
+./shell/run.sh ship       # rebuild and open the shipped Pedal.app
+
+# the engine on its own
+./target/debug/pedal-engine --rig 04-rainbow
+./target/debug/pedal-engine --headless --source silence --bench 3
 
 # the simulator
 cargo run --release -p host-sim -- --rig demo --bench
@@ -328,7 +336,7 @@ cargo run --release -p pedal-dsp --example pitch_probe
 cargo run --release -p pedal-dsp --example wav_process -- in.wav out.wav
 
 # PEDAL_PRESETS overrides the preset directory.
-PEDAL_PRESETS=~/my-presets cargo run -p pedal-app
+PEDAL_PRESETS=~/my-presets ./target/debug/pedal-engine
 ```
 
 ---

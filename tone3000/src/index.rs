@@ -309,6 +309,15 @@ pub fn validate_index(index: &Index) -> Result<(), SchemaError> {
             index.models.len()
         )));
     }
+    let mut ids = std::collections::HashSet::new();
+    for m in &index.models {
+        if !ids.insert(m.id.as_str()) {
+            return Err(SchemaError::Invalid(format!(
+                "duplicate record id {}",
+                m.id
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -743,7 +752,7 @@ impl<'a> IndexBuilder<'a> {
             Source::FreeFeeds => {
                 let mut tones = self.client.get_tone_feed("tones/trending", &[]).await?;
                 tones.extend(self.client.get_tone_feed("tones/latest", &[]).await?);
-                Ok(tones)
+                Ok(dedupe_tones(tones))
             }
             Source::Catalog => {
                 self.client
@@ -752,6 +761,13 @@ impl<'a> IndexBuilder<'a> {
             }
         }
     }
+}
+
+/// Drop repeated tones (a tone can be both trending and latest), keeping the
+/// first occurrence and the original order.
+fn dedupe_tones(tones: Vec<Tone>) -> Vec<Tone> {
+    let mut seen = std::collections::HashSet::new();
+    tones.into_iter().filter(|t| seen.insert(t.id)).collect()
 }
 
 /// Which architecture listings to request for one tone. The API's
@@ -1141,6 +1157,51 @@ mod tests {
             }
         }
 
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[tokio::test]
+    async fn overlapping_feeds_do_not_duplicate_records() {
+        let home = temp_home("overlap");
+        let paths = Paths::from_home(&home);
+        // tone 1 is in both trending and latest.
+        let (client, _t) = client_with(Arc::new(|request: &Request| {
+            let url = request.url.clone();
+            if url.contains("tones/trending") || url.contains("tones/latest") {
+                return Ok(mock::ok_json(&url, mock::tone_list(&[tone_json(1, 1)])));
+            }
+            let tone_id = query_value(request, "tone_id").unwrap_or_default();
+            let architecture = query_value(request, "architecture").unwrap_or_default();
+            Ok(mock::ok_json(
+                &url,
+                mock::paginated(
+                    &[model_json(101, tone_id.parse().unwrap_or(0), &architecture)],
+                    1,
+                    300,
+                    1,
+                ),
+            ))
+        }));
+        let builder = IndexBuilder::new(&client, RefreshConfig::default());
+        let outcome = builder.refresh(&paths).await.expect("refresh succeeds");
+        assert_eq!(outcome.count, 1);
+        let loaded = load_index(&paths).unwrap().unwrap();
+        assert_eq!(loaded.models.len(), 1);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[tokio::test]
+    async fn validate_index_rejects_duplicate_record_ids() {
+        let home = temp_home("dupid");
+        let paths = Paths::from_home(&home);
+        let (client, _t) = client_with(Arc::new(free_feeds_handler));
+        let builder = IndexBuilder::new(&client, RefreshConfig::default());
+        builder.refresh(&paths).await.expect("refresh succeeds");
+        let mut index = load_index(&paths).unwrap().unwrap();
+        let first = index.models[0].clone();
+        index.models.push(first);
+        index.count = index.models.len();
+        assert!(validate_index(&index).is_err());
         let _ = std::fs::remove_dir_all(&home);
     }
 

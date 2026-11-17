@@ -290,8 +290,11 @@ fn rebuild(sh: &Shared) -> Result<(), String> {
 /// Compile the rig's graph into a fresh executor.
 fn compile(sh: &Shared) -> Result<Executor, String> {
     let doc = sh.rig.lock().unwrap().to_doc();
+    // Index ids resolve through the cached model index; anything else is a
+    // legacy path, exactly as before.
+    let resolver = crate::model_index::resolver();
     let mut g = doc
-        .build_in(&sh.registry, &sh.handle.preset_dir)
+        .build_in_with(&sh.registry, &sh.handle.preset_dir, &resolver)
         .map_err(|e| e.to_string())?;
     Executor::compile_owned(&mut g, sh.handle.sample_rate, sh.handle.block())
         .map_err(|e| e.to_string())

@@ -34,6 +34,12 @@ prerequisites. Do not dispatch duplicates of done cards or treat speculative
 TONE3000 integration, plugin support, or hardware design as prerequisites for
 Mac UI work.
 
+The instrument tuner (`t_b366a8fb`) is decomposed into an engine card (YIN pitch
+detection on the input, `event: tuner`) and a UI card (top-bar button + modal),
+UI behind engine. The design is frozen in
+`docs/design/instrument-tuner.md`; the tuner is a read-only stream, so it adds
+no command and no state field.
+
 ## Pi 5 deployment (later, hardware-dependent)
 
 After the Mac UI and engine behavior are stable, validate Linux/Pi audio I/O,
@@ -51,9 +57,10 @@ is dormant and must not be reopened absent an explicit product-owner change.
   current critical path. Revisit framework/licensing choices before dispatch.
 - **TONE3000:** API reconnaissance and UX/schema work exist, but network/auth,
   model licensing and download policy should be resolved before implementation.
-- **Cross-channel routing:** model/persistence and engine/UI work are a
-  substantial feature. Keep it behind the architecture/data-model decision;
-  do not make unrelated UI tasks depend on the entire routing fan-in.
+- **Cross-channel routing:** the data model, persistence and IPC surface are
+  decided (`docs/design/cross-channel-routing.md`, landed with `t_21473ff1`);
+  the engine fan-out and UI cards are queued behind it. Do not make unrelated
+  UI tasks depend on the routing fan-in.
 
 ## Board hygiene
 
