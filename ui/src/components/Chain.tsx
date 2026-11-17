@@ -16,8 +16,6 @@ import {
   selected,
   selectedBlockType,
   setBypass,
-  setMasterVolume,
-  setSources,
   state,
 } from "../state";
 
@@ -227,38 +225,11 @@ function AddBlockButton({ channel }: { channel: import("../protocol").Channel })
   );
 }
 
-/** The always-present header: name, volume, and the input-source toggle. */
+/** The always-present header: the channel name. */
 function ChannelHead({ channel }: { channel: import("../protocol").Channel }) {
   return (
     <div class="channel-head flex items-center gap-2.5 mb-2">
       <span class="channel-name text-[11px] font-semibold tracking-[0.4px]">{channel.name}</span>
-      <input
-        type="range"
-        min={-60}
-        max={12}
-        step={0.1}
-        value={channel.volume}
-        title={`Volume ${channel.volume.toFixed(1)} dB`}
-        onInput={(e) =>
-          void setMasterVolume(channel.id, Number((e.target as HTMLInputElement).value))
-        }
-        class="w-[130px] accent-amber"
-      />
-      <label class="mini flex items-center gap-1 text-xs text-muted">
-        <input
-          type="checkbox"
-          checked={channel.sources.includes("<in>")}
-          onChange={(e) =>
-            void setSources(
-              channel.id,
-              (e.target as HTMLInputElement).checked
-                ? [...new Set([...channel.sources, "<in>"])]
-                : channel.sources.filter((x) => x !== "<in>"),
-            )
-          }
-        />
-        In
-      </label>
     </div>
   );
 }

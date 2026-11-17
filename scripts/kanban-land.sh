@@ -54,3 +54,11 @@ git -C "$REPO" merge --ff-only -q "$br" \
   || die "could not fast-forward main. The user probably has local edits in the same files. Block with needs_input"
 echo "kanban-land: landed $br on main ($(git rev-parse --short HEAD)):"
 git --no-pager log --oneline "main@{1}..main" 2>/dev/null | sed 's/^/  /' || true
+
+# The card's work is now on main. Return a blocked card to ready so the next
+# dispatch pass picks it up automatically — no manual `kanban_unblock` needed.
+HERMES_BIN="${HERMES_HERMES_BIN:-/Users/yoran/.hermes/hermes-agent/.hermes/bin/hermes}"
+if ! "$HERMES_BIN" kanban unblock "$id" --reason "Landed on main via kanban-land.sh ($br)" >/dev/null 2>&1; then
+  echo "kanban-land: NOTE: unblock call failed for $id (is the kanban gateway reachable?) — $id stays blocked; run `hermes kanban unblock $id` by hand." >&2
+fi
+echo "kanban-land: auto-unblocked $id"
