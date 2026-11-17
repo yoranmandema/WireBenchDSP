@@ -4,7 +4,7 @@
 //! architecture and give the host simulator something to run.
 
 use crate::prelude::*;
-use pedal_dsp::{Biquad, BiquadKind};
+use pedal_dsp::{Biquad, BiquadKind, PitchShifter, envelope::EnvelopeFollower, lfo::Lfo};
 
 /// A simple gain stage, in dB.
 pub struct Gain {
@@ -225,6 +225,111 @@ impl Block for Reverb {
     }
 }
 
+
+/// An octaver: blends the input with one or more octave-shifted copies.
+///
+/// Provides three independent mix levels:
+///
+/// * `dry` — the dry (unprocessed) input.
+/// * `oct_down` — one octave below the input.
+/// * `oct_up` — one octave above the input.
+///
+/// Output is `dry*input + oct_down*down + oct_up*up`.  Setting the octave
+/// levels to 0 (and `dry` to 1) gives pass-through; setting the octave levels
+/// to 0 gives a dry-scaled pass-through at any `dry` level.
+pub struct Octaver {
+    /// Octave-down pitch shifter.
+    shifter_down: PitchShifter<2048>,
+    /// Octave-up pitch shifter.
+    shifter_up: PitchShifter<2048>,
+}
+
+impl Default for Octaver {
+    fn default() -> Self {
+        Self {
+            shifter_down: PitchShifter::new(48_000.0),
+            shifter_up: PitchShifter::new(48_000.0),
+        }
+    }
+}
+
+impl Block for Octaver {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "pitch.octaver",
+            name: "Octaver",
+            category: Category::Pitch,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "dry",
+                    name: "Dry",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 100.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "oct_down",
+                    name: "Oct Down",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 0.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "oct_up",
+                    name: "Oct Up",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 0.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.shifter_down = PitchShifter::new(sr);
+        self.shifter_up = PitchShifter::new(sr);
+        // Static pitch shift, instant glide.  -1200 = one octave down,
+        // +1200 = one octave up.
+        self.shifter_down.pitch_cents = -1200.0;
+        self.shifter_up.pitch_cents = 1200.0;
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        // Re-assert the static pitch shift on every block so it stays correct
+        // under dynamic use.  It is a single field write and cheap.
+        self.shifter_down.pitch_cents = -1200.0;
+        self.shifter_up.pitch_cents = 1200.0;
+
+        let dry = ctx.param(0) / 100.0;
+        let oct_down = ctx.param(1) / 100.0;
+        let oct_up = ctx.param(2) / 100.0;
+
+        let input = ctx.inputs[0];
+        let out = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let down = self.shifter_down.process(input[i]);
+            let up = self.shifter_up.process(input[i]);
+            out[i] = input[i] * dry + down * oct_down + up * oct_up;
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.shifter_down.clear();
+        self.shifter_up.clear();
+    }
+}
 /// The graph's input node. The executor writes the raw input into this node's
 /// output buffer before running the steps.
 #[derive(Default)]
@@ -676,6 +781,255 @@ impl Block for Master {
 }
 
 /// A registry holding every block in this library — the palette.
+/// A level-synchronous compressor: a one-pole envelope follower tracks the
+/// input level, and gain is reduced above a threshold by a fixed ratio.
+/// The compressor owns its envelope state, so it is allocation-free and
+/// sample-accurate on the audio thread.
+///
+/// Defaults: threshold -20 dB, ratio 4:1, attack 1 ms, release 50 ms,
+/// no makeup gain, fully wet.
+pub struct Compressor {
+    env: EnvelopeFollower,
+    threshold_db: f32,
+    ratio: f32,
+    attack_ms: f32,
+    release_ms: f32,
+    makeup_db: f32,
+    mix: f32,
+}
+
+impl Default for Compressor {
+    fn default() -> Self {
+        Self {
+            env: EnvelopeFollower::new(1.0, 50.0, 48_000.0),
+            threshold_db: -20.0,
+            ratio: 4.0,
+            attack_ms: 1.0,
+            release_ms: 50.0,
+            makeup_db: 0.0,
+            mix: 100.0,
+        }
+    }
+}
+
+impl Block for Compressor {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "dynamics.compressor",
+            name: "Compressor",
+            category: Category::Dynamics,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "threshold",
+                    name: "Threshold",
+                    unit: Unit::Decibels,
+                    min: -60.0,
+                    max: 0.0,
+                    default: -20.0,
+                    curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "ratio",
+                    name: "Ratio",
+                    unit: Unit::Ratio,
+                    min: 1.0,
+                    max: 20.0,
+                    default: 4.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "attack",
+                    name: "Attack",
+                    unit: Unit::Milliseconds,
+                    min: 0.1,
+                    max: 50.0,
+                    default: 1.0,
+                    curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "release",
+                    name: "Release",
+                    unit: Unit::Milliseconds,
+                    min: 1.0,
+                    max: 500.0,
+                    default: 50.0,
+                    curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "makeup",
+                    name: "Makeup",
+                    unit: Unit::Decibels,
+                    min: 0.0,
+                    max: 30.0,
+                    default: 0.0,
+                    curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "mix",
+                    name: "Mix",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 100.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.env = EnvelopeFollower::new(self.attack_ms, self.release_ms, sr);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let sr = ctx.sample_rate;
+        let threshold = ctx.param(0);
+        let ratio = ctx.param(1).clamp(1.0, 20.0);
+        let attack = ctx.param(2);
+        let release = ctx.param(3);
+        let makeup = ctx.param(4);
+        let mix = ctx.param(5) / 100.0;
+
+        self.env.set_timeconstants(attack, release, sr);
+
+        let input = ctx.inputs[0];
+        let out = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let level = self.env.process(input[i].abs());
+            // Convert to dB with a floor so silence maps to a finite value.
+            let level_db = pedal_dsp::util::lin_to_db(level.max(1e-4));
+            let excess = level_db - threshold;
+            // Gain reduction grows linearly with the excess, by 1 - 1/ratio.
+            let gr_db = if excess > 0.0 {
+                excess * (1.0 - 1.0 / ratio)
+            } else {
+                0.0
+            };
+            let gain = pedal_dsp::util::db_to_lin(-gr_db + makeup);
+            let wet = input[i] * gain;
+            out[i] = pedal_dsp::util::mix(input[i], wet, mix);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.env.reset();
+    }
+}
+
+/// Tremolo: amplitude modulation. The input gain is swept by an LFO so the
+/// volume pulses rhythmically.
+///
+/// The gain varies between `(1 - depth)` and `1`, so `depth = 0` leaves the
+/// signal untouched (bypass-equivalent) and `depth = 1` silences the signal
+/// at the trough of the LFO. The LFO phase is advanced monotonically and
+/// wrapped, so it is continuous across block boundaries and produces no
+/// clicks.
+pub struct Tremolo {
+    lfo: pedal_dsp::lfo::Lfo,
+    depth: f32,
+    mix: f32,
+}
+
+impl Default for Tremolo {
+    fn default() -> Self {
+        Self {
+            // 0.6 Hz gives roughly a 0.6 Hz pulse (mix-tempo-near feel) on
+            // the default 48 kHz host rate; the sample rate is re-set in
+            // `prepare` to the host's actual rate.
+            lfo: pedal_dsp::lfo::Lfo::new(0.6, 48_000.0),
+            depth: 0.5,
+            mix: 100.0,
+        }
+    }
+}
+
+impl Block for Tremolo {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "mod.tremolo",
+            name: "Tremolo",
+            category: Category::Modulation,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "rate",
+                    name: "Rate",
+                    unit: Unit::Hertz,
+                    min: 0.1,
+                    max: 5.0,
+                    default: 0.6,
+                    curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "depth",
+                    name: "Depth",
+                    unit: Unit::Linear,
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "mix",
+                    name: "Mix",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 100.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        // Re-create the LFO at the block's sample rate so the phase
+        // increment (`rate_hz / sample_rate`) is correct for the host rate.
+        self.lfo = pedal_dsp::lfo::Lfo::new(0.6, sr);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let rate = ctx.param(0);
+        let depth = ctx.param(1);
+        let mix = ctx.param(2) / 100.0;
+
+        // The LFO frequency is applied per block. Because `process` advances
+        // the phase by exactly `rate_hz / sample_rate` and only ever wraps
+        // forward, consecutive blocks hand off with the phase continuous and
+        // no step at the boundary — so no click.
+        self.lfo.set_rate(rate);
+        self.depth = depth;
+        self.mix = mix;
+
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            // Map the LFO modulator (-1..1) to 0..1, then to a gain in
+            // [1 - depth, 1]. `depth = 0` therefore yields a constant gain
+            // of 1 (bypass).
+            let m = self.lfo.process() * 0.5 + 0.5;
+            let gain = 1.0 - self.depth * (1.0 - m);
+            let wet = input[i] * gain;
+            output[i] = pedal_dsp::util::mix(input[i], wet, self.mix);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.lfo.reset();
+    }
+}
+
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
@@ -692,6 +1046,9 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<PitchDelay>();
     r.add::<Reverb>();
     r.add::<Nam>();
+    r.add::<Compressor>();
+    r.add::<Tremolo>();
+    r.add::<Octaver>();
     r
 }
 

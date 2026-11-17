@@ -4,7 +4,7 @@
 import { signal } from "@preact/signals";
 import { createBridge, type Bridge } from "./bridge";
 import { type BlockPayload } from "./dnd";
-import { asState, isMeters, isState, type Meters, type State } from "./protocol";
+import { asState, isMeters, isState, type Meters, type Routing, type RoutingEndpoint, type State } from "./protocol";
 
 export const bridge: Bridge = createBridge();
 
@@ -16,12 +16,37 @@ export const error = signal<string | null>(null);
 /** Transient: the last command was rejected. Shown as a toast, never fatal. */
 export const notice = signal<string | null>(null);
 export const selected = signal<{ channel: string; block: string } | null>(null);
+/** The selected cross-channel routing line, if any. UI-only: the engine has no
+ *  notion of selection and is never told about it. */
+export const selectedRouting = signal<string | null>(null);
 /** Whether the preset browser modal is open. */
 export const presetsOpen = signal(false);
 /** Channel the add-block picker targets; null when the picker is closed. */
 export const addBlockFor = signal<string | null>(null);
 /** Current filter text of the add-block picker. */
 export const blockQuery = signal("");
+/**
+ * The block type selected in the browser (rack or picker), for the keyboard
+ * path: Enter/Space on a row selects it here, then the channel view's
+ * "Add selected block" button inserts it at the end of that channel.
+ *
+ * Null when nothing is selected. Survives across channel rows, so Tab can
+ * move from the rack to the chain without losing the choice.
+ */
+export const selectedBlockType = signal<BlockPayload | null>(null);
+/**
+ * The block type a touch long-press picked up from the rack, for the duration
+ * of the gesture. The channel view reads it on `pointerup` to insert the block
+ * at the slot under the finger. Null when no touch drag is in flight.
+ *
+ * A module-level signal (rather than a prop) because the rack row that starts
+ * the gesture and the channel that finishes it are not in a parent/child
+ * relationship: `Rack` and `Chain` are siblings.
+ */
+export const touchDragBlock = signal<BlockPayload | null>(null);
+
+/** The channel a touch drag is currently over, by id. */
+export const touchDragOver = signal<string | null>(null);
 
 /** Open the picker over `channel`, resetting any previous search. */
 export function openBlockPicker(channel: string): void {
@@ -82,6 +107,10 @@ function apply(payload: unknown): void {
   } else if (Array.isArray(p.presets) && state.value) {
     // A preset listing is a partial: patch just the names.
     state.value = { ...state.value, presets: p.presets };
+  } else if (Array.isArray(p.routings) && state.value) {
+    // `listRoutings` answers with the list alone; the snapshot stays the
+    // authority for everything else.
+    state.value = { ...state.value, routings: p.routings as Routing[] };
   }
 }
 
@@ -111,6 +140,18 @@ export const setBypass = (channel: string, block: string, bypass: boolean) =>
 
 export const addBlock = (channel: string, type: string, name: string) =>
   mutate("addBlock", { channel, type, name });
+
+/**
+ * Insert a block at the end of `channel` — the keyboard path.
+ *
+ * Same as `addBlock`, but it also clears the browser selection, because the
+ * choice has been consumed. `addBlock` itself stays a bare append so the rack
+ * click and the picker keep their existing behaviour.
+ */
+export function appendSelectedBlock(channel: string, entry: BlockPayload): void {
+  selectedBlockType.value = null;
+  void addBlock(channel, entry.type, entry.name);
+}
 
 /**
  * Insert a block dragged from the browser at `index` in `channel`.
@@ -147,6 +188,28 @@ export const moveBlock = (channel: string, block: string, to: number) =>
 export const setSources = (channel: string, sources: string[]) =>
   mutate("setSources", { channel, sources });
 
+// --- Cross-channel routings -------------------------------------------------
+// A routing is a tap from one block to a block in another channel. Every
+// command returns the full snapshot, so the list on screen is always the
+// engine's, never a local guess.
+
+export const createRouting = (source: RoutingEndpoint, dest: RoutingEndpoint) =>
+  mutate("createRouting", { source, dest });
+
+export const removeRouting = (id: string) => mutate("removeRouting", { id });
+
+export const setEnabled = (id: string, enabled: boolean) =>
+  mutate("setEnabled", { id, enabled });
+
+export const setGain = (id: string, gain: number) => mutate("setGain", { id, gain });
+
+export const listRoutings = () => mutate("listRoutings");
+
+/** Select a routing line (or `null` to clear). Never sent to the engine. */
+export const selectRouting = (id: string | null) => {
+  selectedRouting.value = id;
+};
+
 export const setSource = (source: "riff" | "live" | "silence") =>
   mutate("setSource", { source });
 
@@ -164,3 +227,11 @@ export const renamePreset = (from: string, to: string) =>
 export const select = (channel: string, block: string) => {
   selected.value = { channel, block };
 };
+
+/**
+ * Choose a block type in the browser for the keyboard path. `Entry` is the
+ * rack/picker row; the payload is what a drop would have carried.
+ */
+export function selectBlockType(entry: BlockPayload | null): void {
+  selectedBlockType.value = entry;
+}

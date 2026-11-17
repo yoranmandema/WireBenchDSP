@@ -30,3 +30,22 @@ Cypress.Commands.add("selectBlock", (channelIndex, blockIndex) => {
     .click();
   cy.get(".editor-name").should("exist");
 });
+
+/**
+ * Dispatch a pointer event with an explicit `pointerType`.
+ *
+ * Cypress's `.trigger()` builds the event without one, and the app's gesture
+ * code treats an absent `pointerType` as a mouse — so a touch test has to say
+ * `pointerType: "touch"` or the long press never starts.
+ */
+Cypress.Commands.add("pointer", { prevSubject: "element" }, (el, type, opts = {}) => {
+  const win = el.ownerDocument.defaultView;
+  const e = new win.PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerId: 1,
+    pointerType: "mouse",
+    ...opts,
+  });
+  el.dispatchEvent(e);
+});
