@@ -200,3 +200,34 @@
   border-color: var(--color-amber-edge);
   color: var(--color-amber-ink);
 }
+/* Cross-channel routing drag handle: a 12px circle centred on a block card's
+ * right edge. It is the only drag source for a routing: it is a real element
+ * (the existing output dot is an `after:` pseudo-element and cannot take
+ * pointer events), and its `pointerdown` stops propagation so the card-reorder
+ * drag is untouched. */
+.block-out {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: var(--color-amber);
+  border: 2px solid var(--color-amber);
+  cursor: crosshair;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(232, 163, 61, 0.25);
+}
+
+/* Live preview line while a cross-channel routing is dragged. It is overlaid
+ * above the channel rows and given `pointer-events: none` so the pointer still
+ * reaches the cards beneath it; target hit-testing is done against the cards. */
+.block-route-preview {
+  pointer-events: none;
+}
+
+/* Drop-target highlight shown while a routing is dragged over a card. */
+.block-card.routing-target {
+  box-shadow: 0 0 0 2px var(--color-amber), 0 0 0 3px var(--color-amber-dim);
+}

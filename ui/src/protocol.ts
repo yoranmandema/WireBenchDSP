@@ -46,6 +46,25 @@ export interface Channel {
   blocks: Block[];
 }
 
+/** One end of a cross-channel routing: a block instance in a channel. */
+export interface RoutingEndpoint {
+  channel: string;
+  block: string;
+}
+
+/**
+ * A tap from one block's output to a block in another channel. Not an edge:
+ * the source keeps its own downstream wire, and the destination sums the two
+ * feeds. `gain` is linear.
+ */
+export interface Routing {
+  id: string;
+  source: RoutingEndpoint;
+  dest: RoutingEndpoint;
+  enabled: boolean;
+  gain: number;
+}
+
 export interface State {
   /** Monotonic revision. Bumped by the engine on every rebuild; the UI drops
    *  snapshots that are not newer, so a late delivery cannot roll it back. */
@@ -55,6 +74,11 @@ export interface State {
   source: "riff" | "live" | "silence";
   registry: Record<string, BlockSpec>;
   channels: Channel[];
+  routings: Routing[];
+  /** Global input trim, dB, from the header knob. */
+  inputGain: number;
+  /** Global output volume, dB, from the header knob. */
+  masterOutVolume: number;
 }
 
 export interface Meters {
@@ -93,13 +117,33 @@ export interface MetersEvent {
   payload: Meters;
 }
 
+export interface Tuner {
+  active: boolean;
+  freq: number;
+  note: string;
+  octave: number;
+  cents: number;   // -50...+50
+  clarity: number; // 0...1
+  reference: number;
+}
+
+export interface TunerEvent {
+  type: "event";
+  event: "tuner";
+  payload: Tuner;
+}
+
+export function isTuner(msg: ServerMessage): msg is TunerEvent {
+  return msg.type === "event" && msg.event === "tuner";
+}
+
 export interface ErrorEvent {
   type: "event";
   event: "error";
   payload: { message: string };
 }
 
-export type ServerMessage = Response | StateEvent | MetersEvent | ErrorEvent;
+export type ServerMessage = Response | StateEvent | MetersEvent | TunerEvent | ErrorEvent;
 
 export function isState(msg: ServerMessage): msg is StateEvent {
   return msg.type === "event" && msg.event === "state";

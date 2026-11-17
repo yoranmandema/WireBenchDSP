@@ -77,4 +77,72 @@ describe("add-block picker", () => {
     cy.get(".modal.picker .modal-head .nav").click();
     cy.get(".modal.picker").should("not.exist");
   });
+
+  it("resets the search and adds once per open across repeated cycles", () => {
+    // First cycle: filter, then cancel.
+    cy.get(".channel").eq(2).find(".add-block").click();
+    cy.get(".picker-search").type("delay");
+    cy.get(".picker-search").type("{esc}");
+    cy.get(".modal.picker").should("not.exist");
+
+    // Reopening starts from the full list, not the last filter.
+    cy.get(".channel").eq(2).find(".add-block").click();
+    cy.get(".picker-search").should("have.value", "");
+    cy.get(".picker-meta").first().should("contain", "11 blocks");
+    cy.contains(".picker .rack-item", /^Delay$/).click();
+    cy.get(".modal.picker").should("not.exist");
+
+    // Second cycle appends exactly one more block; nothing is duplicated
+    // or dropped.
+    cy.get(".channel").eq(2).find(".add-block").click();
+    cy.contains(".picker .rack-item", /^Overdrive$/).click();
+    cy.get(".modal.picker").should("not.exist");
+
+    cy.get(".channel").eq(2).find(".block-card").should("have.length", 2);
+    cy.get(".channel").eq(2).find(".block-name").then(($names) => {
+      expect([...$names].map((n) => n.textContent.trim())).to.deep.equal([
+        "Delay",
+        "Overdrive",
+      ]);
+    });
+  });
+
+  it("returns focus to the + button on Escape", () => {
+    cy.get(".channel").eq(2).find(".add-block").click();
+    cy.get(".picker-search").should("have.focus");
+
+    cy.get(".picker-search").type("{esc}");
+    cy.get(".modal.picker").should("not.exist");
+    cy.get(".channel").eq(2).find(".add-block").should("have.focus");
+  });
+
+  it("returns focus to the + button after adding to a populated channel", () => {
+    cy.get(".channel").eq(1).find(".add-block").click();
+    cy.contains(".picker .rack-item", /^Overdrive$/).click();
+
+    cy.get(".modal.picker").should("not.exist");
+    cy.get(".channel").eq(1).find(".add-block").should("have.focus");
+  });
+
+  it("returns focus to the replacement + button after filling an empty channel", () => {
+    // ch3 starts empty, so adding a block swaps the row component and
+    // remounts the + button; focus must follow the new element.
+    cy.get(".channel").eq(2).find(".add-block").click();
+    cy.contains(".picker .rack-item", /^Delay$/).click();
+
+    cy.get(".channel").eq(2).find(".block-card").should("have.length", 1);
+    cy.get(".channel").eq(2).find(".add-block").should("have.focus");
+  });
+
+  it("adds only one block when a row is clicked twice in quick succession", () => {
+    cy.get(".channel").eq(2).find(".add-block").click();
+    // Two clicks in the same tick, before the modal unmounts.
+    cy.get(".picker .rack-item").first().then(($row) => {
+      $row[0].click();
+      $row[0].click();
+    });
+
+    cy.get(".modal.picker").should("not.exist");
+    cy.get(".channel").eq(2).find(".block-card").should("have.length", 1);
+  });
 });
