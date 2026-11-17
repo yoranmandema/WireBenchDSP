@@ -160,6 +160,9 @@ anyone can skip. Before **any** `kanban_complete`, from the main checkout run:
   as an ancestor (`git merge -s ours wt/<card id> -m "record: <card>
   content already on main"`) or comment the decision on the card. Never
   leave a done card pointing at work that only exists in a stale branch.
+  If the branch was already deleted, satisfy the gate with an empty commit:
+  `git commit --allow-empty -m "record: <card id> verified on main at
+  <hash> — <why>"` (`--verify` greps main for the card id as its fallback).
 
 A land that dies is loud by design: the scripts stop with a message, never
 half-merge. `agent-env.sh` aborts a conflicting `main` merge instead of
