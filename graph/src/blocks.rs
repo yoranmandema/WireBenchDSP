@@ -364,7 +364,15 @@ impl Block for IoInput {
             category: Category::Io,
             inputs: vec![],
             outputs: vec![PortSpec::audio("out")],
-            params: vec![],
+            params: vec![ParamSpec {
+                id: "gain".into(),
+                name: "Input gain".into(),
+                unit: Unit::Decibels,
+                min: -60.0,
+                max: 24.0,
+                default: 0.0,
+                curve: Curve::AmpGain,
+            }],
             controls_in: vec![],
             controls_out: vec![],
         }
@@ -372,7 +380,13 @@ impl Block for IoInput {
     fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
         Ok(())
     }
-    fn process(&mut self, _ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let g = pedal_dsp::util::db_to_lin(ctx.param(0));
+        if g != 1.0 {
+            for x in ctx.outputs[0].iter_mut() {
+                *x *= g;
+            }
+        }
         Ok(())
     }
     fn reset(&mut self) {}

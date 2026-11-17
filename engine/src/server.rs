@@ -38,10 +38,6 @@ pub struct Shared {
     pub source: Arc<AtomicU8>,
     /// Current preset name, `""` when the rig has never been saved.
     pub preset: Mutex<String>,
-    /// Global input trim, dB (header knob). Written by `setInputGain`.
-    pub input_gain: Mutex<f32>,
-    /// Global output volume, dB (header knob). Written by `setMasterOutVolume`.
-    pub master_out_volume: Mutex<f32>,
     /// The I/O buffer size in frames (the low-latency default is 128; the
     /// fallback ladder is [128, 256, 512]).
     pub buffer_frames: Mutex<u32>,
@@ -68,8 +64,6 @@ impl Shared {
             registry,
             source,
             preset: Mutex::new(String::new()),
-            input_gain: Mutex::new(0.0),
-            master_out_volume: Mutex::new(0.0),
             buffer_frames: Mutex::new(DEFAULT_IO_BUFFER_FRAMES),
             sample_rate: Mutex::new(None),
             clients: Mutex::new(Vec::new()),
@@ -182,8 +176,8 @@ fn snapshot(sh: &Shared) -> Value {
         "source": sh.source_name(),
         "registry": registry_json(&sh.registry),
         "channels": channels,
-        "inputGain": *sh.input_gain.lock().unwrap(),
-        "masterOutVolume": *sh.master_out_volume.lock().unwrap(),
+        "inputGain": rig.input_gain,
+        "masterOutVolume": rig.master_volume,
         "routings": routings,
         "bufferFrames": *sh.buffer_frames.lock().unwrap(),
         "sampleRate": sample_rate,
@@ -358,6 +352,38 @@ fn set_master_volume(sh: &Shared, channel: &str, value: f32) -> Result<(), Strin
     if let Some(nidx) = nidx {
         sh.handle.push(Cmd::SetParam { node: nidx, param: 0, value }).map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+fn set_input_gain(sh: &Shared, value: f32) -> Result<(), String> {
+    let value = value.clamp(-60.0, 24.0);
+    let nidx = {
+        let mut rig = sh.rig.lock().unwrap();
+        rig.input_gain = value;
+        sh.handle.node_index("in")
+    };
+    if let Some(nidx) = nidx {
+        sh.handle.push(Cmd::SetParam { node: nidx, param: 0, value }).map_err(|e| e.to_string())?;
+    }
+    // The cached bypass graph was built with the old trim; drop it so the next
+    // rebuild picks up the new value.
+    *sh.bypass.lock().unwrap() = None;
+    Ok(())
+}
+
+fn set_master_out_volume(sh: &Shared, value: f32) -> Result<(), String> {
+    let value = value.clamp(-60.0, 12.0);
+    let nidx = {
+        let mut rig = sh.rig.lock().unwrap();
+        rig.master_volume = value;
+        sh.handle.node_index(OUT_MASTER_ID)
+    };
+    if let Some(nidx) = nidx {
+        sh.handle.push(Cmd::SetParam { node: nidx, param: 0, value }).map_err(|e| e.to_string())?;
+    }
+    // The cached bypass graph was built with the old volume; drop it so the
+    // next rebuild picks up the new value.
+    *sh.bypass.lock().unwrap() = None;
     Ok(())
 }
 
@@ -559,10 +585,10 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                     set_master_volume(sh, &s("channel").ok_or("channel")?, f("value"))?;
                 }
                 "setInputGain" => {
-                    *sh.input_gain.lock().unwrap() = f("value").clamp(-60.0, 24.0);
+                    set_input_gain(sh, f("value"))?;
                 }
                 "setMasterOutVolume" => {
-                    *sh.master_out_volume.lock().unwrap() = f("value").clamp(-60.0, 12.0);
+                    set_master_out_volume(sh, f("value"))?;
                 }
                 "setBypass" => {
                     set_bypass(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, b("bypass"))?;
