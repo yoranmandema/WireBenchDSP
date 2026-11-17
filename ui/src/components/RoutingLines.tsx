@@ -26,6 +26,16 @@ const AMBER = "#e8a33d";
 const ARROW_LEN = 4;
 const ARROW_HALF_WIDTH = 2.5;
 
+/** S-curve shared by the live preview line and the real routings. */
+export function routeCurve(x1: number, y1: number, x2: number, y2: number): string {
+  const dx = x2 - x1;
+  const bend = Math.abs(dx) < 8 ? 6 : Math.max(20, Math.min(Math.abs(dx) * 0.5, 90));
+  return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
+}
+
+/** The app's amber accent. */
+export const ROUTING_AMBER = "#e8a33d";
+
 /** The measured geometry of one line; styling is applied at render time. */
 interface Line {
   id: string;
