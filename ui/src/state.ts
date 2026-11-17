@@ -4,13 +4,26 @@
 import { signal } from "@preact/signals";
 import { createBridge, type Bridge } from "./bridge";
 import { type BlockPayload } from "./dnd";
-import { asState, isMeters, isState, isTuner, type Meters, type Routing, type RoutingEndpoint, type State, type Tuner } from "./protocol";
+import { type Config } from "./protocol";
+import {
+  asState,
+  isMeters,
+  isState,
+  isTuner,
+  type Meters,
+  type Routing,
+  type RoutingEndpoint,
+  type State,
+  type Tuner,
+} from "./protocol";
 
 export const bridge: Bridge = createBridge();
 
 export const state = signal<State | null>(null);
 export const meters = signal<Meters>({ in: 0, out: 0, cpu: 0, xruns: 0 });
 export const ready = signal(false);
+/** Supported I/O buffer sizes, in frames, from the engine's `getConfig`. */
+export const bufferSizeOptions = signal<number[]>([]);
 /** Fatal: the UI could not reach the engine at all. */
 export const error = signal<string | null>(null);
 /** Transient: the last command was rejected. Shown as a toast, never fatal. */
@@ -99,6 +112,21 @@ export async function init(): Promise<void> {
   });
   try {
     fold(asState(await bridge.request("getState")));
+    // Populate the buffer-size dropdown once; the engine greets every new
+    // connection with a snapshot, which covers the latency readout. If the
+    // second request fails (engine restarting), fall back to the engine's
+    // built-in ladder so the control still renders and works.
+    try {
+      const cfg = await bridge.request("getConfig");
+      if (cfg && typeof cfg === "object" && "supported" in cfg) {
+        bufferSizeOptions.value = (cfg as Config).supported ?? [];
+      }
+    } catch {
+      // ignore: the snapshot already has the current buffer size; the user can
+      // still change it with the fallback list. The engine greets again with
+      // fresh state after a buffer change, so the UI stays in sync.
+      bufferSizeOptions.value = [128, 256, 512];
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     // The engine may still be starting (the shell spawns it alongside the
@@ -146,11 +174,24 @@ const mutate = (cmd: string, args?: Record<string, unknown>) =>
 export const setParam = (channel: string, block: string, param: string, value: number) =>
   mutate("setParam", { channel, block, param, value });
 
-export const setMasterVolume = (channel: string, value: number) =>
-  mutate("setMasterVolume", { channel, value });
+export const setConfig = (bufferFrames: number) =>
+  mutate("setConfig", { buffer_frames: bufferFrames });
+
+/** Fetch engine config: supported buffer sizes, current values, and latency. */
+export const getConfig = () =>
+  bridge.request("getConfig").then((payload) => payload as Config);
 
 export const setBypass = (channel: string, block: string, bypass: boolean) =>
   mutate("setBypass", { channel, block, bypass });
+
+export const setInputGain = (value: number) => mutate("setInputGain", { value });
+
+/** Per-channel volume, dB. */
+export const setMasterVolume = (channel: string, value: number) =>
+  mutate("setMasterVolume", { channel, value });
+
+export const setMasterOutVolume = (value: number) =>
+  mutate("setMasterOutVolume", { value });
 
 export const addBlock = (channel: string, type: string, name: string) =>
   mutate("addBlock", { channel, type, name });
@@ -248,4 +289,13 @@ export const select = (channel: string, block: string) => {
  */
 export function selectBlockType(entry: BlockPayload | null): void {
   selectedBlockType.value = entry;
+}
+
+// Debug hook (removed before shipping).
+if (typeof window !== "undefined") {
+  (window as any).__pedal_bridge = bridge;
+  (window as any).__pedal_init = init;
+  (window as any).__pedal_state = state;
+  (window as any).__pedal_ready = ready;
+  (window as any).__pedal_error = error;
 }

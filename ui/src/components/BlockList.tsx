@@ -141,7 +141,7 @@ export function BlockList({
                 e.preventDefault();
                 selectBlockType({ type: b.type, name: b.name, config: b.config });
               }}
-              title={`Add ${b.name} (${b.type}) — drag it into a channel, or press Enter to select it`}
+              title={`${b.name} — drag to a channel`}
             >
               <span class="rack-icon grid place-items-center text-cat">
                 <BlockIcon type={b.type} category={b.category} size={18} />

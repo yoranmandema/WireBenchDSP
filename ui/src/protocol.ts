@@ -75,6 +75,27 @@ export interface State {
   registry: Record<string, BlockSpec>;
   channels: Channel[];
   routings: Routing[];
+  /** Global input trim, dB, from the header knob. */
+  inputGain: number;
+  /** Global output volume, dB, from the header knob. */
+  masterOutVolume: number;
+  /** I/O buffer size, in frames (e.g. 128, 256, 512). */
+  bufferFrames: number;
+  /** Sample rate the engine is running at (48_000, 44_100, …). */
+  sampleRate: number;
+  /** One-way latency in ms, as measured by the engine. */
+  oneWayLatencyMs: number;
+  /** Round-trip latency in ms (the sum of input and output one-way latency). */
+  roundTripLatencyMs: number;
+}
+
+/** Engine's config endpoint response: the I/O buffer-size config and latency. */
+export interface Config {
+  bufferFrames: number;
+  sampleRate: number;
+  supported: number[];
+  oneWayLatencyMs: number;
+  roundTripLatencyMs: number;
 }
 
 export interface Meters {

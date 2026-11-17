@@ -36,10 +36,10 @@ use tokio_tungstenite::tungstenite::Message;
 /// The engine runs at 48 kHz; one block is 64 frames = 1.33 ms.
 const SR: f32 = 48_000.0;
 /// Simulated device callback, frames. Wider than one block, like a real device.
-const CB: usize = 256;
+const CB: usize = 64;
 const CH: usize = 2;
 /// Live input buffered before the output callback starts.
-const PREFILL: usize = 2048;
+const PREFILL: usize = 64;
 /// One device period: 256 frames at 48 kHz.
 fn period() -> Duration {
     Duration::from_secs_f32(CB as f32 / SR)
