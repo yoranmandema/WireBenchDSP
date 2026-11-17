@@ -53,23 +53,6 @@ describe("signal chain", () => {
     cy.get(".channel").eq(0).find(".block-card").should("have.length", 3);
   });
 
-  it("changes the channel volume", () => {
-    cy.get(".channel").eq(0).find('input[type="range"]')
-      .invoke("val", "-12")
-      .trigger("input");
-
-    cy.get(".channel").eq(0).find('input[type="range"]').should("have.value", "-12");
-    cy.get(".channel").eq(0).find('input[type="range"]').should("have.attr", "title", "Volume -12.0 dB");
-  });
-
-  it("toggles the channel input source", () => {
-    const box = () => cy.get(".channel").eq(0).find(".mini input[type='checkbox']");
-    box().should("be.checked");
-    box().uncheck();
-    box().should("not.be.checked");
-    box().check();
-    box().should("be.checked");
-  });
 
   it("reorders a block by dragging it to another slot", () => {
     const cards = () => cy.get(".channel").eq(0).find(".block-card");
@@ -259,7 +242,7 @@ describe("empty channels", () => {
     cy.get(".channel").eq(2).find(".drop-indicator").should("have.length", 0);
     cy.get(".channel").eq(2).find(".drag-ghost").should("have.length", 0);
     // The header is still a working control on an empty channel.
-    cy.get(".channel").eq(2).find(".channel-head input[type=range]").should("exist");
+    cy.get(".channel").eq(2).find(".channel-head input").should("have.length", 0);
     cy.get(".channel").eq(2).find(".add-block").should("exist");
   });
 
@@ -278,19 +261,6 @@ describe("empty channels", () => {
     cy.get(".channel").eq(2).find(".block-card").eq(0).find(".remove").click();
     cy.get(".channel").eq(2).find(".block-card").should("have.length", 0);
     cy.get(".channel").eq(2).should("have.class", "is-empty");
-    cy.get(".channel").should("have.length", 4);
-  });
-
-  it("keeps its volume and source controls working while empty", () => {
-    cy.get(".channel").eq(3).find(".channel-head input[type=range]")
-      .invoke("val", "-12")
-      .trigger("input");
-    cy.get(".toast").should("not.exist");
-
-    // The source toggle is live on an empty channel too: ticking it sends and
-    // the engine's snapshot comes back with the channel still present.
-    cy.get(".channel").eq(3).find(".mini input[type=checkbox]").should("not.be.checked").check();
-    cy.get(".channel").eq(3).find(".mini input[type=checkbox]").should("be.checked");
     cy.get(".channel").should("have.length", 4);
   });
 });

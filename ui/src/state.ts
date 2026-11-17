@@ -132,11 +132,13 @@ const mutate = (cmd: string, args?: Record<string, unknown>) =>
 export const setParam = (channel: string, block: string, param: string, value: number) =>
   mutate("setParam", { channel, block, param, value });
 
-export const setMasterVolume = (channel: string, value: number) =>
-  mutate("setMasterVolume", { channel, value });
-
 export const setBypass = (channel: string, block: string, bypass: boolean) =>
   mutate("setBypass", { channel, block, bypass });
+
+export const setInputGain = (value: number) => mutate("setInputGain", { value });
+
+export const setMasterOutVolume = (value: number) =>
+  mutate("setMasterOutVolume", { value });
 
 export const addBlock = (channel: string, type: string, name: string) =>
   mutate("addBlock", { channel, type, name });
@@ -185,8 +187,7 @@ export const removeBlock = (channel: string, block: string) =>
 export const moveBlock = (channel: string, block: string, to: number) =>
   mutate("moveBlock", { channel, block, to });
 
-export const setSources = (channel: string, sources: string[]) =>
-  mutate("setSources", { channel, sources });
+
 
 // --- Cross-channel routings -------------------------------------------------
 // A routing is a tap from one block to a block in another channel. Every

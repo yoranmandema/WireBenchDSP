@@ -75,6 +75,10 @@ export interface State {
   registry: Record<string, BlockSpec>;
   channels: Channel[];
   routings: Routing[];
+  /** Global input trim, dB, from the header knob. */
+  inputGain: number;
+  /** Global output volume, dB, from the header knob. */
+  masterOutVolume: number;
 }
 
 export interface Meters {

@@ -82,6 +82,8 @@ export async function startFakeEngine({ port = 9400, host = "127.0.0.1" } = {}) 
     "removeBlock",
     "moveBlock",
     "setSources",
+    "setInputGain",
+    "setMasterOutVolume",
     "createRouting",
     "removeRouting",
     "setEnabled",
@@ -173,6 +175,16 @@ export async function startFakeEngine({ port = 9400, host = "127.0.0.1" } = {}) 
 
       case "setSource": {
         state.source = ["riff", "live", "silence"].includes(args.source) ? args.source : "riff";
+        return commit();
+      }
+
+      case "setInputGain": {
+        state.inputGain = clamp(Number(args.value), -60, 24);
+        return commit();
+      }
+
+      case "setMasterOutVolume": {
+        state.masterOutVolume = clamp(Number(args.value), -60, 12);
         return commit();
       }
 
