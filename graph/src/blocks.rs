@@ -817,6 +817,122 @@ impl Block for Compressor {
     }
 }
 
+/// A noise gate: passes audio above a configurable threshold and attenuates
+/// audio below it. A one-pole envelope follower tracks the input level; the
+/// gate opens (gain 1) when the level is above the threshold and closes
+/// (attenuating up to 60 dB) when it is below.
+///
+/// Defaults: threshold -40 dB, attack 1 ms, release 5 ms, fully wet.
+pub struct Gate {
+    env: EnvelopeFollower,
+    threshold_db: f32,
+    attack_ms: f32,
+    release_ms: f32,
+    mix: f32,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            env: EnvelopeFollower::new(1.0, 5.0, 48_000.0),
+            threshold_db: -40.0,
+            attack_ms: 1.0,
+            release_ms: 5.0,
+            mix: 100.0,
+        }
+    }
+}
+
+impl Block for Gate {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "dynamics.noise_gate",
+            name: "Noise gate",
+            category: Category::Dynamics,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "threshold",
+                    name: "Threshold",
+                    unit: Unit::Decibels,
+                    min: -60.0,
+                    max: 0.0,
+                    default: -40.0,
+                    curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "attack",
+                    name: "Attack",
+                    unit: Unit::Milliseconds,
+                    min: 0.1,
+                    max: 10.0,
+                    default: 1.0,
+                    curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "release",
+                    name: "Release",
+                    unit: Unit::Milliseconds,
+                    min: 1.0,
+                    max: 100.0,
+                    default: 5.0,
+                    curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "mix",
+                    name: "Mix",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 100.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.env = EnvelopeFollower::new(self.attack_ms, self.release_ms, sr);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let threshold = ctx.param(0);
+        let attack = ctx.param(1);
+        let release = ctx.param(2);
+        let mix = ctx.param(3) / 100.0;
+
+        self.env.set_timeconstants(attack, release, ctx.sample_rate);
+
+        let input = ctx.inputs[0];
+        let out = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let level = self.env.process(input[i].abs());
+            // Convert to dB with a floor so silence maps to a finite value.
+            let level_db = pedal_dsp::util::lin_to_db(level.max(1e-4));
+            let excess = level_db - threshold;
+            // When excess > 0 the signal is above the threshold: open fully.
+            // Below the threshold the gate closes by up to 60 dB.
+            let gr_db = if excess > 0.0 {
+                0.0
+            } else {
+                (threshold - level_db).min(60.0)
+            };
+            let gain = pedal_dsp::util::db_to_lin(-gr_db);
+            let wet = input[i] * gain;
+            out[i] = pedal_dsp::util::mix(input[i], wet, mix);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.env.reset();
+    }
+}
+
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
@@ -834,6 +950,7 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<Reverb>();
     r.add::<Nam>();
     r.add::<Compressor>();
+    r.add::<Gate>();
     r
 }
 
@@ -1094,6 +1211,131 @@ impl Block for Nam {
         } else {
             Ok(())
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Executor;
+    use crate::Graph;
+    use pedal_dsp::util::db_to_lin;
+
+    const SR: f32 = 48_000.0;
+    const BLOCK: usize = 8192;
+
+    fn gate_graph() -> Executor {
+        let mut g = Graph::new();
+        g.add("in", Box::new(IoInput)).unwrap();
+        g.add("gate", Box::new(Gate::default())).unwrap();
+        g.add("out", Box::new(IoOutput)).unwrap();
+        g.connect("in", "out", "gate", "in").unwrap();
+        g.connect("gate", "out", "out", "in").unwrap();
+        Executor::compile_owned(&mut g, SR, BLOCK).unwrap()
+    }
+
+    fn build_gate_graph(release_ms: f32) -> Executor {
+        let mut g = Graph::new();
+        g.add("in", Box::new(IoInput)).unwrap();
+        g.add("gate", Box::new(Gate::default())).unwrap();
+        g.add("out", Box::new(IoOutput)).unwrap();
+        g.connect("in", "out", "gate", "in").unwrap();
+        g.connect("gate", "out", "out", "in").unwrap();
+        g.set_param_real("gate", "release", release_ms).unwrap();
+        Executor::compile_owned(&mut g, SR, BLOCK).unwrap()
+    }
+
+    fn constant(level_db: f32) -> Vec<f32> {
+        vec![db_to_lin(level_db); BLOCK]
+    }
+
+    #[test]
+    fn gate_spec_has_threshold_attack_release_and_mix() {
+        let params = Gate::default().spec().params;
+        assert_eq!(params[0].id, "threshold");
+        assert_eq!(params[0].unit, Unit::Decibels);
+        assert_eq!(params[0].min, -60.0);
+        assert_eq!(params[0].default, -40.0);
+        assert_eq!(params[1].id, "attack");
+        assert_eq!(params[1].unit, Unit::Milliseconds);
+        assert_eq!(params[1].min, 0.1);
+        assert_eq!(params[1].max, 10.0);
+        assert_eq!(params[2].id, "release");
+        assert_eq!(params[2].unit, Unit::Milliseconds);
+        assert_eq!(params[2].min, 1.0);
+        assert_eq!(params[2].max, 100.0);
+        assert_eq!(params[3].id, "mix");
+        assert_eq!(params[3].unit, Unit::Percent);
+        assert_eq!(params[3].default, 100.0);
+    }
+
+    #[test]
+    fn gate_passes_signal_above_threshold() {
+        let mut ex = gate_graph();
+        let input = constant(-3.0);
+        let out = ex.run(&input, BLOCK).unwrap();
+        // -3 dB is well above the -40 dB default threshold, so the gate is
+        // open and the output tracks the input. Check a settled sample.
+        assert!((out[BLOCK / 2] - 0.7079).abs() < 1e-3, "out[mid] = {}", out[BLOCK / 2]);
+    }
+
+    #[test]
+    fn gate_attentuates_signal_below_threshold() {
+        let mut ex = gate_graph();
+        let input = constant(-60.0);
+        let out = ex.run(&input, BLOCK).unwrap();
+        // -60 dB is 20 dB below the -40 dB threshold: gr_db = 20, output ~ 1e-4.
+        assert!((out[BLOCK / 2] - 1e-4).abs() < 1e-5, "out[mid] = {}", out[BLOCK / 2]);
+    }
+
+    #[test]
+    fn gate_ramp_opens_with_attack_release() {
+        let mut ex = gate_graph();
+        let mut input = vec![0.0f32; BLOCK];
+        for (i, s) in input.iter_mut().enumerate() {
+            *s = (i as f32 / (BLOCK - 1) as f32) * 0.9;
+        }
+        let out = ex.run(&input, BLOCK).unwrap();
+        assert!(out[0].abs() < 1e-2, "start out = {}", out[0]);
+        // After ~8192 samples the envelope is above -40 dB and the gate opens.
+        assert!(out[BLOCK - 1] > 0.85, "end out = {}", out[BLOCK - 1]);
+    }
+
+    #[test]
+    fn gate_release_closes_when_signal_drops() {
+        let mut ex = gate_graph();
+        let mut input = vec![0.0f32; BLOCK];
+        for (i, s) in input.iter_mut().enumerate() {
+            *s = if i < BLOCK / 2 { 0.9 } else { 0.00001 };
+        }
+        let out = ex.run(&input, BLOCK).unwrap();
+        assert!((out[BLOCK / 2 - 1] - 0.9).abs() < 1e-2, "above-threshold out = {}", out[BLOCK / 2 - 1]);
+        assert!(out[BLOCK - 1].abs() < 1e-2, "release-out = {}", out[BLOCK - 1]);
+    }
+
+    #[test]
+    fn gate_release_length_changes_with_release_parameter() {
+        let mut fast = build_gate_graph(1.0);
+        let mut slow = build_gate_graph(200.0);
+        let mut input = vec![0.0f32; BLOCK];
+        for (i, s) in input.iter_mut().enumerate() {
+            *s = if i < BLOCK / 2 { 0.9 } else { 0.00001 };
+        }
+        let out_fast = fast.run(&input, BLOCK).unwrap();
+        let out_slow = slow.run(&input, BLOCK).unwrap();
+        // The slow-release gate should still be slightly open at the end of the
+        // block while the fast-release gate has collapsed toward silence.
+        assert!(out_slow[BLOCK - 1] > out_fast[BLOCK - 1], "slow release left more signal");
+        assert!(out_fast[BLOCK - 1].abs() < 1e-2, "fast-release out = {}", out_fast[BLOCK - 1]);
+    }
+
+    #[test]
+    fn builtin_registry_includes_noise_gate() {
+        let reg = builtin_registry();
+        assert!(reg.get("dynamics.noise_gate").is_some(), "noise gate not registered");
+        let spec = reg.get("dynamics.noise_gate").unwrap();
+        assert_eq!(spec.category, Category::Dynamics);
     }
 }
 
