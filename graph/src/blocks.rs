@@ -4,7 +4,7 @@
 //! architecture and give the host simulator something to run.
 
 use crate::prelude::*;
-use pedal_dsp::{Biquad, BiquadKind, envelope::EnvelopeFollower};
+use pedal_dsp::{Biquad, BiquadKind, envelope::EnvelopeFollower, lfo::Lfo};
 
 /// A simple gain stage, in dB.
 pub struct Gain {
@@ -817,6 +817,114 @@ impl Block for Compressor {
     }
 }
 
+/// Tremolo: amplitude modulation. The input gain is swept by an LFO so the
+/// volume pulses rhythmically.
+///
+/// The gain varies between `(1 - depth)` and `1`, so `depth = 0` leaves the
+/// signal untouched (bypass-equivalent) and `depth = 1` silences the signal
+/// at the trough of the LFO. The LFO phase is advanced monotonically and
+/// wrapped, so it is continuous across block boundaries and produces no
+/// clicks.
+pub struct Tremolo {
+    lfo: pedal_dsp::lfo::Lfo,
+    depth: f32,
+    mix: f32,
+}
+
+impl Default for Tremolo {
+    fn default() -> Self {
+        Self {
+            // 0.6 Hz gives roughly a 0.6 Hz pulse (mix-tempo-near feel) on
+            // the default 48 kHz host rate; the sample rate is re-set in
+            // `prepare` to the host's actual rate.
+            lfo: pedal_dsp::lfo::Lfo::new(0.6, 48_000.0),
+            depth: 0.5,
+            mix: 100.0,
+        }
+    }
+}
+
+impl Block for Tremolo {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "mod.tremolo",
+            name: "Tremolo",
+            category: Category::Modulation,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "rate",
+                    name: "Rate",
+                    unit: Unit::Hertz,
+                    min: 0.1,
+                    max: 5.0,
+                    default: 0.6,
+                    curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "depth",
+                    name: "Depth",
+                    unit: Unit::Linear,
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "mix",
+                    name: "Mix",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 100.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        // Re-create the LFO at the block's sample rate so the phase
+        // increment (`rate_hz / sample_rate`) is correct for the host rate.
+        self.lfo = pedal_dsp::lfo::Lfo::new(0.6, sr);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let rate = ctx.param(0);
+        let depth = ctx.param(1);
+        let mix = ctx.param(2) / 100.0;
+
+        // The LFO frequency is applied per block. Because `process` advances
+        // the phase by exactly `rate_hz / sample_rate` and only ever wraps
+        // forward, consecutive blocks hand off with the phase continuous and
+        // no step at the boundary — so no click.
+        self.lfo.set_rate(rate);
+        self.depth = depth;
+        self.mix = mix;
+
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            // Map the LFO modulator (-1..1) to 0..1, then to a gain in
+            // [1 - depth, 1]. `depth = 0` therefore yields a constant gain
+            // of 1 (bypass).
+            let m = self.lfo.process() * 0.5 + 0.5;
+            let gain = 1.0 - self.depth * (1.0 - m);
+            let wet = input[i] * gain;
+            output[i] = pedal_dsp::util::mix(input[i], wet, self.mix);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.lfo.reset();
+    }
+}
+
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
@@ -834,6 +942,7 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<Reverb>();
     r.add::<Nam>();
     r.add::<Compressor>();
+    r.add::<Tremolo>();
     r
 }
 
