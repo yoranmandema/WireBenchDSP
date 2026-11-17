@@ -108,9 +108,9 @@ export function HeaderKnob({
             r={22}
             fill="none"
             stroke="#2f323b"
-            strokeWidth={5}
+            stroke-width={5}
             pathLength={100}
-            strokeDasharray="75 100"
+            stroke-dasharray="75 100"
             transform="rotate(135 32 32)"
           />
           <circle
@@ -119,10 +119,10 @@ export function HeaderKnob({
             r={22}
             fill="none"
             stroke="var(--amber)"
-            strokeWidth={5}
-            strokeLinecap="round"
+            stroke-width={5}
+            stroke-linecap="round"
             pathLength={100}
-            strokeDasharray={`${t * 75} 100`}
+            stroke-dasharray={`${t * 75} 100`}
             transform="rotate(135 32 32)"
           />
         </svg>
