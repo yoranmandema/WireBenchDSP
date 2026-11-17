@@ -59,6 +59,10 @@ const STATE_KEYS: &[&str] = &[
     "inputGain",
     "masterOutVolume",
     "routings",
+    "bufferFrames",
+    "sampleRate",
+    "oneWayLatencyMs",
+    "roundTripLatencyMs",
 ];
 
 /// Exact keys of one block entry.
