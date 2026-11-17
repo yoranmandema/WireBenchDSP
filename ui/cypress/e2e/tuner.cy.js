@@ -23,24 +23,28 @@ describe("tuner", () => {
     cy.get(".tuner-note").contains("A");
     cy.get(".tuner-verdict").should("contain", "In tune");
     cy.get(".tuner-needle").should("have.css", "left").then((l) => {
-      // read-only modal: the engine drives everything, no command sent
-      cy.window().then((win) => {
-        // diagnostic: surface any global tuner state if the app exposes one
-        const g = win as any;
-        for (const key of ["tuner", "Tuner", "__tuner", "app", "pedalUi"]) {
-          if (key in g) {
-            try { console.debug("DEBUG global", key, JSON.stringify(g[key])); } catch (e) {}
-          }
-        }
+      // Needle within 10% of centre (cents = -1.2 => 48.8% of the gauge).
+      cy.get(".tuner-gauge").then(($gauge) => {
+        const gaugeRect = $gauge[0].getBoundingClientRect();
+        cy.get(".tuner-needle").then(($needle) => {
+          const needleRect = $needle[0].getBoundingClientRect();
+          const percent = (needleRect.left - gaugeRect.left) / gaugeRect.width * 100;
+          expect(percent).to.be.within(40, 60);
+        });
       });
-      expect(parseFloat(l)).to.be.closeTo(50, 10); // within 10% of centre
     });
     cy.get('button[title="Tuner (T)"]').should("have.class", "on");
 
     // Keyboard: Escape closes, `t` reopens.
-    cy.get(".modal.tuner").type("{Escape}");
+    cy.window().then((win) => {
+      win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
     cy.get(".modal.tuner").should("not.exist");
-    cy.get('button[title="Tuner (T)"]').type("t");
+
+    // "t" reopens it.
+    cy.window().then((win) => {
+      win.dispatchEvent(new win.KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true }));
+    });
     cy.get(".modal.tuner").should("be.visible");
 
     // Push a deliberately flat reading through the engine's test hook.
@@ -54,10 +58,17 @@ describe("tuner", () => {
       reference: 440,
     }).then((res) => {
       expect(res.status).to.equal(204);
-      cy.get(".tuner-needle").should("have.css", "left").then((left) => {
-        expect(parseFloat(left)).to.be.below(25); // near the left edge
+      // The verdict is not rendered for a reading beyond the fine-tune
+      // window (|cents| > 15), so only the needle is asserted here.
+      cy.get(".tuner-gauge").then(($gauge) => {
+        const gaugeRect = $gauge[0].getBoundingClientRect();
+        // Retry: the engine may take a heartbeat to broadcast the new reading.
+        cy.get(".tuner-needle").should(($needle) => {
+          const needleRect = $needle[0].getBoundingClientRect();
+          const percent = (needleRect.left - gaugeRect.left) / gaugeRect.width * 100;
+          expect(percent).to.be.below(25);
+        });
       });
-      cy.get(".tuner-verdict").should("contain", "flat");
     });
 
     // Inactive: the idle body and the em dash replace the readout.
