@@ -86,6 +86,8 @@ a much harder reconnection story. **Snapshot, not deltas.**
   "preset": "04-rainbow",            // current preset name, "" if unsaved
   "presets": ["00-blank", "01-clean", "..."],
   "source": "riff",                  // "riff" | "live" | "silence"
+  "inputGain": 0.0,                  // pedal input trim, dB
+  "masterOutVolume": 0.0,            // pedal output volume, dB
   "registry": {                      // static: block types the UI can offer
     "amp.basic": {
       "name": "Amp",
@@ -171,8 +173,10 @@ be changed from the client.
 |---|---|---|---|
 | `getState` | — | — | full state |
 | `setParam` | `{channel, block, param, value}` | set one parameter | full state |
-| `setMasterVolume` | `{channel, value}` | channel volume (dB) | full state |
-| `setBypass` | `{channel, block, bypass}` | bypass a block | full state |
+|| `setMasterVolume` | `{channel, value}` | channel volume (dB) | full state |
+|| `setInputGain` | `{value}` | global input trim, dB, clamped −60..24 | full state |
+|| `setMasterOutVolume` | `{value}` | global output volume, dB, clamped −60..12 | full state |
+|| `setBypass` | `{channel, block, bypass}` | bypass a block | full state |
 | `addBlock` | `{channel, type, name, pos}` | append a block | full state |
 | `removeBlock` | `{channel, block}` | remove a block | full state |
 | `moveBlock` | `{channel, block, to}` | reorder | full state |

@@ -97,6 +97,10 @@ pub struct Headless {
     join: Option<std::thread::JoinHandle<()>>,
     /// Windowed callback counters for the `--bench` report.
     pub stats: Arc<Stats>,
+    /// The tuner ring is populated by the input callback (in the same
+    /// `source == 1` branch that feeds the audio ring) and read by the
+    /// detached tuner thread.
+    pub tuner_ring: Arc<Ring>,
 }
 
 impl Headless {
@@ -134,6 +138,8 @@ pub fn start(
     let stats_thread = stats.clone();
     let channels = setup.out_channels.max(1);
     let sample_rate = setup.sample_rate;
+    let tuner_ring = Arc::new(Ring::new(RING_CAPACITY));
+    let tuner_ring_for_tuner = tuner_ring.clone();
 
     let join = std::thread::spawn(move || {
         let mut engine = AudioThread::new(setup, meters.clone(), cmd_rx, trash_tx, running, source.clone());
@@ -141,6 +147,7 @@ pub fn start(
         let ring = Ring::new(RING_CAPACITY);
         for _ in 0..LATENCY_FRAMES {
             ring.push(0.0);
+            tuner_ring_for_tuner.push(0.0);
         }
         let mut pacer = Pacer::new(Duration::from_secs_f32(CB as f32 / sample_rate));
         let mut buf = vec![0.0f32; CB * channels];
@@ -151,7 +158,9 @@ pub fn start(
             // Input callback: the generated tone, when the source is "live".
             if source.load(Ordering::Relaxed) == 1 {
                 for _ in 0..CB {
-                    ring.push((phase * step).sin() * 0.5);
+                    let s = (phase * step).sin() * 0.5;
+                    ring.push(s);
+                    tuner_ring_for_tuner.push(s);
                     phase += 1.0;
                 }
             }
@@ -162,5 +171,5 @@ pub fn start(
         }
     });
 
-    Headless { stop, join: Some(join), stats }
+    Headless { stop, join: Some(join), stats, tuner_ring }
 }

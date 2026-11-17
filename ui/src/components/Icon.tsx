@@ -271,3 +271,15 @@ export function PlusIcon({ size = 16 }: { size?: number }) {
     </Svg>
   );
 }
+
+/** A tuning fork: two prongs from y≈4 to y≈13 joined by a crossbar at y≈13,
+ *  and a stem from (12,13) down to (12,19). */
+export function TunerIcon({ size = 16 }: { size?: number }) {
+  return (
+    <Svg size={size}>
+      <path d="M6 4v9M18 4v9" />
+      <path d="M6 13h12" />
+      <path d="M12 13v6" />
+    </Svg>
+  );
+}
