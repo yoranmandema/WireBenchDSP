@@ -386,15 +386,21 @@ BlockSpec {
 
 ## 10. Builder cards (to be created; this doc is the contract)
 
-| # | Card | Files | Approach | Acceptance criteria |
-|---|---|---|---|---|
-| 1 | `dsp` crate: add `fuzz.rs` processor | `dsp/src/fuzz.rs` (new) | Implement `Fuzz` struct, `FuzzModel` enum, per-variant waveshaper methods, `process`, `reset`, 4× oversampling + DC blockers + tone biquads. | `cargo test -p pedal-dsp` green; `process` test: sine through each model → finite, bounded, asymmetric (even-harmonic-heavy) output; alias test green; round-trip test green. |
-| 2 | graph crate: add `Fuzz` block | `graph/src/blocks.rs` (edit: add spec + block + register in `builtin_registry()`) | Implement the block: param → processor mapping, `prepare/process/reset`. | `graph/tests/fuzz.rs` passes: registry, dry path, asymmetric character, aliasing, persistence, drive sweep. |
-| 3 | engine + UI: register and wire | `graph/src/blocks.rs` (edit: add spec + block + register in `builtin_registry()`), `ui/src/components/Editor.tsx`, a Fuzz preset | Add `r.add::<Fuzz>()` in `graph/src/blocks.rs::builtin_registry()` (the engine calls `dsp_graph::blocks::builtin_registry`); re-exported so the IPC `registry` JSON includes `fuzz.fuzz`; UI renders the choice + 5 knobs; add a Fuzz preset. | `cargo test --workspace` green; `pnpm run build` green; UI shows `Fuzz` in the drive category with the `Model` segmented row and Drive/Tone/Level knobs. |
+The fuzz effect is one block, so the implementation splits into three
+builder cards across the dsp, graph (engine palette) and UI layers. The
+engine crate itself needs **no code change**: it serves the graph crate's
+`builtin_registry()` over IPC, so registering the block in
+`graph/src/blocks.rs` is what makes it available to the engine and the UI.
 
-**Card order.** 1 (dsp) before 2 (block, which calls dsp); 2 before 3
-(engine/UI, which needs the block to exist). Card 3 depends on card 1 as
-well since the spec table must match the block.
+| # | Card | Assignee | Files | Approach | Acceptance criteria |
+|---|---|---|---|---|---|
+| 1 | `fuzz-dsp-processor` — dsp crate: add `fuzz.rs` | pedal-builder | `dsp/src/fuzz.rs` (new) | Implement `Fuzz` struct, `FuzzModel` enum, per-variant waveshaper methods, `process`, `reset`, 4× oversampling + DC blockers + tone biquads. | `cargo test -p pedal-dsp` green; `process` test: sine through each model → finite, bounded, asymmetric (even-harmonic-heavy) output; alias test green; round-trip test green. |
+| 2 | `fuzz-graph-block` — graph crate: Fuzz block + register in `builtin_registry()` | pedal-builder | `graph/src/blocks.rs` (edit) | Add the `Fuzz` block spec, `prepare/process/reset`, and one line `r.add::<Fuzz>()` in `builtin_registry()` (the engine's palette). | `graph/tests/fuzz.rs` passes: registry, dry path, asymmetric character, aliasing, persistence, drive sweep; `cargo test --workspace` green. |
+| 3 | `fuzz-ui-wire` — UI: render the Fuzz block + preset | pedal-ui-builder | `ui/src/components/Editor.tsx`, a Fuzz preset | UI renders the `Model` segmented row (Fuzz Face / Big Muff / Tone Bender) + Drive/Tone/Level knobs; the block appears in the drive category of the add-block picker. | `pnpm run build` green; the UI shows `Fuzz` in the drive category with the `Model` segmented row and 3 knobs; a Fuzz preset loads and is selectable. |
+
+**Card order.** 1 (dsp) before 2 (block, which calls dsp) before 3 (UI, which
+needs the block registered in the palette). Card 3 depends on card 2 as
+well as card 1, since the UI reads the block spec from `registry`.
 
 ---
 
