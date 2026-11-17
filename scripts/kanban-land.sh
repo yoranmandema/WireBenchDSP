@@ -26,7 +26,11 @@ if [ "${1:-}" = "--verify" ]; then
   vid="${2:?usage: scripts/kanban-land.sh --verify <card id>}"
   vbr="wt/$vid"
   cd "$REPO" || exit 1
-  git rev-parse --verify -q "$vbr" >/dev/null || { echo "NOT-LANDED: branch $vbr does not exist"; exit 1; }
+  git rev-parse --verify -q "$vbr" >/dev/null || {
+    if git log -1 --format='%h' --grep "$vid" main 2>/dev/null | grep -q .; then
+      echo "LANDED-BY-RECORD: branch gone, but main carries its commits at $(git log -1 --format='%h %s' --grep "$vid" main | cut -c1-60)"; exit 0
+    fi
+    echo "NOT-LANDED: branch $vbr does not exist and no commit on main names $vid"; exit 1; }
   if git merge-base --is-ancestor "$vbr" main; then
     echo "LANDED: $vbr is on main ($(git rev-parse --short main))"; exit 0
   fi
