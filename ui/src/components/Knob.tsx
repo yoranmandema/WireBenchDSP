@@ -75,11 +75,13 @@ export function Knob({
         {/* The ring is SVG, not a masked conic gradient: exact geometry, and it
             renders identically in every webview. pathLength=100 makes the dash
             numbers percentages of the circumference; 75 = the 270deg window. */}
+        {/* Preact preserves SVG prop spelling: presentation attributes must use
+            SVG's kebab-case names or the browser ignores the arc geometry. */}
         <svg class="knob-arc absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
-          <circle cx="32" cy="32" r={RING_R} fill="none" stroke="#2f323b" strokeWidth={RING_W} pathLength={100} strokeDasharray="75 100" transform={`rotate(${START} 32 32)`} />
-          <circle cx="32" cy="32" r={RING_R} fill="none" stroke="var(--amber)" strokeWidth={RING_W} strokeLinecap="round" pathLength={100} strokeDasharray={`${t * 75} 100`} transform={`rotate(${START} 32 32)`} />
+          <circle cx="32" cy="32" r={RING_R} fill="none" stroke="#2f323b" stroke-width={RING_W} pathLength={100} stroke-dasharray="75 100" transform={`rotate(${START} 32 32)`} />
+          <circle cx="32" cy="32" r={RING_R} fill="none" stroke="var(--amber)" stroke-width={RING_W} stroke-linecap="round" pathLength={100} stroke-dasharray={`${t * 75} 100`} transform={`rotate(${START} 32 32)`} />
         </svg>
-        <span class={`knob-indicator absolute left-1/2 top-[9.26%] h-[33.33%] w-[5.56%] -translate-x-1/2 origin-[50%_122.22%] rounded-sm shadow-[0_0_4px_rgba(0,0,0,0.8)] ${dragging ? "bg-amber" : "bg-[#f4f6fa]"}`} style={{ transform: `translateX(-50%) rotate(${angle}deg)` }} />
+        <span class={`knob-indicator absolute left-1/2 top-[8.33%] h-[41.67%] w-[5.56%] origin-[50%_100%] rounded-sm shadow-[0_0_4px_rgba(0,0,0,0.8)] ${dragging ? "bg-amber" : "bg-[#f4f6fa]"}`} style={{ transform: `translateX(-50%) rotate(${angle}deg)` }} />
         {/* End stops, sitting at the two ends of the travel arc. */}
         <span class="knob-end lo absolute right-[calc(50%+var(--space-6))] top-[calc(50%+var(--space-6))] text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ padding: 0 }}>{endLabel(min)}</span>
         <span class="knob-end hi absolute left-[calc(50%+var(--space-6))] top-[calc(50%+var(--space-6))] text-pico leading-none text-muted tabular-nums bg-well border border-line-soft rounded-xs pointer-events-none" style={{ padding: 0 }}>{endLabel(max)}</span>

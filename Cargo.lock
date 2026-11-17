@@ -876,6 +876,7 @@ name = "dsp-graph"
 version = "0.1.0"
 dependencies = [
  "hound",
+ "libm",
  "nam-rs",
  "pedal-dsp",
  "serde",
