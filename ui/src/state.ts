@@ -4,7 +4,7 @@
 import { signal } from "@preact/signals";
 import { createBridge, type Bridge } from "./bridge";
 import { type BlockPayload } from "./dnd";
-import { asState, isMeters, isState, type Meters, type State } from "./protocol";
+import { asState, isMeters, isState, type Meters, type Routing, type RoutingEndpoint, type State } from "./protocol";
 
 export const bridge: Bridge = createBridge();
 
@@ -16,6 +16,9 @@ export const error = signal<string | null>(null);
 /** Transient: the last command was rejected. Shown as a toast, never fatal. */
 export const notice = signal<string | null>(null);
 export const selected = signal<{ channel: string; block: string } | null>(null);
+/** The selected cross-channel routing line, if any. UI-only: the engine has no
+ *  notion of selection and is never told about it. */
+export const selectedRouting = signal<string | null>(null);
 /** Whether the preset browser modal is open. */
 export const presetsOpen = signal(false);
 /** Channel the add-block picker targets; null when the picker is closed. */
@@ -104,6 +107,10 @@ function apply(payload: unknown): void {
   } else if (Array.isArray(p.presets) && state.value) {
     // A preset listing is a partial: patch just the names.
     state.value = { ...state.value, presets: p.presets };
+  } else if (Array.isArray(p.routings) && state.value) {
+    // `listRoutings` answers with the list alone; the snapshot stays the
+    // authority for everything else.
+    state.value = { ...state.value, routings: p.routings as Routing[] };
   }
 }
 
@@ -180,6 +187,28 @@ export const moveBlock = (channel: string, block: string, to: number) =>
 
 export const setSources = (channel: string, sources: string[]) =>
   mutate("setSources", { channel, sources });
+
+// --- Cross-channel routings -------------------------------------------------
+// A routing is a tap from one block to a block in another channel. Every
+// command returns the full snapshot, so the list on screen is always the
+// engine's, never a local guess.
+
+export const createRouting = (source: RoutingEndpoint, dest: RoutingEndpoint) =>
+  mutate("createRouting", { source, dest });
+
+export const removeRouting = (id: string) => mutate("removeRouting", { id });
+
+export const setEnabled = (id: string, enabled: boolean) =>
+  mutate("setEnabled", { id, enabled });
+
+export const setGain = (id: string, gain: number) => mutate("setGain", { id, gain });
+
+export const listRoutings = () => mutate("listRoutings");
+
+/** Select a routing line (or `null` to clear). Never sent to the engine. */
+export const selectRouting = (id: string | null) => {
+  selectedRouting.value = id;
+};
 
 export const setSource = (source: "riff" | "live" | "silence") =>
   mutate("setSource", { source });
