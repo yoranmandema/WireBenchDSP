@@ -4,8 +4,8 @@
 //! denormalisation, topological ordering, buffer disjointness, and parallel
 //! recombination.
 
-use dsp_graph::blocks::{Gain, IoInput, IoOutput, MixSum};
-use dsp_graph::{Block, BlockCtx, BlockError, Executor, Graph, PortSpec, Unit};
+use dsp_graph::blocks::{Compressor, Gain, IoInput, IoOutput, MixSum};
+use dsp_graph::{Block, BlockCtx, BlockError, Category, Executor, Graph, PortSpec, Unit};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 64;
@@ -452,4 +452,89 @@ fn bypass_passes_input_through() {
     ex.set_bypass_at(amp, false);
     let out = ex.run(&impulse(BLOCK), BLOCK).unwrap();
     assert!((out[0] - 0.1).abs() < 1e-3);
+}
+
+/// The compressor is registered and builds a block whose spec declares the
+/// parameters the UI renders.
+#[test]
+fn compressor_spec_declares_its_params() {
+    let c = Compressor::default();
+    let spec = c.spec();
+    assert_eq!(spec.id, "dynamics.compressor");
+    assert_eq!(spec.category, Category::Dynamics);
+    assert_eq!(spec.params.len(), 6);
+    assert_eq!(spec.params[0].id, "threshold");
+    assert_eq!(spec.params[0].unit, Unit::Decibels);
+    assert_eq!(spec.params[1].id, "ratio");
+    assert_eq!(spec.params[1].unit, Unit::Ratio);
+    assert_eq!(spec.params[2].id, "attack");
+    assert_eq!(spec.params[2].unit, Unit::Milliseconds);
+    assert_eq!(spec.params[3].id, "release");
+    assert_eq!(spec.params[3].unit, Unit::Milliseconds);
+    assert_eq!(spec.params[4].id, "makeup");
+    assert_eq!(spec.params[4].unit, Unit::Decibels);
+    assert_eq!(spec.params[5].id, "mix");
+    assert_eq!(spec.params[5].unit, Unit::Percent);
+}
+
+/// A ratio of 1 means no gain reduction, so the signal passes through.
+#[test]
+fn compressor_ratio_one_passes_input_through() {
+    let mut ex = compressor_graph(-20.0, 1.0);
+    let comp = ex.node_ids().iter().position(|id| id == "comp").unwrap();
+    ex.set_bypass_at(comp, false);
+    let input = impulse(BLOCK);
+    let out = ex.run(&input, BLOCK).unwrap();
+    assert!((out[0] - 1.0).abs() < 1e-4, "expected ~1.0, got {}", out[0]);
+}
+
+/// A compressor reduces the level of a sustained loud signal.
+///
+/// At -20 dB threshold and 4:1 ratio, a -12 dBFS-ish sine settles to ~6 dB
+/// of gain reduction, so the output peak lands near 0.125.
+fn compressor_graph(threshold: f32, ratio: f32) -> Executor {
+    let mut g = Graph::new();
+    g.add("in", Box::new(IoInput)).unwrap();
+    g.add("comp", Box::new(Compressor::default())).unwrap();
+    g.add("out", Box::new(IoOutput)).unwrap();
+    g.connect("in", "out", "comp", "in").unwrap();
+    g.connect("comp", "out", "out", "in").unwrap();
+    g.set_param_real("comp", "threshold", threshold).unwrap();
+    g.set_param_real("comp", "ratio", ratio).unwrap();
+    Executor::compile_owned(&mut g, SR, BLOCK).unwrap()
+}
+
+#[test]
+fn compressor_reduces_loud_sustained_signal() {
+    let block = 512;
+    let mut input = Vec::with_capacity(4 * block);
+    for i in 0..(4 * block) {
+        input.push(0.25 * (i as f32 * 0.05).sin()); // -12 dBFS-ish
+    }
+    let mut ex = compressor_graph(-20.0, 4.0);
+
+    // Warm up the envelope follower so the detector is at steady state.
+    for _ in 0..4 {
+        let _ = ex.run(&input[..block], block).unwrap();
+    }
+    let mut peak = 0.0f32;
+    for _ in 0..4 {
+        let out = ex.run(&input[..block], block).unwrap();
+        for &v in out {
+            peak = peak.max(v.abs());
+        }
+    }
+    // 4:1 ratio on a ~-12 dB signal: ~6 dB gain reduction -> 0.125.
+    assert!((peak - 0.125).abs() < 0.02, "expected ~0.125, got {peak}");
+}
+
+/// Below the threshold the compressor must not touch the signal.
+#[test]
+fn compressor_below_threshold_passes_input_through() {
+    let mut ex = compressor_graph(-20.0, 20.0);
+    let comp = ex.node_ids().iter().position(|id| id == "comp").unwrap();
+    ex.set_bypass_at(comp, false);
+    let input = impulse(BLOCK);
+    let out = ex.run(&input, BLOCK).unwrap();
+    assert!((out[0] - 1.0).abs() < 1e-4, "expected ~1.0, got {}", out[0]);
 }

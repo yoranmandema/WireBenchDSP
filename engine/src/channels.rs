@@ -137,10 +137,21 @@ impl Rig {
         id
     }
 
+    /// Remove a block from a channel's strip.
+    ///
+    /// Every routing touching it — as source or as destination — goes with it.
+    /// A routing is a connection between two existing blocks, so an endpoint
+    /// that no longer exists cannot be honoured; leaving it in the list would
+    /// draw a line to a block that is not there and give the audio path a
+    /// dangling tap.
     pub fn remove_block(&mut self, channel: &str, id: &str) {
         if let Some(c) = self.channel_mut(channel) {
             c.blocks.retain(|b| b.id != id);
         }
+        self.routings.retain(|r| {
+            !(r.source.channel == channel && r.source.block == id)
+                && !(r.dest.channel == channel && r.dest.block == id)
+        });
     }
 
     /// Move a block within its strip. `to` is the target index.

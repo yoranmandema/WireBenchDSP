@@ -1,4 +1,6 @@
-import { meters, presetsOpen, state, loadPreset, setSource } from "../state";
+import { meters, presetsOpen, state, loadPreset, setSource, setInputGain, setMasterOutVolume, tunerOpen } from "../state";
+import { HeaderKnob } from "./HeaderKnob";
+import { TunerIcon } from "./Icon";
 
 const SLOTS = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
@@ -31,6 +33,16 @@ export function TopBar() {
 
   return (
     <header class="topbar flex min-h-[var(--ui-topbar-h)] items-center gap-4.5 px-4 min-w-0 bg-linear-to-b from-[#1e2027] to-[#16171c] border-b border-line compact:flex-wrap compact:gap-y-2 compact:px-3 compact:py-2">
+      {/* The input trim knob: first child of the top bar, top left. */}
+      <HeaderKnob
+        label="Input"
+        value={s.inputGain ?? 0}
+        min={-60}
+        max={24}
+        defaultValue={0}
+        onChange={(v) => void setInputGain(v)}
+      />
+
       <div class="preset flex items-center gap-2 min-w-[230px] compact:flex-1 compact:min-w-0">
         <button class="nav size-6.5 rounded-key border border-line bg-raised-2 leading-none text-muted hover:border-line-hi hover:text-text" onClick={() => step(-1)} title="Previous preset">
           ‹
@@ -61,6 +73,16 @@ export function TopBar() {
       </div>
 
       <div class="top-right flex items-center gap-3.5 ml-auto compact:flex-wrap compact:gap-y-2">
+        <button
+          class={`min-h-[var(--ui-touch)] px-2.5 flex items-center gap-1.5 rounded-md border text-[10px] font-semibold tracking-[0.6px] uppercase ${tunerOpen.value ? "on bg-[#2f323b] text-text border-line inset-shadow-[0_-2px_0_var(--color-amber)]" : "bg-[#1a1b21] text-muted border-line hover:text-text hover:border-line-hi"}`}
+          onClick={() => (tunerOpen.value = true)}
+          title="Tuner (T)"
+          aria-label="Open the tuner"
+          aria-expanded={tunerOpen.value}
+        >
+          <TunerIcon size={11} />
+          <span>Tuner</span>
+        </button>
         <div class="source-toggle flex border border-line rounded-md overflow-hidden">
           {(["riff", "live", "silence"] as const).map((src) => (
             <button
@@ -78,6 +100,15 @@ export function TopBar() {
           <span class="cpu-value text-[11px] tabular-nums text-text">{meters.value.cpu.toFixed(0)}%</span>
           <span class="cpu-label text-[9px] tracking-[0.6px] text-muted">DSP</span>
         </div>
+        {/* The master output knob: last child of the top-right area, top right. */}
+        <HeaderKnob
+          label="Master"
+          value={s.masterOutVolume ?? 0}
+          min={-60}
+          max={12}
+          defaultValue={0}
+          onChange={(v) => void setMasterOutVolume(v)}
+        />
       </div>
     </header>
   );
