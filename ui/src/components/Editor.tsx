@@ -101,7 +101,7 @@ export function Editor() {
 
   const body: JSX.Element = (
     <>
-      <div class="editor-id cat-scope grid items-center justify-items-start gap-1 pl-3 min-h-0 phone:flex phone:flex-wrap phone:items-center phone:gap-x-3 phone:gap-y-1 phone:px-2 phone:py-2" style={spec ? catStyle(spec.category) : undefined}>
+      <div class="editor-id cat-scope grid grid-cols-[minmax(0,1fr)] items-center justify-items-start gap-1 pl-3 min-h-0 phone:flex phone:flex-wrap phone:items-center phone:gap-x-3 phone:gap-y-1 phone:px-2 phone:py-2" style={spec ? catStyle(spec.category) : undefined}>
         <div class="editor-kind flex items-center gap-1 text-[9px] tracking-[1.4px] font-semibold text-cat">
           {spec && <Icon category={spec.category} size={13} />}
           <span>Selected block</span>
@@ -110,8 +110,8 @@ export function Editor() {
           <span class="min-w-0 truncate text-xl font-semibold">{block.name}</span>
           {block.bypass && <span class="editor-bypass flex-none px-2 text-[9px] text-amber border border-amber-dim rounded-sm font-medium">bypassed</span>}
         </div>
-        <div class="editor-type text-[9px] text-muted font-mono">{block.type}</div>
-        <div class="editor-side flex gap-1 mt-0">
+        <div class="editor-type text-[9px] text-muted font-mono max-w-full truncate">{block.type}</div>
+        <div class="editor-side flex flex-wrap gap-1 mt-0">
           <button class={`side-btn sideBtn min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 rounded-md text-[11px] font-semibold bg-raised border border-line text-muted hover:text-text hover:border-line-hi ${block.bypass ? "on text-amber border-amber-dim bg-[#2a2318]" : ""}`} onClick={() => void setBypass(sel.channel, sel.block, !block.bypass)} title="Bypass this block">
             {block.bypass ? "Bypassed" : "Bypass"}
           </button>
