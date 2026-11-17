@@ -6,6 +6,7 @@ import { Chain } from "./components/Chain";
 import { Editor } from "./components/Editor";
 import { PresetBrowser } from "./components/PresetBrowser";
 import { AddBlockModal } from "./components/AddBlockModal";
+import { TunerModal } from "./components/TunerModal";
 import { SelectionRing } from "./selection";
 
 export function App() {
@@ -46,14 +47,18 @@ export function App() {
         <Chain />
       </div>
       <Editor />
+      <TunerModal />
       <PresetBrowser />
       <AddBlockModal />
       {/* Drawn above the chain but outside every scrolling container, so the
           ring is never clipped by the strip or the panel. */}
       <SelectionRing />
-      {/* Command failures surface here instead of failing silently. */}
+      {/* Command failures surface here instead of failing silently. It shares
+          the bar's own grid cell, so it tracks the bar's height at every width
+          (a fixed `bottom` would only be right while the bar is `--ui-bar`
+          tall) and is lifted clear of it by one `--space-2`. */}
       {notice.value && (
-        <div class="toast fixed right-4 bottom-[calc(var(--ui-bar)+8px)] z-50 max-w-[min(420px,calc(100vw-24px))] rounded-lg bg-danger-bg border border-danger-line px-3 py-2 text-danger-text text-base cursor-pointer shadow-toast" onClick={() => (notice.value = null)}>
+        <div class="toast col-start-1 row-start-3 self-start justify-self-end mr-4 -translate-y-[calc(100%+var(--space-2))] z-50 max-w-[min(420px,calc(100vw-24px))] rounded-lg bg-danger-bg border border-danger-line px-3 py-2 text-danger-text text-base cursor-pointer shadow-toast" onClick={() => (notice.value = null)}>
           {notice.value}
         </div>
       )}

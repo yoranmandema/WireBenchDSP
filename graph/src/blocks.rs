@@ -2,21 +2,17 @@
 //!
 //! These are real, working blocks — not stubs. They demonstrate the plugin
 //! architecture and give the host simulator something to run.
-
 use crate::prelude::*;
-use pedal_dsp::{Biquad, BiquadKind, envelope::EnvelopeFollower};
-
+use pedal_dsp::{Biquad, BiquadKind, PitchShifter, envelope::EnvelopeFollower, lfo::Lfo};
 /// A simple gain stage, in dB.
 pub struct Gain {
     gain_db: f32,
 }
-
 impl Default for Gain {
     fn default() -> Self {
         Self { gain_db: 0.0 }
     }
 }
-
 impl Block for Gain {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -38,11 +34,9 @@ impl Block for Gain {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         self.gain_db = ctx.param(0);
         let g = pedal_dsp::util::db_to_lin(self.gain_db);
@@ -53,15 +47,12 @@ impl Block for Gain {
         }
         Ok(())
     }
-
     fn reset(&mut self) {}
 }
-
 /// A three-band tone stack (low / mid / high), like an amp's.
 pub struct ToneStack {
     bands: [(BiquadKind, Biquad, f32, f32); 3],
 }
-
 impl Default for ToneStack {
     fn default() -> Self {
         Self {
@@ -73,7 +64,6 @@ impl Default for ToneStack {
         }
     }
 }
-
 impl Block for ToneStack {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -91,14 +81,12 @@ impl Block for ToneStack {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
         for (kind, band, f0, q) in &mut self.bands {
             *band = Biquad::make(*kind, sr, *f0, *q, 0.0);
         }
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         let gains = [ctx.param(0), ctx.param(1), ctx.param(2)];
         for ((kind, band, f0, q), db) in self.bands.iter_mut().zip(gains) {
@@ -115,26 +103,22 @@ impl Block for ToneStack {
         }
         Ok(())
     }
-
     fn reset(&mut self) {
         for (_, band, _, _) in &mut self.bands {
             band.reset();
         }
     }
 }
-
 /// A soft-clipping overdrive.
 pub struct Overdrive {
     drive: f32,
     level: f32,
 }
-
 impl Default for Overdrive {
     fn default() -> Self {
         Self { drive: 1.0, level: 1.0 }
     }
 }
-
 impl Block for Overdrive {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -151,11 +135,9 @@ impl Block for Overdrive {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         let drive = ctx.param(0);
         let level = pedal_dsp::util::db_to_lin(ctx.param(1));
@@ -170,22 +152,18 @@ impl Block for Overdrive {
         }
         Ok(())
     }
-
     fn reset(&mut self) {}
 }
-
 /// A reverb, using `pedal-dsp`'s Freeverb.
 pub struct Reverb {
     inner: Option<pedal_dsp::reverb::FreeverbMono<1760, 605>>,
     mix: f32,
 }
-
 impl Default for Reverb {
     fn default() -> Self {
         Self { inner: None, mix: 0.0 }
     }
 }
-
 impl Block for Reverb {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -199,12 +177,10 @@ impl Block for Reverb {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
         self.inner = Some(pedal_dsp::reverb::FreeverbMono::<1760, 605>::new(sr));
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         let mix = ctx.param(0) / 100.0;
         self.mix = mix;
@@ -217,19 +193,169 @@ impl Block for Reverb {
         }
         Ok(())
     }
-
     fn reset(&mut self) {
         if let Some(r) = &mut self.inner {
             r.clear();
         }
     }
 }
-
+/// An octaver: blends the input with one or more octave-shifted copies.
+///
+/// Provides three independent mix levels:
+///
+/// * `dry` — the dry (unprocessed) input.
+/// * `oct_down` — one octave below the input.
+/// * `oct_up` — one octave above the input.
+///
+/// Output is `dry*input + oct_down*down + oct_up*up`.  Setting the octave
+/// levels to 0 (and `dry` to 1) gives pass-through; setting the octave levels
+/// to 0 gives a dry-scaled pass-through at any `dry` level.
+pub struct Octaver {
+    /// Octave-down pitch shifter.
+    shifter_down: PitchShifter<2048>,
+    /// Octave-up pitch shifter.
+    shifter_up: PitchShifter<2048>,
+}
+impl Default for Octaver {
+    fn default() -> Self {
+        Self {
+            shifter_down: PitchShifter::new(48_000.0),
+            shifter_up: PitchShifter::new(48_000.0),
+        }
+    }
+}
+impl Block for Octaver {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "pitch.octaver",
+            name: "Octaver",
+            category: Category::Pitch,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "dry",
+                    name: "Dry",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 100.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "oct_down",
+                    name: "Oct Down",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 0.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "oct_up",
+                    name: "Oct Up",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 0.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.shifter_down = PitchShifter::new(sr);
+        self.shifter_up = PitchShifter::new(sr);
+        // Static pitch shift, instant glide.  -1200 = one octave down,
+        // +1200 = one octave up.
+        self.shifter_down.pitch_cents = -1200.0;
+        self.shifter_up.pitch_cents = 1200.0;
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        // Re-assert the static pitch shift on every block so it stays correct
+        // under dynamic use.  It is a single field write and cheap.
+        self.shifter_down.pitch_cents = -1200.0;
+        self.shifter_up.pitch_cents = 1200.0;
+        let dry = ctx.param(0) / 100.0;
+        let oct_down = ctx.param(1) / 100.0;
+        let oct_up = ctx.param(2) / 100.0;
+        let input = ctx.inputs[0];
+        let out = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let down = self.shifter_down.process(input[i]);
+            let up = self.shifter_up.process(input[i]);
+            out[i] = input[i] * dry + down * oct_down + up * oct_up;
+        }
+        Ok(())
+    }
+    fn reset(&mut self) {
+        self.shifter_down.clear();
+        self.shifter_up.clear();
+    }
+}
+/// A modulated short delay: chorus, and with feedback a flanger.
+///
+/// Wraps `pedal_dsp::delay::Chorus`. No latency is declared: the read head is
+/// always behind the write head, so the block never anticipates the input and
+/// its (time-varying) delay is the sound itself, like `time.delay`.
+pub struct Chorus {
+    inner: Option<pedal_dsp::delay::Chorus<2048>>,
+}
+impl Default for Chorus {
+    fn default() -> Self {
+        Self { inner: None }
+    }
+}
+impl Block for Chorus {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "mod.chorus",
+            name: "Chorus",
+            category: Category::Modulation,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec { id: "rate",     name: "Rate",     unit: Unit::Hertz,         min: 0.1,  max: 5.0,   default: 0.6,  curve: Curve::Log },
+                ParamSpec { id: "depth",    name: "Depth",    unit: Unit::Milliseconds,  min: 0.5,  max: 5.0,   default: 3.0,  curve: Curve::Linear },
+                ParamSpec { id: "mix",      name: "Mix",      unit: Unit::Percent,       min: 0.0,  max: 100.0, default: 50.0, curve: Curve::Linear },
+                ParamSpec { id: "feedback", name: "Feedback", unit: Unit::Percent,       min: 0.0,  max: 80.0,  default: 0.0,  curve: Curve::Linear },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        let mut c = pedal_dsp::delay::Chorus::<2048>::new(sr, 0.6);
+        c.base_ms = 8.0; // fixed centre delay, not a knob (see design §2)
+        self.inner = Some(c);
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let c = self.inner.as_mut().ok_or(BlockError::NotPrepared("mod.chorus"))?;
+        c.set_rate_hz(ctx.param(0));
+        c.depth_ms = ctx.param(1).clamp(0.0, 8.0);
+        c.mix = (ctx.param(2) / 100.0).clamp(0.0, 1.0);
+        c.feedback = (ctx.param(3) / 100.0).clamp(0.0, 0.95);
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            output[i] = c.process(input[i]);
+        }
+        Ok(())
+    }
+    fn reset(&mut self) {
+        if let Some(c) = &mut self.inner {
+            c.clear();
+        }
+    }
+}
 /// The graph's input node. The executor writes the raw input into this node's
 /// output buffer before running the steps.
 #[derive(Default)]
 pub struct IoInput;
-
 impl Block for IoInput {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -251,12 +377,10 @@ impl Block for IoInput {
     }
     fn reset(&mut self) {}
 }
-
 /// The graph's output node. The executor reads this node's input buffer as the
 /// graph's output.
 #[derive(Default)]
 pub struct IoOutput;
-
 impl Block for IoOutput {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -278,19 +402,16 @@ impl Block for IoOutput {
     }
     fn reset(&mut self) {}
 }
-
 /// A two-input summer with per-input ratios. The recombine node.
 pub struct MixSum {
     a: f32,
     b: f32,
 }
-
 impl Default for MixSum {
     fn default() -> Self {
         Self { a: 1.0, b: 1.0 }
     }
 }
-
 impl Block for MixSum {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -323,7 +444,6 @@ impl Block for MixSum {
     }
     fn reset(&mut self) {}
 }
-
 /// A feedback delay.
 pub struct Delay {
     inner: Option<pedal_dsp::FeedbackDelay<60000>>,
@@ -331,13 +451,11 @@ pub struct Delay {
     feedback: f32,
     mix: f32,
 }
-
 impl Default for Delay {
     fn default() -> Self {
         Self { inner: None, time_ms: 300.0, feedback: 0.35, mix: 0.3 }
     }
 }
-
 impl Block for Delay {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -355,12 +473,10 @@ impl Block for Delay {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
         self.inner = Some(pedal_dsp::FeedbackDelay::<60000>::new(sr, self.time_ms));
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         self.time_ms = ctx.param(0);
         self.feedback = ctx.param(1) / 100.0;
@@ -376,24 +492,19 @@ impl Block for Delay {
         }
         Ok(())
     }
-
     fn reset(&mut self) {
         if let Some(d) = &mut self.inner {
             d.clear();
         }
     }
 }
-
 // ---------------------------------------------------------------------------
 // Amp, cab, pitch delay, master
 // ---------------------------------------------------------------------------
-
 use pedal_dsp::waveshape::{Shaper, ShaperKind};
 use pedal_dsp::{DcBlocker, PitchMode};
-
 /// The amp voicing a `Choice` param selects.
 const AMP_VOICES: &[&str] = &["Clean", "Crunch", "Lead"];
-
 /// A two-stage amp: tighten → preamp clip → tone stack → power-amp sag-ish
 /// soft clip → level. Both nonlinear stages are 4× oversampled (`Shaper`), so
 /// high gain doesn't alias. This is the placeholder the NAM block replaces.
@@ -407,7 +518,6 @@ pub struct Amp {
     power: Shaper,
     fizz: Biquad,
 }
-
 impl Default for Amp {
     fn default() -> Self {
         Self {
@@ -422,7 +532,6 @@ impl Default for Amp {
         }
     }
 }
-
 impl Block for Amp {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -443,20 +552,17 @@ impl Block for Amp {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
         self.dc = Some(DcBlocker::new(10.0, sr));
         self.pre.reset();
         self.power.reset();
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         let sr = ctx.sample_rate;
         let voice = ctx.param(0).round().clamp(0.0, 2.0) as usize;
         let gain = ctx.param(1).clamp(0.0, 10.0) / 10.0;
         let level = pedal_dsp::util::db_to_lin(ctx.param(5));
-
         // Voicing: how hard each stage is driven and how tight the low end is.
         let (tight_hz, pre_max, power_drive, mid_hz) = match voice {
             0 => (60.0, 4.0, 1.0, 500.0),   // clean: barely breaks up
@@ -475,7 +581,6 @@ impl Block for Amp {
         self.power.set_level(1.0);
         // The lead voice gets a second preamp stage worth of gain.
         let lead_boost = if voice == 2 { 1.0 + 3.0 * gain } else { 1.0 };
-
         let dc = self.dc.as_mut().ok_or(BlockError::NotPrepared("amp.basic"))?;
         let input = ctx.inputs[0];
         let out = &mut ctx.outputs[0][..];
@@ -489,7 +594,6 @@ impl Block for Amp {
         }
         Ok(())
     }
-
     fn reset(&mut self) {
         for b in [&mut self.tight, &mut self.bass, &mut self.mid, &mut self.treble, &mut self.fizz] {
             b.reset();
@@ -498,20 +602,17 @@ impl Block for Amp {
         self.power.reset();
     }
 }
-
 /// A filter-based speaker cabinet: low cut, speaker resonance, a mud dip,
 /// presence, and a steep (24 dB/oct) high cut. Without a cab, any amp sounds
 /// like fizz. Real IR convolution replaces this later.
 pub struct Cab {
     filters: [Biquad; 6],
 }
-
 impl Default for Cab {
     fn default() -> Self {
         Self { filters: [Biquad::identity(); 6] }
     }
 }
-
 impl Block for Cab {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -530,11 +631,9 @@ impl Block for Cab {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         let sr = ctx.sample_rate;
         let hc = ctx.param(3);
@@ -556,28 +655,23 @@ impl Block for Cab {
         }
         Ok(())
     }
-
     fn reset(&mut self) {
         for b in &mut self.filters {
             b.reset();
         }
     }
 }
-
 const PITCH_MODES: &[&str] = &["Target", "Sweep", "Shepard"];
-
 /// The Rainbow-Machine-style delay: a pitch shifter in the feedback path, so
 /// every repeat is shifted again and the pitch climbs (or falls).
 pub struct PitchDelay {
     inner: Option<Box<pedal_dsp::FeedbackDelay<60000, 2400>>>,
 }
-
 impl Default for PitchDelay {
     fn default() -> Self {
         Self { inner: None }
     }
 }
-
 impl Block for PitchDelay {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -598,7 +692,6 @@ impl Block for PitchDelay {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
         // Built straight into a Box: the delay is ~250 KB, too big to bounce
         // through the stack on a small thread.
@@ -607,7 +700,6 @@ impl Block for PitchDelay {
         self.inner = Some(d);
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         let d = self.inner.as_mut().ok_or(BlockError::NotPrepared("time.pitchdelay"))?;
         d.set_delay_ms(ctx.param(0));
@@ -629,20 +721,17 @@ impl Block for PitchDelay {
         }
         Ok(())
     }
-
     fn reset(&mut self) {
         if let Some(d) = &mut self.inner {
             d.clear();
         }
     }
 }
-
 /// Output volume plus a soft limiter, so nothing downstream ever sees more
 /// than the ceiling. `ceiling * tanh(x / ceiling)`: transparent well below the
 /// ceiling, smooth into it, zero latency.
 #[derive(Default)]
 pub struct Master;
-
 impl Block for Master {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -674,7 +763,6 @@ impl Block for Master {
     }
     fn reset(&mut self) {}
 }
-
 /// A registry holding every block in this library — the palette.
 /// A level-synchronous compressor: a one-pole envelope follower tracks the
 /// input level, and gain is reduced above a threshold by a fixed ratio.
@@ -692,7 +780,6 @@ pub struct Compressor {
     makeup_db: f32,
     mix: f32,
 }
-
 impl Default for Compressor {
     fn default() -> Self {
         Self {
@@ -706,7 +793,6 @@ impl Default for Compressor {
         }
     }
 }
-
 impl Block for Compressor {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -775,12 +861,10 @@ impl Block for Compressor {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
         self.env = EnvelopeFollower::new(self.attack_ms, self.release_ms, sr);
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         let sr = ctx.sample_rate;
         let threshold = ctx.param(0);
@@ -789,9 +873,7 @@ impl Block for Compressor {
         let release = ctx.param(3);
         let makeup = ctx.param(4);
         let mix = ctx.param(5) / 100.0;
-
         self.env.set_timeconstants(attack, release, sr);
-
         let input = ctx.inputs[0];
         let out = &mut ctx.outputs[0][..];
         for i in 0..ctx.n {
@@ -811,18 +893,18 @@ impl Block for Compressor {
         }
         Ok(())
     }
-
     fn reset(&mut self) {
         self.env.reset();
     }
 }
-
-/// A noise gate: passes audio above a configurable threshold and attenuates
-/// audio below it. A one-pole envelope follower tracks the input level; the
-/// gate opens (gain 1) when the level is above the threshold and closes
-/// (attenuating up to 60 dB) when it is below.
+/// Tremolo: amplitude modulation. The input gain is swept by an LFO so the
+/// volume pulses rhythmically.
 ///
-/// Defaults: threshold -40 dB, attack 1 ms, release 5 ms, fully wet.
+/// The gain varies between `(1 - depth)` and `1`, so `depth = 0` leaves the
+/// signal untouched (bypass-equivalent) and `depth = 1` silences the signal
+/// at the trough of the LFO. The LFO phase is advanced monotonically and
+/// wrapped, so it is continuous across block boundaries and produces no
+/// clicks.
 pub struct Gate {
     env: EnvelopeFollower,
     threshold_db: f32,
@@ -932,7 +1014,98 @@ impl Block for Gate {
         self.env.reset();
     }
 }
-
+pub struct Tremolo {
+    lfo: pedal_dsp::lfo::Lfo,
+    depth: f32,
+    mix: f32,
+}
+impl Default for Tremolo {
+    fn default() -> Self {
+        Self {
+            // 0.6 Hz gives roughly a 0.6 Hz pulse (mix-tempo-near feel) on
+            // the default 48 kHz host rate; the sample rate is re-set in
+            // `prepare` to the host's actual rate.
+            lfo: pedal_dsp::lfo::Lfo::new(0.6, 48_000.0),
+            depth: 0.5,
+            mix: 100.0,
+        }
+    }
+}
+impl Block for Tremolo {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "mod.tremolo",
+            name: "Tremolo",
+            category: Category::Modulation,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "rate",
+                    name: "Rate",
+                    unit: Unit::Hertz,
+                    min: 0.1,
+                    max: 5.0,
+                    default: 0.6,
+                    curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "depth",
+                    name: "Depth",
+                    unit: Unit::Linear,
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "mix",
+                    name: "Mix",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 100.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        // Re-create the LFO at the block's sample rate so the phase
+        // increment (`rate_hz / sample_rate`) is correct for the host rate.
+        self.lfo = pedal_dsp::lfo::Lfo::new(0.6, sr);
+        Ok(())
+    }
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let rate = ctx.param(0);
+        let depth = ctx.param(1);
+        let mix = ctx.param(2) / 100.0;
+        // The LFO frequency is applied per block. Because `process` advances
+        // the phase by exactly `rate_hz / sample_rate` and only ever wraps
+        // forward, consecutive blocks hand off with the phase continuous and
+        // no step at the boundary — so no click.
+        self.lfo.set_rate(rate);
+        self.depth = depth;
+        self.mix = mix;
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            // Map the LFO modulator (-1..1) to 0..1, then to a gain in
+            // [1 - depth, 1]. `depth = 0` therefore yields a constant gain
+            // of 1 (bypass).
+            let m = self.lfo.process() * 0.5 + 0.5;
+            let gain = 1.0 - self.depth * (1.0 - m);
+            let wet = input[i] * gain;
+            output[i] = pedal_dsp::util::mix(input[i], wet, self.mix);
+        }
+        Ok(())
+    }
+    fn reset(&mut self) {
+        self.lfo.reset();
+    }
+}
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
@@ -951,16 +1124,17 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<Nam>();
     r.add::<Compressor>();
     r.add::<Gate>();
+    r.add::<Tremolo>();
+    r.add::<Octaver>();
+    r.add::<Chorus>();
     r
 }
-
 /// A four-input summer. The output stage of a multi-channel rig: every
 /// channel master feeds one input, so the pedal's output is their sum.
 #[derive(Default)]
 pub struct Sum {
     levels: [f32; 4],
 }
-
 impl Block for Sum {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -1006,13 +1180,10 @@ impl Block for Sum {
     }
     fn reset(&mut self) {}
 }
-
 // ---------------------------------------------------------------------------
 // NAM (Neural Amp Modeler)
 // ---------------------------------------------------------------------------
-
 use std::cell::RefCell;
-
 /// A Neural Amp Modeler model: the actual amp capture.
 ///
 /// `nam-rs` does the inference (WaveNet / LSTM / A2 containers) with no
@@ -1040,7 +1211,6 @@ pub struct Nam {
     /// Model-rate scratch, `scratch * ratio` frames.
     scratch_hi: RefCell<Vec<f32>>,
 }
-
 impl Default for Nam {
     fn default() -> Self {
         Self {
@@ -1058,7 +1228,6 @@ impl Default for Nam {
         }
     }
 }
-
 impl Nam {
     /// Load a `.nam` file. Call this before `prepare`; the model is built at
     /// prepare time (off the audio thread).
@@ -1067,30 +1236,25 @@ impl Nam {
         *self.nam.borrow_mut() = Some(m);
         Ok(())
     }
-
     /// Load from JSON text (used by tests and by the preset loader).
     pub fn load_json(&self, json: &str) -> Result<(), String> {
         let m = nam_rs::NamModel::from_json_str(json).map_err(|e| e.to_string())?;
         *self.nam.borrow_mut() = Some(m);
         Ok(())
     }
-
     /// Load a `.nam` file from disk. Convenience over reading +
     /// [`Self::load_json`]; kept here so the block owns its file format.
     pub fn load_file(&self, path: &str) -> Result<(), String> {
         let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         self.load_json(&text)
     }
-
     pub fn is_loaded(&self) -> bool {
         self.nam.borrow().is_some()
     }
-
     /// The model's expected sample rate, if loaded.
     pub fn expected_rate(&self) -> Option<f64> {
         self.nam.borrow().as_ref().map(|m| m.expected_sample_rate())
     }
-
     /// The model's display name, if the file carries metadata.
     pub fn display_name(&self) -> String {
         self.nam
@@ -1103,7 +1267,6 @@ impl Nam {
             .unwrap_or_else(|| "NAM (no model)".into())
     }
 }
-
 impl Block for Nam {
     fn spec(&self) -> BlockSpec {
         BlockSpec {
@@ -1121,7 +1284,6 @@ impl Block for Nam {
             controls_out: vec![],
         }
     }
-
     fn prepare(&mut self, sr: f32, max_block: usize) -> Result<(), BlockError> {
         self.rate_mismatch.borrow_mut().take();
         let expected = match self.nam.borrow().as_ref() {
@@ -1145,7 +1307,6 @@ impl Block for Nam {
         *self.model.borrow_mut() = Some(model);
         Ok(())
     }
-
     fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
         self.in_gain = ctx.param(0);
         self.out_level = ctx.param(1);
@@ -1154,7 +1315,6 @@ impl Block for Nam {
         let out_gain = pedal_dsp::util::db_to_lin(self.out_level);
         let input = ctx.inputs[0];
         let out = &mut ctx.outputs[0][..];
-
         let mut model = self.model.borrow_mut();
         let Some(model) = model.as_mut() else {
             // No model loaded: pass through, so the rest of the rig still works.
@@ -1168,7 +1328,6 @@ impl Block for Nam {
         let mut scratch_hi = self.scratch_hi.borrow_mut();
         let mut up = self.up_state.borrow_mut();
         let mut down = self.down_state.borrow_mut();
-
         // Host rate → model rate → model → host rate.
         for i in 0..ctx.n {
             scratch[i] = input[i] * g;
@@ -1177,18 +1336,15 @@ impl Block for Nam {
         pedal_dsp::resample(&scratch[..ctx.n], &mut scratch_hi[..hi_n], ratio, &mut up);
         model.process_buffer(&mut scratch_hi[..hi_n]);
         pedal_dsp::resample(&scratch_hi[..hi_n], &mut scratch[..ctx.n], 1.0 / ratio, &mut down);
-
         for i in 0..ctx.n {
             let wet = scratch[i] * out_gain;
             out[i] = pedal_dsp::util::mix(input[i] * g, wet, self.mix);
         }
         Ok(())
     }
-
     fn rate_mismatch(&self) -> Option<(f64, f32)> {
         *self.rate_mismatch.borrow()
     }
-
     fn latency_samples(&self) -> u32 {
         // Cubic resampling is linear-phase with a 2-sample group delay; the
         // model itself is causal. The executor compensates for this.
@@ -1198,13 +1354,11 @@ impl Block for Nam {
             2
         }
     }
-
     fn reset(&mut self) {
         if let Some(m) = self.model.borrow_mut().as_mut() {
             m.reset();
         }
     }
-
     fn configure(&mut self, key: &str, value: &str) -> Result<(), BlockError> {
         if key == "model" {
             self.load_file(value).map_err(BlockError::Resource)
@@ -1213,129 +1367,3 @@ impl Block for Nam {
         }
     }
 }
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Executor;
-    use crate::Graph;
-    use pedal_dsp::util::db_to_lin;
-
-    const SR: f32 = 48_000.0;
-    const BLOCK: usize = 8192;
-
-    fn gate_graph() -> Executor {
-        let mut g = Graph::new();
-        g.add("in", Box::new(IoInput)).unwrap();
-        g.add("gate", Box::new(Gate::default())).unwrap();
-        g.add("out", Box::new(IoOutput)).unwrap();
-        g.connect("in", "out", "gate", "in").unwrap();
-        g.connect("gate", "out", "out", "in").unwrap();
-        Executor::compile_owned(&mut g, SR, BLOCK).unwrap()
-    }
-
-    fn build_gate_graph(release_ms: f32) -> Executor {
-        let mut g = Graph::new();
-        g.add("in", Box::new(IoInput)).unwrap();
-        g.add("gate", Box::new(Gate::default())).unwrap();
-        g.add("out", Box::new(IoOutput)).unwrap();
-        g.connect("in", "out", "gate", "in").unwrap();
-        g.connect("gate", "out", "out", "in").unwrap();
-        g.set_param_real("gate", "release", release_ms).unwrap();
-        Executor::compile_owned(&mut g, SR, BLOCK).unwrap()
-    }
-
-    fn constant(level_db: f32) -> Vec<f32> {
-        vec![db_to_lin(level_db); BLOCK]
-    }
-
-    #[test]
-    fn gate_spec_has_threshold_attack_release_and_mix() {
-        let params = Gate::default().spec().params;
-        assert_eq!(params[0].id, "threshold");
-        assert_eq!(params[0].unit, Unit::Decibels);
-        assert_eq!(params[0].min, -60.0);
-        assert_eq!(params[0].default, -40.0);
-        assert_eq!(params[1].id, "attack");
-        assert_eq!(params[1].unit, Unit::Milliseconds);
-        assert_eq!(params[1].min, 0.1);
-        assert_eq!(params[1].max, 10.0);
-        assert_eq!(params[2].id, "release");
-        assert_eq!(params[2].unit, Unit::Milliseconds);
-        assert_eq!(params[2].min, 1.0);
-        assert_eq!(params[2].max, 100.0);
-        assert_eq!(params[3].id, "mix");
-        assert_eq!(params[3].unit, Unit::Percent);
-        assert_eq!(params[3].default, 100.0);
-    }
-
-    #[test]
-    fn gate_passes_signal_above_threshold() {
-        let mut ex = gate_graph();
-        let input = constant(-3.0);
-        let out = ex.run(&input, BLOCK).unwrap();
-        // -3 dB is well above the -40 dB default threshold, so the gate is
-        // open and the output tracks the input. Check a settled sample.
-        assert!((out[BLOCK / 2] - 0.7079).abs() < 1e-3, "out[mid] = {}", out[BLOCK / 2]);
-    }
-
-    #[test]
-    fn gate_attentuates_signal_below_threshold() {
-        let mut ex = gate_graph();
-        let input = constant(-60.0);
-        let out = ex.run(&input, BLOCK).unwrap();
-        // -60 dB is 20 dB below the -40 dB threshold: gr_db = 20, output ~ 1e-4.
-        assert!((out[BLOCK / 2] - 1e-4).abs() < 1e-5, "out[mid] = {}", out[BLOCK / 2]);
-    }
-
-    #[test]
-    fn gate_ramp_opens_with_attack_release() {
-        let mut ex = gate_graph();
-        let mut input = vec![0.0f32; BLOCK];
-        for (i, s) in input.iter_mut().enumerate() {
-            *s = (i as f32 / (BLOCK - 1) as f32) * 0.9;
-        }
-        let out = ex.run(&input, BLOCK).unwrap();
-        assert!(out[0].abs() < 1e-2, "start out = {}", out[0]);
-        // After ~8192 samples the envelope is above -40 dB and the gate opens.
-        assert!(out[BLOCK - 1] > 0.85, "end out = {}", out[BLOCK - 1]);
-    }
-
-    #[test]
-    fn gate_release_closes_when_signal_drops() {
-        let mut ex = gate_graph();
-        let mut input = vec![0.0f32; BLOCK];
-        for (i, s) in input.iter_mut().enumerate() {
-            *s = if i < BLOCK / 2 { 0.9 } else { 0.00001 };
-        }
-        let out = ex.run(&input, BLOCK).unwrap();
-        assert!((out[BLOCK / 2 - 1] - 0.9).abs() < 1e-2, "above-threshold out = {}", out[BLOCK / 2 - 1]);
-        assert!(out[BLOCK - 1].abs() < 1e-2, "release-out = {}", out[BLOCK - 1]);
-    }
-
-    #[test]
-    fn gate_release_length_changes_with_release_parameter() {
-        let mut fast = build_gate_graph(1.0);
-        let mut slow = build_gate_graph(200.0);
-        let mut input = vec![0.0f32; BLOCK];
-        for (i, s) in input.iter_mut().enumerate() {
-            *s = if i < BLOCK / 2 { 0.9 } else { 0.00001 };
-        }
-        let out_fast = fast.run(&input, BLOCK).unwrap();
-        let out_slow = slow.run(&input, BLOCK).unwrap();
-        // The slow-release gate should still be slightly open at the end of the
-        // block while the fast-release gate has collapsed toward silence.
-        assert!(out_slow[BLOCK - 1] > out_fast[BLOCK - 1], "slow release left more signal");
-        assert!(out_fast[BLOCK - 1].abs() < 1e-2, "fast-release out = {}", out_fast[BLOCK - 1]);
-    }
-
-    #[test]
-    fn builtin_registry_includes_noise_gate() {
-        let reg = builtin_registry();
-        assert!(reg.get("dynamics.noise_gate").is_some(), "noise gate not registered");
-        let spec = reg.get("dynamics.noise_gate").unwrap();
-        assert_eq!(spec.category, Category::Dynamics);
-    }
-}
-

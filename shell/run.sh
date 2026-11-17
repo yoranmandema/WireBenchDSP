@@ -85,7 +85,30 @@ case "$mode" in
     done
     lsof -iTCP:5173 -sTCP:LISTEN -n >/dev/null 2>&1 || { echo "✗ Vite did not start within 30 s" >&2; exit 1; }
     echo "• starting the shell (it spawns the engine)"
-    ./target/debug/pedal-shell
+    ./target/debug/pedal-shell &
+    shell=$!
+    # The shell spawns the engine, which takes a moment to bind :8737. Until it
+    # does, Vite's /engine proxy logs ECONNREFUSED and the UI sits on the boot
+    # screen -- which reads as "the app is broken". Wait for the port.
+    echo -n "• waiting for the engine on :$PORT"
+    for _ in $(seq 1 60); do
+      if port_busy; then echo " up"; break; fi
+      if ! kill -0 "$shell" 2>/dev/null; then
+        echo
+        echo "✗ the shell exited before the engine came up. Engine log:"
+        tail -20 /tmp/pedal-engine.log 2>/dev/null
+        exit 1
+      fi
+      echo -n "."
+      sleep 0.5
+    done
+    if ! port_busy; then
+      echo
+      echo "✗ the engine never listened on :$PORT. Engine log:"
+      tail -20 /tmp/pedal-engine.log 2>/dev/null
+      exit 1
+    fi
+    wait "$shell"
     ;;
 
   ship)

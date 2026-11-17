@@ -116,6 +116,12 @@ impl Graph {
         Ok(())
     }
 
+    /// Drop every edge driving `node`'s `port`. The graph-side mirror of
+    /// [`crate::Doc::disconnect_input`]; an input port takes one wire.
+    pub fn disconnect_input(&mut self, node: &str, port: &str) {
+        self.edges.retain(|e| !(e.to.0 == node && e.to.1 == port));
+    }
+
     /// Set a parameter to a normalised value.
     pub fn set_param(&mut self, node: &str, param: &str, value: f32) -> Result<(), BlockError> {
         let n = self
