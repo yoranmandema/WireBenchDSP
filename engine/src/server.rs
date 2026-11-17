@@ -35,6 +35,10 @@ pub struct Shared {
     pub source: Arc<AtomicU8>,
     /// Current preset name, `""` when the rig has never been saved.
     pub preset: Mutex<String>,
+    /// Global input trim, dB (header knob). Written by `setInputGain`.
+    pub input_gain: Mutex<f32>,
+    /// Global output volume, dB (header knob). Written by `setMasterOutVolume`.
+    pub master_out_volume: Mutex<f32>,
     clients: Mutex<Vec<mpsc::UnboundedSender<String>>>,
     /// The bypass graph for a rig with no blocks in any slot. Built once and
     /// recompiled (cheaply) whenever an empty pedalboard needs an executor, so
@@ -55,6 +59,8 @@ impl Shared {
             registry,
             source,
             preset: Mutex::new(String::new()),
+            input_gain: Mutex::new(0.0),
+            master_out_volume: Mutex::new(0.0),
             clients: Mutex::new(Vec::new()),
             bypass: Mutex::new(None),
             rev: AtomicU64::new(0),
@@ -162,6 +168,8 @@ fn snapshot(sh: &Shared) -> Value {
         "source": sh.source_name(),
         "registry": registry_json(&sh.registry),
         "channels": channels,
+        "inputGain": *sh.input_gain.lock().unwrap(),
+        "masterOutVolume": *sh.master_out_volume.lock().unwrap(),
         "routings": routings,
     })
 }
@@ -290,8 +298,11 @@ fn rebuild(sh: &Shared) -> Result<(), String> {
 /// Compile the rig's graph into a fresh executor.
 fn compile(sh: &Shared) -> Result<Executor, String> {
     let doc = sh.rig.lock().unwrap().to_doc();
+    // Index ids resolve through the cached model index; anything else is a
+    // legacy path, exactly as before.
+    let resolver = crate::model_index::resolver();
     let mut g = doc
-        .build_in(&sh.registry, &sh.handle.preset_dir)
+        .build_in_with(&sh.registry, &sh.handle.preset_dir, &resolver)
         .map_err(|e| e.to_string())?;
     Executor::compile_owned(&mut g, sh.handle.sample_rate, sh.handle.block())
         .map_err(|e| e.to_string())
@@ -517,7 +528,7 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
     match cmd {
         "getState" | "setParam" | "setMasterVolume" | "setBypass" | "addBlock"
         | "removeBlock" | "moveBlock" | "setSources" | "createRouting"
-        | "removeRouting" | "setEnabled" | "setGain"
+        | "removeRouting" | "setEnabled" | "setGain" | "setInputGain" | "setMasterOutVolume"
         | "loadPreset" | "setSource" | "savePreset" | "deletePreset" | "renamePreset" => {
             match cmd {
                 "getState" => {}
@@ -526,6 +537,12 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
                 }
                 "setMasterVolume" => {
                     set_master_volume(sh, &s("channel").ok_or("channel")?, f("value"))?;
+                }
+                "setInputGain" => {
+                    *sh.input_gain.lock().unwrap() = f("value").clamp(-60.0, 24.0);
+                }
+                "setMasterOutVolume" => {
+                    *sh.master_out_volume.lock().unwrap() = f("value").clamp(-60.0, 12.0);
                 }
                 "setBypass" => {
                     set_bypass(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, b("bypass"))?;

@@ -13,3 +13,4 @@ nam-rs = "0.4"
 
 [dev-dependencies]
 hound = "3.5"
+libm = "0.2"

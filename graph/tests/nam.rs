@@ -1,7 +1,7 @@
 //! The NAM block: parsing, sample-rate checking, and real-time safety.
 
 use dsp_graph::blocks::{Nam, builtin_registry};
-use dsp_graph::{Block, BlockCtx, BlockError, Executor, Graph};
+use dsp_graph::{Block, BlockCtx, BlockError, Executor, Graph, ModelResolver};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 64;
@@ -330,4 +330,75 @@ fn executor_reports_rate_mismatches() {
     assert_eq!(m.len(), 1, "expected one mismatch");
     assert_eq!(m[0].0, "nam");
     assert!((m[0].1 - 44_100.0).abs() < 0.5);
+}
+
+/// A preset can name a NAM model by its index id; the resolver maps it to the
+/// downloaded file's `local_path` under `$PEDAL_MODELS`.
+#[test]
+fn index_id_resolves_through_the_model_index() {
+    let dir = std::env::temp_dir().join(format!("pedal-index-model-{}", std::process::id()));
+    let models = dir.join("models");
+    let downloaded = models.join("t3k/28199/379978_a2.nam");
+    std::fs::create_dir_all(downloaded.parent().unwrap()).unwrap();
+    std::fs::write(&downloaded, ir_model()).unwrap();
+
+    let index = dsp_graph::ModelIndex::from_json(
+        &serde_json::json!({
+            "schema": 1,
+            "provider": "t3k",
+            "count": 1,
+            "models": [{
+                "id": "t3k:379978",
+                "provider": "t3k",
+                "local_path": "t3k/28199/379978_a2.nam",
+                "content_hash": null,
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let resolver = dsp_graph::IndexResolver::new(index, &models);
+
+    let json = serde_json::json!({
+        "name": "index model",
+        "nodes": [
+            {"id": "in", "block": "io.input"},
+            {"id": "nam", "block": "mod.nam", "model": "t3k:379978"},
+            {"id": "out", "block": "io.output"}
+        ],
+        "edges": [
+            {"from": ["in", "out"], "to": ["nam", "in"]},
+            {"from": ["nam", "out"], "to": ["out", "in"]}
+        ]
+    })
+    .to_string();
+    let doc = dsp_graph::Doc::from_json(&json).unwrap();
+    let reg = builtin_registry();
+    let mut g = doc
+        .build_in_with(&reg, std::path::Path::new("/nonexistent"), &resolver)
+        .expect("index id should resolve to the downloaded file");
+    let mut ex = Executor::compile_owned(&mut g, SR, BLOCK).unwrap();
+    let mut peak = 0.0f32;
+    for i in 0..BLOCK {
+        let s = (i as f32 * 0.07).sin() * 0.5;
+        peak = peak.max(ex.run(&[s], 1).unwrap()[0].abs());
+    }
+    assert!(peak > 0.0, "model resolved by index id produced no output");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A reference the index does not know is a legacy path, resolved against the
+/// preset directory exactly as before.
+#[test]
+fn unknown_reference_falls_back_to_the_legacy_path() {
+    let index = dsp_graph::ModelIndex::default();
+    let resolver = dsp_graph::IndexResolver::new(index, "/models");
+    assert_eq!(
+        resolver.resolve("t3k:379978", std::path::Path::new("/presets")),
+        "/presets/t3k:379978"
+    );
+    assert_eq!(
+        resolver.resolve("../models/tiny.nam", std::path::Path::new("/presets")),
+        "/presets/../models/tiny.nam"
+    );
 }
