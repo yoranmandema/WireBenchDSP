@@ -161,6 +161,10 @@ export const setBypass = (channel: string, block: string, bypass: boolean) =>
 
 export const setInputGain = (value: number) => mutate("setInputGain", { value });
 
+/** Per-channel volume, dB. */
+export const setMasterVolume = (channel: string, value: number) =>
+  mutate("setMasterVolume", { channel, value });
+
 export const setMasterOutVolume = (value: number) =>
   mutate("setMasterOutVolume", { value });
 
