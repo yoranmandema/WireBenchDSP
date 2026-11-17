@@ -394,7 +394,7 @@ pub fn start(
     // The tuner reads its own copy of the input stream (see tuner.rs); the
     // audio ring above is consumed by the output callback. Returns the tuner
     // ring so main can spawn the detached tuner thread.
-    let tuner_ring = Arc::new(Ring::new(RING_CAPACITY));
+    let tuner_ring = Arc::new(Ring::new(TUNER_RING_CAPACITY));
     let tuner_in = tuner_ring.clone();
 
     // The requested I/O buffer size comes from the engine config (the low-latency
