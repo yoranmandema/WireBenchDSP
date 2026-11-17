@@ -84,7 +84,8 @@ git --no-pager log --oneline "main@{1}..main" 2>/dev/null | sed 's/^/  /' || tru
 # The card's work is now on main. Return a blocked card to ready so the next
 # dispatch pass picks it up automatically — no manual `kanban_unblock` needed.
 HERMES_BIN="${HERMES_HERMES_BIN:-/Users/yoran/.hermes/hermes-agent/.hermes/bin/hermes}"
-if ! "$HERMES_BIN" kanban unblock "$id" --reason "Landed on main via kanban-land.sh ($br)" >/dev/null 2>&1; then
-  echo "kanban-land: NOTE: unblock call failed for $id (is the kanban gateway reachable?) — $id stays blocked; run `hermes kanban unblock $id` by hand." >&2
+if "$HERMES_BIN" kanban unblock "$id" --reason "Landed on main via kanban-land.sh ($br)" >/dev/null 2>&1; then
+  echo "kanban-land: auto-unblocked $id"
+else
+  echo "kanban-land: NOTE: no unblock performed for $id (not blocked/scheduled — e.g. already done; or gateway unreachable). If it is genuinely blocked, run: hermes kanban --board pedal unblock $id" >&2
 fi
-echo "kanban-land: auto-unblocked $id"
