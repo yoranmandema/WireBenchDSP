@@ -17,12 +17,34 @@ set -euo pipefail
 REPO=/Users/yoran/Documents/Repos/pedal-dsp
 die() { echo "kanban-land: $*" >&2; exit 1; }
 
+# --verify <card id>: is this card's work actually on main? Run before every
+# kanban_complete. Exit 0 only when done honestly means landed:
+#   LANDED           branch is an ancestor of main
+#   LANDED-EMPTY     branch contributes nothing (content already on main)
+#   NOT-LANDED       content missing from main — do NOT complete; list files
+if [ "${1:-}" = "--verify" ]; then
+  vid="${2:?usage: scripts/kanban-land.sh --verify <card id>}"
+  vbr="wt/$vid"
+  cd "$REPO" || exit 1
+  git rev-parse --verify -q "$vbr" >/dev/null || { echo "NOT-LANDED: branch $vbr does not exist"; exit 1; }
+  if git merge-base --is-ancestor "$vbr" main; then
+    echo "LANDED: $vbr is on main ($(git rev-parse --short main))"; exit 0
+  fi
+  if git diff --quiet "main...$vbr"; then
+    echo "LANDED-EMPTY: $vbr contributes nothing not already on main"; exit 0
+  fi
+  echo "NOT-LANDED: $vbr has content missing from main:"
+  git diff --name-only "main...$vbr" | sed 's/^/  /'
+  exit 1
+fi
+
 id="${1:?usage: scripts/kanban-land.sh <card id>}"
 br="wt/$id"
 wt="$(git rev-parse --show-toplevel)"
 cd "$wt"
 
 [ "$(git branch --show-current)" = "$br" ] || die "run this inside the card's worktree, on branch $br (you are on '$(git branch --show-current)' in $wt)"
+git rev-parse -q --verify MERGE_HEAD >/dev/null && die "there is an unfinished merge in this worktree (unresolved conflicts). Resolve and commit it, or run 'git merge --abort', then rerun. A half-merged worktree silently blocks every later land."
 [ -z "$(git status --porcelain)" ] || die "the worktree has uncommitted changes. Commit them (or stash what doesn't belong), then rerun"
 [ "$(git -C "$REPO" branch --show-current)" = "main" ] || die "the user's checkout ($REPO) is not on main. Block with needs_input; don't switch it yourself"
 [ -z "$(git -C "$REPO" status --porcelain)" ] || die "the user's main checkout has uncommitted changes; leave them untouched and retry after they are committed or safely stashed"
