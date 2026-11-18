@@ -110,7 +110,7 @@ Notes:
   speakers/headphones (see the audio-safety rule). All numbers are **computed
   from the picked cpal device config** and **measured DSP CPU**, which is the
   equivalent, silent measurement channel.
-- No firmware/STM32 work: the H723 path is dormant.
+- No bare-metal controller work: that path is dormant.
 - No Pi measurements: the target is still the Mac for this phase.
 
 ---
