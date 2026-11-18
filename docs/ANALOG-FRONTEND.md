@@ -125,7 +125,7 @@ Hum and buzz come from ground loops.
 |---|---|
 | Potentiometer | 3V3 — wiper — GND; wiper to an ADC pin. 10 kΩ linear. Add 100 nF across the ends to stop crackles. |
 | Expression pedal | Same as a pot, but a TRS jack: tip = wiper, one end to 3V3, the other to GND. |
-| Footswitch | Between the MCU pin and GND; enable the internal pull-up. Debounce in firmware (10–20 ms). |
+| Footswitch | Between the Pi's GPIO pin and GND; enable the internal pull-up. Debounce in the desktop UI (10–20 ms). |
 
 **Always** put a 100 nF capacitor across a pot's ends and a 1 kΩ series
 resistor on the ADC pin. It costs nothing and removes noise and ESD risk.

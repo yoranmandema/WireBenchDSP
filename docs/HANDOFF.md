@@ -44,7 +44,6 @@ The user was leaning **Raspberry Pi 5** and already owns:
 | Latency | The real risk on Linux. NAM's own guidance is 32×4 audio buffers; that is ~2.7 ms at 48 kHz, before the model itself. Needs real measurement on the Pi 5. |
 | Open-source references | **PiPedal**, **Pi-MFX**, **OpenRig**, **coyopedal** — all permissively licensed; read them for architecture, don't vendor them. |
 | Bluetooth MIDI | **Will not work** on a Pi 5 for this use: the built-in BT shares the USB bus with Ethernet and adds jitter. Use the Chocolate over **USB-C wired** (it enumerates as a standard USB-MIDI device). |
-| STM32 path | Still viable and cheaper. `docs/ARCHITECTURE.md` has the full H723 + SGTL5000 design. The DSP library is portable, so nothing is lost by deciding late. |
 
 **STM32 H7 is dropped.** The Pi 5 is the target: NAM models are far beyond an
 H7, and the Pi's CPU headroom is the whole point.
@@ -53,16 +52,15 @@ H7, and the Pi's CPU headroom is the whole point.
 
 **The DSP and graph crates have zero platform dependencies.** No ALSA, no
 CoreAudio, no filesystem, no `std::process`. They compile identically for
-macOS (dev), Linux/Pi 5 (deployment) and bare-metal STM32 (alternative
-deployment). The platform-specific code lives in thin shells:
+macOS (dev), Linux/Pi 5 (deployment) and **native desktop host**. The
+platform-specific code lives in thin shells:
 
-| Crate | Platform deps | Mac | Pi 5 | STM32 |
-|---|---|---|---|---|
-| `dsp` (pedal-dsp) | none | ✅ | ✅ | ✅ |
-| `graph` (dsp-graph) | none | ✅ | ✅ | ✅ |
-| `host-sim` | none (CLI) | ✅ | ✅ | — |
-| `live` (pedal-live) | cpal, egui, eframe | ✅ dev rig | ✅ | — |
-| `firmware` | stm32h7xx-hal, defmt | — | — | ✅ |
+| Crate | Platform deps | Mac | Pi 5 |
+|---|---|---|---|
+| `dsp` (pedal-dsp) | none | ✅ | ✅ |
+| `graph` (dsp-graph) | none | ✅ | ✅ |
+| `host-sim` | none (CLI) | ✅ | ✅ |
+| `live` (pedal-live) | cpal, egui, eframe | ✅ dev rig | ✅ |
 
 **This is why the hardware decision can wait.** Nothing downstream cares.
 
@@ -130,16 +128,13 @@ shell/                                Tauri desktop app: embeds ui/, spawns the 
 ui/                                   Preact + TypeScript frontend (shared by every shell)
 presets/                              *.json, shared by engine and host-sim
 
-firmware/                             STM32H723 firmware (separate workspace)
-  src/main.rs, audio.rs, board.rs, codec.rs, controls.rs
-
-live/                                 pedal-live — Mac/Pi real-time rig runner
+live/                                 pedal-live — native desktop host (cpal, egui, eframe)
   src/main.rs                         cpal audio I/O + egui/eframe UI
 
 docs/
-  ARCHITECTURE.md                     original STM32 H723 + SGTL5000 design
+  ARCHITECTURE.md                     native platform architecture
   ANALOG-FRONTEND.md                  analogue front-end design
-  BUILD-AND-FLASH.md                  firmware build/flash
+  BUILD-AND-FLASH.md                  native build/verify
   PRODUCT-MODEL.md                    ← the product spec (read this)
   EXECUTOR.md                         ← executor design (read this)
   DSP-BLOCKS-AND-SIMULATOR.md         ← block + simulator design (read this)
