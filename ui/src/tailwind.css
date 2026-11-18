@@ -142,6 +142,7 @@
 
 @custom-variant phone (@media (width < 700px));
 @custom-variant compact (@media (width < 820px));
+@custom-variant desk (@media (width >= 840px));
 
 @layer base {
   :root {
