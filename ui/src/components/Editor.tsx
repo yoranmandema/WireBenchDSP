@@ -1,10 +1,11 @@
 import type { JSX } from "preact";
 import { Knob } from "./Knob";
 import { catStyle } from "../theme";
-import { selected, setBypass, setParam, state } from "../state";
+import { selected, setBypass, setParam, state, addBlockFor } from "../state";
 import { useState } from "preact/hooks";
 import type { BlockSpec, ParamSpec } from "../protocol";
 import { ctrlName, emptyNote } from "../ui";
+import { AddBlockPicker } from "./AddBlockModal";
 
 /** Format a parameter value with the unit the engine declares. */
 function formatParam(p: ParamSpec, v: number): string {
@@ -212,5 +213,31 @@ export function Editor() {
     </>
   );
 
-  return <footer class="editor row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 min-h-0 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">{body}</footer>;
+  return (
+    <footer
+      class="editor relative row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 min-h-0 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start"
+    >
+      {sel.block ? body : (
+        <div class={`${emptyNote} editor-empty emptyNote`}>Select a block in the chain to edit it.</div>
+      )}
+      {addBlockFor.value && (
+        <>
+          {/* Veil over the editor area (Editor root is `position: relative`):
+              the semi-transparent dim the picker sits on top of. */}
+          <div
+            class="modalBackdrop modalBackdrop modal-backdrop"
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              width: "100%",
+              height: "100%",
+              zIndex: 0,
+            }}
+          ></div>
+          <AddBlockPicker />
+        </>
+      )}
+    </footer>
+  );
 }
