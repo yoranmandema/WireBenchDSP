@@ -3,7 +3,10 @@
 //! These are real, working blocks — not stubs. They demonstrate the plugin
 //! architecture and give the host simulator something to run.
 use crate::prelude::*;
-use pedal_dsp::{Biquad, BiquadKind, PitchShifter, envelope::EnvelopeFollower, lfo::Lfo};
+use pedal_dsp::{
+    Biquad, BiquadKind, EnvelopeFollower, Freeverb, Lfo, PitchShifter, resample,
+    delay::DelayLine, util::{clamp, smoothing_coef_ms},
+};
 /// A simple gain stage, in dB.
 pub struct Gain {
     gain_db: f32,
@@ -302,7 +305,7 @@ impl Block for Octaver {
 /// always behind the write head, so the block never anticipates the input and
 /// its (time-varying) delay is the sound itself, like `time.delay`.
 pub struct Chorus {
-    inner: Option<pedal_dsp::delay::Chorus<2048>>,
+    inner: Option<pedal_dsp::delay::Chorus<1024>>,
 }
 impl Default for Chorus {
     fn default() -> Self {
@@ -328,7 +331,7 @@ impl Block for Chorus {
         }
     }
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
-        let mut c = pedal_dsp::delay::Chorus::<2048>::new(sr, 0.6);
+        let mut c = pedal_dsp::delay::Chorus::<1024>::new(sr, 0.6);
         c.base_ms = 8.0; // fixed centre delay, not a knob (see design §2)
         self.inner = Some(c);
         Ok(())
@@ -364,7 +367,15 @@ impl Block for IoInput {
             category: Category::Io,
             inputs: vec![],
             outputs: vec![PortSpec::audio("out")],
-            params: vec![],
+            params: vec![ParamSpec {
+                id: "gain".into(),
+                name: "Input gain".into(),
+                unit: Unit::Decibels,
+                min: -60.0,
+                max: 24.0,
+                default: 0.0,
+                curve: Curve::AmpGain,
+            }],
             controls_in: vec![],
             controls_out: vec![],
         }
@@ -372,7 +383,13 @@ impl Block for IoInput {
     fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
         Ok(())
     }
-    fn process(&mut self, _ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let g = pedal_dsp::util::db_to_lin(ctx.param(0));
+        if g != 1.0 {
+            for x in ctx.outputs[0].iter_mut() {
+                *x *= g;
+            }
+        }
         Ok(())
     }
     fn reset(&mut self) {}
@@ -766,6 +783,545 @@ impl Block for Master {
 /// A registry holding every block in this library — the palette.
 /// A level-synchronous compressor: a one-pole envelope follower tracks the
 /// input level, and gain is reduced above a threshold by a fixed ratio.
+/// A stereo Schroeder/Freeverb-style reverb tank: 8 stereo comb pairs +
+/// 4 stereo allpass pairs. Wraps `pedal_dsp::reverb::Freeverb` so the block
+/// can drive the same input into both channels and use the mixer's wet
+/// output. Tunings are scaled to the host rate in `Freeverb::new`.
+pub struct ShimmerTank {
+    tank: Freeverb<1760, 605>,
+}
+
+impl ShimmerTank {
+    /// Build a stereo tank at the host rate: full-width combs + allpasses,
+    /// dry = 0 (the block blends the wet itself), width = 1.
+    pub fn new(sr: f32) -> Self {
+        let mut t = Freeverb::<1760, 605>::new(sr);
+        t.set_wet(1.0);
+        t.set_dry(0.0);
+        t.set_width(1.0);
+        Self { tank: t }
+    }
+
+    /// Run one mono input through both channels, returning (left, right) wet.
+    pub fn process(&mut self, input: f32) -> (f32, f32) {
+        self.tank.process(input, input)
+    }
+
+    /// Clear all internal state.
+    pub fn clear(&mut self) {
+        self.tank.clear();
+    }
+
+    /// Room size 0..1 (maps to the comb feedback gain).
+    pub fn set_room_size(&mut self, v: f32) {
+        self.tank.set_room_size(clamp(v, 0.0, 1.0));
+    }
+
+    /// High-frequency damping 0..1 (low-pass inside the feedback loop).
+    pub fn set_damping(&mut self, v: f32) {
+        self.tank.set_damping(clamp(v, 0.0, 1.0));
+    }
+}
+
+/// Fractional-delay input line. The dry input is written here and read back
+/// `pre_delay_samples` samples later, giving the `pre_delay` knob its
+/// fractional delay at the tank input.
+struct PreDelay {
+    line: DelayLine<8192>,
+}
+
+impl PreDelay {
+    fn new() -> Self {
+        Self {
+            line: DelayLine::<8192>::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.line.clear();
+    }
+
+    /// Write a sample, then read back a fractional delay.
+    fn read(&mut self, sample: f32, delay_samples: f32) -> f32 {
+        self.line.write(sample);
+        self.line.read_at(delay_samples)
+    }
+}
+
+/// Shimmer reverb: a stereo FDN tank whose feedback path contains a
+/// fixed-ratio pitch shifter (`pedal_dsp::resample`), a `shimmer` gain clamp,
+/// tone damping inside the loop, and a per-block RMS energy guard.
+///
+/// Signal flow (per spec §3.1):
+///
+/// ```text
+/// input ──► ShimmerTank (stereo FDN) ──► wet ──► Mix ──► out
+///            │
+///            └─► pitch shift (interval ratio) ──► Shimmer gain ──►
+///                  │                                      │
+///                  └────── feedback-loop gain limiter ────┘
+/// ```
+///
+/// `pre_delay` is a fractional delay line at the tank input.  Loop gain is
+/// limited by (a) clamping `shimmer` to 0.95, (b) tone damping inside the
+/// tank, and (c) a per-block RMS energy guard.
+pub struct ShimmerReverb {
+    /// Smoothed continuous params (τ = 60 ms).  The executor hands the block
+    /// *real* values, so the block does its own per-sample EMA.
+    mix_sm: f32,
+    size_sm: f32,
+    decay_sm: f32,
+    shimmer_sm: f32,
+    tone_sm: f32,
+    pre_delay_sm: f32,
+
+    /// Instant (discrete) param: the interval index 0..2.
+    interval: usize,
+
+    /// The stereo FDN tank.
+    tank: Freeverb<1760, 605>,
+
+    /// Fractional delay line for the pre-delay.
+    pre_delay: PreDelay,
+
+    /// Fixed-ratio pitch shifter: `r = 2^(interval/12)`.
+    ratio: f32,
+
+    /// One-block-delayed pitch-shifted wet, used as the tank-input feedback.
+    /// Ring buffer of 2 × `max_block` samples per channel; `fb_write` is the
+    /// write head.
+    fb_l: Vec<f32>,
+    fb_r: Vec<f32>,
+    fb_write: usize,
+
+    /// Rolling wet history (2 × `max_block` per channel): the previous and
+    /// the current block concatenated, so the fixed-ratio resampler reads a
+    /// continuous stream instead of restarting at every block head.
+    wet_hist_l: Vec<f32>,
+    wet_hist_r: Vec<f32>,
+
+    /// Resampler state, one per channel (cubic, linear-phase, relay with no
+    /// phantom gain).
+    state_l: [f32; 4],
+    state_r: [f32; 4],
+
+    /// EMA smoothing coefficient for τ = 60 ms at the host rate.
+    coef: f32,
+
+    /// Energy-guard ratchet (see `process`): instantaneous attack, slow
+    /// release, never amplifies.  1.0 = no limiting.
+    guard_sm: f32,
+    /// Release coefficient for the guard (~τ 2 s at the host rate).
+    guard_rel: f32,
+
+    /// Input side-chain envelope for the shimmer gate: the pitched feedback
+    /// sustains while there is input and lets go after the player stops, so
+    /// the tail always decays through the tank alone.
+    in_env: f32,
+    /// Per-block release coefficient for `in_env` (τ ≈ 300 ms).
+    in_rel: f32,
+}
+
+impl Default for ShimmerReverb {
+    fn default() -> Self {
+        // Overwritten in `prepare`.
+        Self {
+            mix_sm: 40.0,
+            size_sm: 70.0,
+            decay_sm: 2.5,
+            shimmer_sm: 55.0,
+            tone_sm: 50.0,
+            pre_delay_sm: 0.0,
+            interval: 0,
+            tank: Freeverb::<1760, 605>::new(48_000.0),
+            pre_delay: PreDelay::new(),
+            ratio: 2.0,
+            fb_l: vec![0.0; 128],
+            fb_r: vec![0.0; 128],
+            fb_write: 0,
+            wet_hist_l: vec![0.0; 128],
+            wet_hist_r: vec![0.0; 128],
+            state_l: [0.0; 4],
+            state_r: [0.0; 4],
+            coef: 0.0,
+            guard_sm: 1.0,
+            guard_rel: 0.0,
+            in_env: 0.0,
+            in_rel: 0.0,
+        }
+    }
+}
+
+impl ShimmerReverb {
+    /// Fixed (linear) gain of the feedback loop, clamped to 0.95.
+    fn shimmer_lin(&self) -> f32 {
+        (self.shimmer_sm / 100.0).clamp(0.0, 0.95)
+    }
+
+    /// Per-block RMS energy guard: if the wet RMS exceeds `wet_cap`, the
+    /// feedback is scaled down so the loop stays bounded. Last line of
+    /// defence.
+    /// RMS of a stereo block.
+    fn block_rms(wet_l: &[f32], wet_r: &[f32]) -> f32 {
+        let mut acc = 0.0f64;
+        let n = wet_l.len().min(wet_r.len());
+        if n == 0 {
+            return 0.0;
+        }
+        for i in 0..n {
+            acc += (wet_l[i] * wet_l[i]) as f64;
+            acc += (wet_r[i] * wet_r[i]) as f64;
+        }
+        (acc / (n as f64 * 2.0)).sqrt() as f32
+    }
+    fn reset_smoothed(&mut self) {
+        self.mix_sm = 40.0;
+        self.size_sm = 70.0;
+        self.decay_sm = 2.5;
+        self.shimmer_sm = 55.0;
+        self.tone_sm = 50.0;
+        self.pre_delay_sm = 0.0;
+    }
+}
+
+impl Block for ShimmerReverb {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "time.shimmer",
+            name: "Shimmer",
+            category: Category::Time,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "mix",
+                    name: "Mix",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 40.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "size",
+                    name: "Size",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 70.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "decay",
+                    name: "Decay",
+                    unit: Unit::Seconds,
+                    min: 0.2,
+                    max: 8.0,
+                    default: 2.5,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "shimmer",
+                    name: "Shimmer",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 55.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "interval",
+                    name: "Interval",
+                    unit: Unit::Choice(SHIMMER_INTERVALS),
+                    min: 0.0,
+                    max: 2.0,
+                    default: 0.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "tone",
+                    name: "Tone",
+                    unit: Unit::Percent,
+                    min: 0.0,
+                    max: 100.0,
+                    default: 50.0,
+                    curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "pre_delay",
+                    name: "Pre-delay",
+                    unit: Unit::Milliseconds,
+                    min: 0.0,
+                    max: 80.0,
+                    default: 0.0,
+                    curve: Curve::Linear,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, max_block: usize) -> Result<(), BlockError> {
+        self.tank = Freeverb::<1760, 605>::new(sr);
+        self.pre_delay = PreDelay::new();
+        self.ratio = 2.0f32.powf(12.0 / 12.0);
+        let buf = (max_block.max(1) * 2).max(128);
+        self.fb_l = vec![0.0; buf];
+        self.fb_r = vec![0.0; buf];
+        self.fb_write = 0;
+        self.wet_hist_l = vec![0.0; buf];
+        self.wet_hist_r = vec![0.0; buf];
+        self.state_l = [0.0; 4];
+        self.state_r = [0.0; 4];
+        self.coef = smoothing_coef_ms(60.0, sr);
+        // Guard release: τ ≈ 2 s.
+        self.guard_rel = smoothing_coef_ms(2000.0, sr);
+        self.in_env = 0.0;
+        // Per-block release with τ ≈ 300 ms at 48 kHz.
+        let per_sample = (1.0 - smoothing_coef_ms(300.0, sr)).max(0.0);
+        self.in_rel = per_sample.powi(max_block.max(1) as i32);
+        self.reset_smoothed();
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        // Raw (target) values, before smoothing.
+        // Seed the smoothed state from the *current* targets the first block
+        // after a prepare/reset, so a freshly compiled graph renders exactly
+        // the param values the preset asked for; the EMA then smooths changes.
+        if ctx.block_index == 0 {
+            self.mix_sm = ctx.param(0);
+            self.size_sm = ctx.param(1);
+            self.decay_sm = ctx.param(2);
+            self.shimmer_sm = ctx.param(3);
+            self.tone_sm = ctx.param(5);
+            self.pre_delay_sm = ctx.param(6);
+        }
+        let mix_t = ctx.param(0);
+        let size_t = ctx.param(1);
+        let decay_t = ctx.param(2);
+        let shimmer_t = ctx.param(3);
+        let interval_t = ctx.param(4);
+        let tone_t = ctx.param(5);
+        let pre_delay_t = ctx.param(6);
+
+        // Exact bypass at mix 0: pass the input through sample-for-sample.
+        if mix_t <= 0.0 {
+            let input = ctx.inputs[0];
+            let out = &mut ctx.outputs[0][..];
+            for i in 0..ctx.n {
+                out[i] = input[i];
+            }
+            return Ok(());
+        }
+
+        let sr = ctx.sample_rate;
+
+        // Per-sample EMA (τ = 60 ms) applied to the *real* value before it is
+        // fed to the tank (spec §2).  `interval` is a discrete choice applied
+        // instantly.  The values are seeded from the targets on the first
+        // block after `prepare`/`reset` (see above), so the EMA only smooths
+        // runtime *changes*.
+        self.mix_sm += self.coef * (mix_t - self.mix_sm);
+        self.size_sm += self.coef * (size_t - self.size_sm);
+        self.decay_sm += self.coef * (decay_t - self.decay_sm);
+        self.shimmer_sm += self.coef * (shimmer_t - self.shimmer_sm);
+        self.tone_sm += self.coef * (tone_t - self.tone_sm);
+        self.pre_delay_sm += self.coef * (pre_delay_t - self.pre_delay_sm);
+
+        // Interval is discrete: round to the nearest index and clamp to 0..2.
+        self.interval = interval_t
+            .round()
+            .clamp(0.0, 2.0) as usize;
+
+        // Tank parameters: `size` -> comb feedback (room size), `tone` ->
+        // damping inside the loop.
+        // Spec §2: `size` is the master comb-feedback gain, `decay` sets the
+        // target RT60 of the tank loop; the loop gain is reduced so the
+        // physical decay approaches it.  Comb feedback maps to
+        // f = 0.001^(round_trip / RT60), blended by `size` as master.
+        let round_trip = 0.0253f32; // ~1214 samples at 48 kHz
+        let f_decay =
+            0.001f32.powf(round_trip / self.decay_sm.max(0.2));
+        let f_eff = 0.7 + (f_decay - 0.7) * (self.size_sm / 100.0);
+        let room = ((f_eff - 0.7) / 0.28).clamp(0.0, 1.0);
+        self.tank.set_room_size(room);
+        self.tank.set_damping(self.tone_sm / 100.0);
+        // The tank sums 8 parallel combs; normalise by the count so the
+        // shimmer feedback loop's open gain stays below 1 (shimmer caps at
+        // 0.95 and the comb feedback is < 1).
+        self.tank.set_wet(1.0 / 8.0);
+        self.tank.set_dry(0.0);
+        self.tank.set_width(1.0);
+
+        // Pitch-shift ratio for the chosen interval.
+        let semitones = match self.interval {
+            0 => 12,
+            1 => 7,
+            _ => -12,
+        };
+        self.ratio = 2.0f32.powf(semitones as f32 / 12.0);
+
+        // Fractional delay at the tank input (smoothed, spec §2).
+        let pd_samples = (self.pre_delay_sm / 1000.0) * sr;
+
+        // --- Process one block, with one-block-delayed feedback in the loop ---
+        let n = ctx.n;
+        let input = ctx.inputs[0];
+        let out = &mut ctx.outputs[0][..];
+        let fb_l = &self.fb_l;
+        let fb_r = &self.fb_r;
+
+        // Read position: the feedback for this block lives `n` samples before
+        // the current write head.
+        let mut read_idx =
+            (self.fb_write.wrapping_sub(n as usize)) % fb_l.len();
+
+        // Wet samples, retained to build the pitch-shifted feedback.
+        let mut wet_l = vec![0.0f32; n];
+        let mut wet_r = vec![0.0f32; n];
+
+        for i in 0..n {
+            let pd = self.pre_delay.read(input[i], pd_samples);
+            let fb_l0 = fb_l[read_idx];
+            let fb_r0 = fb_r[read_idx];
+            read_idx = (read_idx + 1) % fb_l.len();
+            let tank_in_l = pd + fb_l0;
+            let tank_in_r = pd + fb_r0;
+            let (wl, wr) = self.tank.process(tank_in_l, tank_in_r);
+            wet_l[i] = wl;
+            wet_r[i] = wr;
+            out[i] = pedal_dsp::util::mix(
+                input[i],
+                (wl + wr) * 0.5,
+                self.mix_sm / 100.0,
+            );
+        }
+
+        // --- Build the pitch-shifted feedback for the next block ---
+        // The resampler reads the last two wet blocks as one continuous
+        // stream: the octave-up ratio decimates *every* wet sample exactly
+        // once (a norm-preserving relay), so no coherent pumping builds on
+        // the comb returns and the loop stays provably bounded.
+        let mut fb_new_l = vec![0.0f32; n];
+        let mut fb_new_r = vec![0.0f32; n];
+        let h = self.wet_hist_l.len();
+        self.wet_hist_l.copy_within(n..h, 0);
+        self.wet_hist_r.copy_within(n..h, 0);
+        self.wet_hist_l[n..h].copy_from_slice(&wet_l);
+        self.wet_hist_r[n..h].copy_from_slice(&wet_r);
+        // Input samples consumed: n * ratio, taken from the end of the
+        // window so the newest wet always feeds the pitch shifter.
+        let consumed = ((n as f32 * self.ratio) as usize).clamp(1, h);
+        let start = h - consumed;
+        // `resample`'s ratio is out/in rate; pitching the wet up by `r`
+        // means reading it back `r` times faster, i.e. ratio = 1/r.
+        let inv = 1.0 / self.ratio;
+        resample(&self.wet_hist_l[start..], &mut fb_new_l, inv, &mut self.state_l);
+        resample(&self.wet_hist_r[start..], &mut fb_new_r, inv, &mut self.state_r);
+
+        // Energy guard: cap wet RMS so the loop stays bounded.  Attack is
+        // instantaneous (ratchet down), release is slow (~2 s): the build-up
+        // transient is clamped at the cap, then the guard *lets go* and the
+        // natural loop gain (shimmer ≤ 0.95 × comb feedback) carries the
+        // tail to silence.  A purely proportional cap would hold the wet at
+        // the cap level forever (AGC stasis) and never decay.
+        // Final line of defence on the feedback *amplitude*: with the comb
+        // feedback at its physical maximum (0.98) the tank's recirculation
+        // builds a sustained feedback amplitude A into a wet peak of roughly
+        // A / (1 - 0.93) ≈ 14·A; capping each feedback sample keeps that
+        // below 2.0 by construction, even for spike trains the block RMS
+        // guard misses.
+        const FB_CLAMP: f32 = 0.07;
+        let shimmer = self.shimmer_lin();
+        let wet_rms = ShimmerReverb::block_rms(&wet_l, &wet_r);
+        let wet_peak = wet_l
+            .iter()
+            .chain(wet_r.iter())
+            .fold(0.0f32, |m, &v| m.max(v.abs()));
+        const WET_CAP: f32 = 0.4;
+        // Below this wet level the shimmer contribution is faded out.
+        const TAIL_FLOOR: f32 = 0.004;
+        // A peak cap rides along with the RMS cap: sparse comb spike trains
+        // have a large crest factor and would otherwise punch through.  The
+        // cap sits well under the block overshoot margin (the tank can grow
+        // several times within one block after the guard first trips), so
+        // the output stays bounded even at size/decay/shimmer = max.
+        const WET_PEAK_CAP: f32 = 0.25;
+        if wet_rms > WET_CAP || wet_peak > WET_PEAK_CAP {
+            let g_need = (WET_CAP / wet_rms.max(1e-9)).min(WET_PEAK_CAP / wet_peak.max(1e-9));
+            self.guard_sm = self.guard_sm.min(g_need);
+        } else if wet_rms > TAIL_FLOOR {
+            self.guard_sm += self.guard_rel * (1.0 - self.guard_sm);
+        } else {
+            // Tail floor reached: the shimmer loop lets go entirely, so the
+            // remaining wet decays through the tank alone.  Without this the
+            // recirculation holds itself up at a constant level forever
+            // (proportional controls find a unity-gain equilibrium).
+            self.guard_sm += self.guard_rel * (0.0 - self.guard_sm);
+        }
+        let guard = self.guard_sm;
+        // Input side-chain: gate the shimmer with the dry signal present.
+        let mut iacc = 0.0f64;
+        for i in 0..n {
+            iacc += (input[i] * input[i]) as f64;
+        }
+        let in_rms = ((iacc / n as f64).sqrt() as f32);
+        self.in_env = in_rms.max(self.in_env * self.in_rel);
+        const GATE_FLOOR: f32 = 1e-3;
+        let gate = (self.in_env / GATE_FLOOR).min(1.0);
+        for i in 0..n {
+            fb_new_l[i] = (fb_new_l[i] * shimmer * guard * gate).clamp(-FB_CLAMP, FB_CLAMP);
+            fb_new_r[i] = (fb_new_r[i] * shimmer * guard * gate).clamp(-FB_CLAMP, FB_CLAMP);
+        }
+
+        // Write the feedback into the ring buffer.
+        {
+            let w = self.fb_write;
+            let rem = self.fb_l.len() - w;
+            if rem >= n {
+                for i in 0..n {
+                    self.fb_l[w + i] = fb_new_l[i];
+                    self.fb_r[w + i] = fb_new_r[i];
+                }
+            } else {
+                for i in 0..rem {
+                    self.fb_l[w + i] = fb_new_l[i];
+                    self.fb_r[w + i] = fb_new_r[i];
+                }
+                for i in 0..(n - rem) {
+                    self.fb_l[i] = fb_new_l[rem + i];
+                    self.fb_r[i] = fb_new_r[rem + i];
+                }
+            }
+            self.fb_write = (w + n) % self.fb_l.len();
+        }
+
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.tank.clear();
+        self.pre_delay.clear();
+        self.fb_l.fill(0.0);
+        self.fb_r.fill(0.0);
+        self.fb_write = 0;
+        self.wet_hist_l.fill(0.0);
+        self.wet_hist_r.fill(0.0);
+        self.guard_sm = 1.0;
+        self.in_env = 0.0;
+        self.state_l = [0.0; 4];
+        self.state_r = [0.0; 4];
+        self.reset_smoothed();
+    }
+}
+
+/// Choice labels for the `interval` parameter (spec §2), indexed as the
+/// parameter value: 0 = `+12 st up` (2.0), 1 = `+7 st up` (1.4983),
+/// 2 = `−12 st down` (0.5).
+const SHIMMER_INTERVALS: &[&str] = &["+12 st up", "+7 st up", "−12 st down"];
+
 /// The compressor owns its envelope state, so it is allocation-free and
 /// sample-accurate on the audio thread.
 ///
@@ -1121,6 +1677,7 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<Delay>();
     r.add::<PitchDelay>();
     r.add::<Reverb>();
+    r.add::<ShimmerReverb>();
     r.add::<Nam>();
     r.add::<Compressor>();
     r.add::<Gate>();

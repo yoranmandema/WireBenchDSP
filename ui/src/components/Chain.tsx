@@ -11,6 +11,7 @@ import {
   openBlockPicker,
   removeBlock,
   select,
+  selectRouting,
   createRouting,
   selected,
   setBypass,
@@ -383,14 +384,20 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
     const px = e.clientX;
     const py = e.clientY;
     const el = document.elementFromPoint(px, py) as HTMLElement | null;
-    const card = (el?.closest("[data-block-id]") as HTMLElement | null);
+    // `closest("[data-block-id]")` from a handle descendant returns the handle
+    // span (which carries no `data-channel-id`); `closest(".block-card")` plus
+    // `.channel` resolves the channel for every pointer position over the card,
+    // including exactly on the output handle.
+    const card = (el?.closest(".block-card") as HTMLElement | null);
+    const channelId = (card?.closest(".channel") as HTMLElement | null)?.dataset
+      .channelId ?? "";
     let target: { channel: string; block: string } | null = null;
-    if (card && card.dataset.blockId && card.dataset.channelId) {
+    if (card && card.dataset.blockId) {
       const ok =
-        card.dataset.channelId !== r.source.channel &&
+        channelId !== r.source.channel &&
         card.dataset.blockId !== r.source.block;
       if (ok) {
-        target = { channel: card.dataset.channelId, block: card.dataset.blockId };
+        target = { channel: channelId, block: card.dataset.blockId };
       }
     }
     if (r.over) r.over.classList.remove("routing-target");
@@ -433,14 +440,20 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
     if (!r) return;
     // Re-hit-test at the actual release point, not the last move point.
     const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-    const card = (el?.closest("[data-block-id]") as HTMLElement | null);
+    // `closest("[data-block-id]")` from a handle descendant returns the handle
+    // span (which carries no `data-channel-id`); `closest(".block-card")` plus
+    // `.channel` resolves the channel for every pointer position over the card,
+    // including exactly on the output handle.
+    const card = (el?.closest(".block-card") as HTMLElement | null);
+    const channelId = (card?.closest(".channel") as HTMLElement | null)?.dataset
+      .channelId ?? "";
     let target: { channel: string; block: string } | null = null;
-    if (card && card.dataset.blockId && card.dataset.channelId) {
+    if (card && card.dataset.blockId) {
       const ok =
-        card.dataset.channelId !== r.source.channel &&
+        channelId !== r.source.channel &&
         card.dataset.blockId !== r.source.block;
       if (ok) {
-        target = { channel: card.dataset.channelId, block: card.dataset.blockId };
+        target = { channel: channelId, block: card.dataset.blockId };
       }
     }
     if (r.over) r.over.classList.remove("routing-target");
@@ -715,6 +728,14 @@ export function Chain() {
   return (
     <div
       class="chain-panel overflow-auto p-2.5 bg-[radial-gradient(120%_90%_at_50%_0%,#1a1c22_0%,#101116_70%)]"
+      onClick={(e) => {
+        const t = e.target as HTMLElement;
+        // Clicking empty space (not a routing line, not a block) clears the
+        // selected routing. The overlay is pointer-events:none so clicks on a
+        // line or block bypass this handler and each element handles its own.
+        if (t.closest("[data-routing-id]") || t.closest("[data-block-id]")) return;
+        selectRouting(null);
+      }}
     >
 
       <div class="chain-scroll relative grid gap-2.5" ref={chain}>
