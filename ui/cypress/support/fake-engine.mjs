@@ -10,8 +10,11 @@
 // `cy.visit()` starts from the same rig. No audio device is touched.
 
 import http from "node:http";
+import fs from "node:fs";
 import { WebSocketServer } from "ws";
 import { createSeedState, defaultParams, METERS } from "./seed.mjs";
+
+const BLOCK_MIME = "application/x-block-type"; // mirrors ui/src/dnd.ts
 
 const TUNER_DEFAULT = {
   active: true,
@@ -22,8 +25,6 @@ const TUNER_DEFAULT = {
   clarity: 0.94,
   reference: 440.0,
 };
-
-const BLOCK_MIME = "application/x-block-type"; // mirrors ui/src/dnd.ts
 
 function slugify(name) {
   const s = String(name)
@@ -49,8 +50,11 @@ export async function startFakeEngine({ port = 9400, host = "127.0.0.1" } = {}) 
 
   const stateEvent = () => JSON.stringify({ type: "event", event: "state", payload: state });
   const metersEvent = () => JSON.stringify({ type: "event", event: "meters", payload: METERS });
-
-const tunerEvent = () => JSON.stringify({ type: "event", event: "tuner", payload: tuner });
+  const tunerEvent = () => {
+  // Diagnostic: log the engine's tuner state to a file for the E2E spec to read.
+  fs.appendFileSync("/tmp/tuner_state.json", JSON.stringify({ ts: Date.now(), tuner: { ...tuner } }) + "\n");
+  return JSON.stringify({ type: "event", event: "tuner", payload: tuner });
+};
 
   const broadcast = () => {
     const text = stateEvent();
@@ -96,8 +100,6 @@ const tunerEvent = () => JSON.stringify({ type: "event", event: "tuner", payload
     "removeBlock",
     "moveBlock",
     "setSources",
-    "setInputGain",
-    "setMasterOutVolume",
     "createRouting",
     "removeRouting",
     "setEnabled",
@@ -192,16 +194,6 @@ const tunerEvent = () => JSON.stringify({ type: "event", event: "tuner", payload
         return commit();
       }
 
-      case "setInputGain": {
-        state.inputGain = clamp(Number(args.value), -60, 24);
-        return commit();
-      }
-
-      case "setMasterOutVolume": {
-        state.masterOutVolume = clamp(Number(args.value), -60, 12);
-        return commit();
-      }
-
       case "loadPreset": {
         if (!state.presets.includes(args.name)) throw new Error(`no such preset: ${args.name}`);
         state.preset = args.name;
@@ -280,11 +272,11 @@ const tunerEvent = () => JSON.stringify({ type: "event", event: "tuner", payload
   wss.on("connection", (ws) => {
     // Fresh rig per connection == fresh rig per `cy.visit()`.
     state = createSeedState();
-    tuner = { ...TUNER_DEFAULT };
     rev = 0;
     clients.add(ws);
     ws.send(stateEvent());
     ws.send(metersEvent());
+    ws.send(tunerEvent());
     const heartbeat = setInterval(() => {
       if (ws.readyState === ws.OPEN) {
         ws.send(metersEvent());
