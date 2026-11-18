@@ -294,13 +294,3 @@ export const select = (channel: string, block: string) => {
 export function selectBlockType(entry: BlockPayload | null): void {
   selectedBlockType.value = entry;
 }
-
-// Debug hook (removed before shipping).
-if (typeof window !== "undefined") {
-  (window as any).__pedal_notice = notice;
-  (window as any).__pedal_bridge = bridge;
-  (window as any).__pedal_init = init;
-  (window as any).__pedal_state = state;
-  (window as any).__pedal_ready = ready;
-  (window as any).__pedal_error = error;
-}
