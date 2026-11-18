@@ -98,6 +98,19 @@ export function seedRegistry() {
         num("mix", "Mix", 0, 100, 40, "%"),
       ],
     },
+    "time.pitchwhammy": {
+      name: "Pitch Whammy",
+      category: "Pitch",
+      params: [
+        num("pitch", "Pitch", -24, 12, 0, "st"),
+        num("rate", "Sweep rate", -480, 480, 120, "cents/s"),
+        choice("mode", "Mode", ["Classic", "Sweep", "Harmony"], 0),
+        num("glide", "Glide", 0, 3000, 80, "ms"),
+        num("feedback", "Feedback", 0, 95, 60, "%"),
+        num("mix", "Mix", 0, 100, 50, "%"),
+        num("sweep_gate", "Sweep gate", 0, 1, 0),
+      ],
+    },
     "util.gain": {
       name: "Gain",
       category: "Utility",
