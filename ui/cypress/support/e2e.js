@@ -31,6 +31,24 @@ Cypress.Commands.add("selectBlock", (channelIndex, blockIndex) => {
   cy.get(".editor-name").should("exist");
 });
 
+/** Click the channel "+" to open the add-block picker, filter by `type`, and
+ *  confirm the matching block. Closes the modal on selection. */
+Cypress.Commands.add("addBlock", (type, name) => {
+  // Wait for the engine state to land: the top bar shows the preset name only
+  // once `ready` is true (i.e. the snapshot has been folded into
+  // `state.value`). The "Connecting…" screen would otherwise mask the picker.
+  cy.get(".preset-name").should("not.contain", "Untitled");
+  cy.get(`[data-add="ch1"]`).should("be.visible");
+  cy.get(`[data-add="ch1"]`).invoke("click");
+  // Give the signal a tick so the picker remounts.
+  cy.wait(500);
+  cy.get(".modal").should("be.visible");
+  cy.get(".picker-search").type(type);
+  cy.get(".picker-body").find(`button[data-block-type="${type}"]`).should("be.visible");
+  cy.get(".picker-body").find(`button[data-block-type="${type}"]`).click();
+  cy.get(".modal").should("not.be.visible");
+});
+
 /**
  * Dispatch a pointer event with an explicit `pointerType`.
  *

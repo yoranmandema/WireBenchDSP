@@ -2,8 +2,10 @@ import type { JSX } from "preact";
 import { Knob } from "./Knob";
 import { catStyle } from "../theme";
 import { selected, setBypass, setParam, state } from "../state";
+import { useState } from "preact/hooks";
 import type { BlockSpec, ParamSpec } from "../protocol";
 import { ctrlName, emptyNote } from "../ui";
+import { ParametricEQ } from "./ParametricEQ";
 
 /** Format a parameter value with the unit the engine declares. */
 function formatParam(p: ParamSpec, v: number): string {
@@ -60,7 +62,73 @@ function ChoiceControl({
             {c}
           </button>
         ))}
+       </div>
+     </div>
+   );
+}
+
+/**
+ * The heel/toe expression pedal: a full-width position control that drives the
+ * whammy sweep gate. 0 = heel (return to the pitch set point), 100 = toe (max
+ * sweep position). The value is fed to the engine through the existing
+ * `setParam` model on `sweep_gate` — the engine card (t_02019ec2's build step)
+ * exposes this param, so the binding works once it lands.
+ */
+function ExpressionControl({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div class="expression-unit grid items-center justify-items-center gap-1 w-full pt-3">
+      <span class={`${ctrlName} ctrlName`}>Expression pedal</span>
+      <div class="expression-slider flex w-full items-center gap-3">
+        <input
+          class="expression-range flex-1 rounded border border-line bg-[var(--color-inset)] px-1.5 text-[10px] font-mono tabular-nums text-text"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round(value * 100)}
+          aria-label="Expression pedal: continuous position-controlled shift"
+          title="Expression pedal: heel return, toe sweep"
+          onInput={(e) => onChange(parseFloat((e.target as HTMLInputElement).value) / 100)}
+        />
+        <span class="text-[9px] tracking-[0.6px] text-muted font-semibold uppercase">Heel</span>
+        <span class="text-[9px] tracking-[0.6px] text-muted font-semibold uppercase">Toe</span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The footswitch: a toggle that engages/disengages the whammy sweep gate.
+ * Driven by the pedal's PC13 ready input; the UI mirrors the button.
+ * The value is fed to the engine through `setParam` on `sweep_gate` (see the
+ * `ExpressionControl` binding note for the same pattern).
+ */
+function FootswitchControl({
+  active,
+  onChange,
+}: {
+  active: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div class="footswitch-unit grid items-center justify-items-center gap-1 w-full">
+      <span class={`${ctrlName} ctrlName`}>Footswitch</span>
+      <button
+        class={`footswitch flex-1 min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3 text-[10px] font-semibold rounded-md border text-muted border-line-soft hover:text-text hover:border-line-hi transition-colors ${active ? "on text-amber border-amber-dim bg-[#2a2318] border-amber-edge shadow-[0_0_0_1px_var(--color-amber-dim)]" : ""}`}
+        role="switch"
+        aria-checked={active}
+        aria-label="Footswitch: engage or disengage the whammy sweep"
+        title={active ? "Disengage whammy sweep" : "Engage whammy sweep"}
+        onClick={() => onChange(!active)}
+      >
+        {active ? "Disengage" : "Engage"}
+      </button>
     </div>
   );
 }
@@ -94,6 +162,22 @@ export function Editor() {
   const knobs = params.filter((p) => p.kind !== "choice");
   const choices = params.filter((p) => p.kind === "choice");
 
+  const [sweepGate, setSweepGate] = useState(0);
+
+  /** The footswitch and expression drive the block's sweep gate. The engine
+   *  card (t_02019ec2's build step) exposes `sweep_gate` on the whammy block;
+   * the UI binds through the existing `setParam` model, so this works once it
+   * lands. Until then the local state is truth and the commands fail loudly
+   * (surfaced as a toast) instead of going silent. */
+  const setGate = (v: number): void => {
+    setSweepGate(v);
+    void setParam(sel.channel, sel.block, "sweep_gate", v);
+  };
+
+  const toggleFootswitch = (engaged: boolean): void => {
+    setGate(engaged ? 1 : 0);
+  };
+
   const resetAll = (): void => {
     for (const p of params) void setParam(sel.channel, sel.block, p.id, p.default);
   };
@@ -115,15 +199,23 @@ export function Editor() {
         </div>
       </div>
 
-      <div class="editor-controls grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4 min-w-0 w-full max-w-[var(--ui-ctrl-row)] mx-auto">
-        {params.length === 0 && <div class={`${emptyNote} editor-empty emptyNote`}>This block has no parameters.</div>}
-        {choices.map((p) => (
-          <ChoiceControl key={p.id} p={p} value={block.params[p.id] ?? p.default} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
-        ))}
-        {knobs.map((p) => (
-          <Knob key={p.id} name={p.name} value={block.params[p.id] ?? p.default} min={p.min} max={p.max} defaultValue={p.default} unit={p.unit} format={(v) => formatParam(p, v)} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
-        ))}
-      </div>
+      {block.type === "tone.eq" ? (
+        <ParametricEQ />
+      ) : (
+        <div class="editor-controls grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4 min-w-0 w-full max-w-[var(--ui-ctrl-row)] mx-auto">
+          {params.length === 0 && <div class={`${emptyNote} editor-empty emptyNote`}>This block has no parameters.</div>}
+          {choices.map((p) => (
+            <ChoiceControl key={p.id} p={p} value={block.params[p.id] ?? p.default} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
+          ))}
+          {knobs.map((p) => (
+            <Knob key={p.id} name={p.name} value={block.params[p.id] ?? p.default} min={p.min} max={p.max} defaultValue={p.default} unit={p.unit} format={(v) => formatParam(p, v)} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
+          ))}
+          <FootswitchControl active={sweepGate > 0} onChange={toggleFootswitch} />
+        </div>
+      )}
+      {block.type === "tone.eq" ? null : (
+        <ExpressionControl value={sweepGate} onChange={setSweepGate} />
+      )}
     </>
   );
 
