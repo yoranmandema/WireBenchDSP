@@ -31,7 +31,17 @@ export function TopBar() {
   };
 
   return (
-    <header class="topbar flex min-h-[var(--ui-topbar-h)] items-center gap-4.5 px-4 min-w-0 bg-linear-to-b from-[#1e2027] to-[#16171c] border-b border-line compact:flex-wrap compact:gap-y-2 compact:px-3 compact:py-2">
+    <header class="topbar flex min-h-[var(--ui-topbar-h)] items-center gap-4.5 px-4 min-w-0 bg-linear-to-b from-[#1e2027] to-[#16171c] border-b border-line compact:flex-wrap desk:flex-wrap compact:gap-y-2 compact:px-3 compact:py-2">
+      {/* The input trim knob: first child of the top bar, top left. */}
+      <HeaderKnob
+        label="Input"
+        value={s.inputGain ?? 0}
+        min={-60}
+        max={24}
+        defaultValue={0}
+        onChange={(v) => void setInputGain(v)}
+      />
+
       <div class="preset flex items-center gap-2 min-w-[230px] compact:flex-1 compact:min-w-0">
         <button class="nav size-6.5 rounded-key border border-line bg-raised-2 leading-none text-muted hover:border-line-hi hover:text-text" onClick={() => step(-1)} title="Previous preset">
           ‹

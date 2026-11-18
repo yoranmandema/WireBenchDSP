@@ -168,7 +168,11 @@ const mutate = (cmd: string, args?: Record<string, unknown>) =>
       const msg = e instanceof Error ? e.message : String(e);
       // A dropped socket is not a command failure: the reconnect greeting
       // brings the authoritative state. Say nothing.
-      if (msg !== "engine disconnected") notice.value = msg;
+      if (msg !== "engine disconnected") {
+        notice.value = msg;
+        // eslint-disable-next-line no-console
+        console.error("[mutate] notice=", msg);
+      }
     });
 
 export const setParam = (channel: string, block: string, param: string, value: number) =>
@@ -289,13 +293,4 @@ export const select = (channel: string, block: string) => {
  */
 export function selectBlockType(entry: BlockPayload | null): void {
   selectedBlockType.value = entry;
-}
-
-// Debug hook (removed before shipping).
-if (typeof window !== "undefined") {
-  (window as any).__pedal_bridge = bridge;
-  (window as any).__pedal_init = init;
-  (window as any).__pedal_state = state;
-  (window as any).__pedal_ready = ready;
-  (window as any).__pedal_error = error;
 }
