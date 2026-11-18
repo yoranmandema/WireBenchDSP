@@ -214,15 +214,12 @@ acceptance evidence for US-6.1.
 
 ## 9. Open items — need a human decision
 
-1. **Target interface:** which USB audio interface / codec (SGTL5000, WM8731, AK4558,
-   CS4272, or the host Mac's device) is the build bench-tested against? The level
-   budget (§3) is only final once the codec's LINEIN full-scale voltage is known.
-2. **Build or document-only:** do we commit to a physical bench build (schematic + BOM
-   to be reviewed), or keep the front end as a documented design guide with no hardware
-   build for this phase?
-3. **Gain/trim handling:** is the 2×–12× variable gain to be a single "input trim"
-   control on the pedal and UI, or a pair (input trim + master)? Confirm before the
-   circuit is drawn.
+1. **Bench build vs. document-only** (the only remaining blocker): does the team
+   commit to a physical bench build — reviewed schematic + BOM (see
+   `docs/design/analogue-frontend-circuit.md` §8), then the §7 bench test — or keep
+   the front end as a documented design guide with no build this phase?
 
-Leave once these are answered, then the spec can be converted into a
-schematic/BOM card for review and bench validation.
+The other two open items from the previous spec have been decided and are
+recorded in `analogue-frontend-circuit.md` §9 (codec = SGTL5000 per
+`ARCHITECTURE.md` §2; variable gain = MCP42H-101 digital pot 2×–12×, driven by the
+UI input-gain control).
