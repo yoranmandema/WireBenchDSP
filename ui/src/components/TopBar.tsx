@@ -32,7 +32,7 @@ export function TopBar() {
   };
 
   return (
-    <header class="topbar flex min-h-[var(--ui-topbar-h)] items-center gap-4.5 px-4 min-w-0 bg-linear-to-b from-[#1e2027] to-[#16171c] border-b border-line compact:flex-wrap compact:gap-y-2 compact:px-3 compact:py-2">
+    <header class="topbar flex min-h-[var(--ui-topbar-h)] items-center gap-4.5 px-4 min-w-0 bg-linear-to-b from-[#1e2027] to-[#16171c] border-b border-line compact:flex-wrap desk:flex-wrap compact:gap-y-2 compact:px-3 compact:py-2">
       {/* The input trim knob: first child of the top bar, top left. */}
       <HeaderKnob
         label="Input"

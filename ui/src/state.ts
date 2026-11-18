@@ -168,7 +168,11 @@ const mutate = (cmd: string, args?: Record<string, unknown>) =>
       const msg = e instanceof Error ? e.message : String(e);
       // A dropped socket is not a command failure: the reconnect greeting
       // brings the authoritative state. Say nothing.
-      if (msg !== "engine disconnected") notice.value = msg;
+      if (msg !== "engine disconnected") {
+        notice.value = msg;
+        // eslint-disable-next-line no-console
+        console.error("[mutate] notice=", msg);
+      }
     });
 
 export const setParam = (channel: string, block: string, param: string, value: number) =>
