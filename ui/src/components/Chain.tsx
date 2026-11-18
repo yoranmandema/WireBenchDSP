@@ -11,6 +11,7 @@ import {
   openBlockPicker,
   removeBlock,
   select,
+  selectRouting,
   createRouting,
   selected,
   setBypass,
@@ -727,6 +728,14 @@ export function Chain() {
   return (
     <div
       class="chain-panel overflow-auto p-2.5 bg-[radial-gradient(120%_90%_at_50%_0%,#1a1c22_0%,#101116_70%)]"
+      onClick={(e) => {
+        const t = e.target as HTMLElement;
+        // Clicking empty space (not a routing line, not a block) clears the
+        // selected routing. The overlay is pointer-events:none so clicks on a
+        // line or block bypass this handler and each element handles its own.
+        if (t.closest("[data-routing-id]") || t.closest("[data-block-id]")) return;
+        selectRouting(null);
+      }}
     >
 
       <div class="chain-scroll relative grid gap-2.5" ref={chain}>
