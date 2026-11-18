@@ -1,9 +1,10 @@
 import type { JSX } from "preact";
 import { Knob } from "./Knob";
+import { LooperEditor } from "./LooperEditor";
 import { catStyle } from "../theme";
 import { selected, setBypass, setParam, state } from "../state";
 import type { BlockSpec, ParamSpec } from "../protocol";
-import { ctrlName, emptyNote } from "../ui";
+import { emptyNote, ctrlName } from "../ui";
 
 /** Format a parameter value with the unit the engine declares. */
 function formatParam(p: ParamSpec, v: number): string {
@@ -12,11 +13,9 @@ function formatParam(p: ParamSpec, v: number): string {
   return `${v.toFixed(decimals)}${p.unit ? ` ${p.unit}` : ""}`;
 }
 
-/**
- * A `choice` parameter. A knob is the wrong control for a small set of named
- * options, so these render as a segmented row (or a dropdown when there are
- * too many to lay out).
- */
+/** A `choice` parameter. A knob is the wrong control for a small set of named
+ *  options, so these render as a segmented row (or a dropdown when there are
+ *  too many to lay out). */
 function ChoiceControl({
   p,
   value,
@@ -35,7 +34,11 @@ function ChoiceControl({
     return (
       <label class="select-unit grid items-center justify-items-center gap-1 w-full col-span-2">
         <span class={`${ctrlName} ctrlName`}>{p.name}</span>
-        <select class="select textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3" value={current} onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}>
+        <select
+          class="select textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3"
+          value={current}
+          onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}
+        >
           {choices.map((c, i) => (
             <option key={c} value={i}>{c}</option>
           ))}
@@ -93,6 +96,10 @@ export function Editor() {
   const params = spec?.params ?? [];
   const knobs = params.filter((p) => p.kind !== "choice");
   const choices = params.filter((p) => p.kind === "choice");
+
+  if (block.type === "time.looper") {
+    return <LooperEditor />;
+  }
 
   const resetAll = (): void => {
     for (const p of params) void setParam(sel.channel, sel.block, p.id, p.default);
