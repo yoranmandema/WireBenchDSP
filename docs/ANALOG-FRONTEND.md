@@ -94,7 +94,7 @@ battery).
 * **Never** feed 9 V straight into a 3.3 V board. Use a regulator.
 * Decouple every IC: 100 nF ceramic at each power pin, plus 10–100 µF bulk
   near the regulator.
-* The H723 board wants 5 V on the USB/VIN pin or 3.3 V on the 3V3 pin — check
+* The Pi 5 board wants 5 V on its USB/VIN pins; the audio interface supplies 3V3 for the codec — check the schematic before powering.
   the schematic before powering.
 
 ### Grounding
@@ -148,7 +148,8 @@ If it doesn't work, check in this order:
 1. **Power** — is 3V3 actually 3V3? Is the regulator warm (shorted)?
 2. **Ground** — is everything connected? A floating ground gives phantom
    behaviour.
-3. **Clock** — does the H723 run at all? Blink an LED first.
+3. **Audio interface** — does it enumerate and power up? Check its status LED
+   first.
 4. **Codec** — does I2C ack? Read the chip ID (should be 0xA0xx).
 5. **I2S** — is MCLK present? Is BICK toggling? A scope or logic analyser
    answers this in seconds.
