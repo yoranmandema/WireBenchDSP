@@ -150,7 +150,8 @@ export function authorName(m: ModelRecord): string {
 /** All author text to search: name + username. */
 export function authorText(m: ModelRecord): string {
   const a = m.metadata.author;
-  return [a.name, a.username].filter(Boolean).join(" ");
+  const u = a.username && a.username.toLowerCase() !== (a.name ?? "").toLowerCase() ? a.username : "";
+  return [a.name, u].filter(Boolean).join(" · ");
 }
 
 /** Top-3 tags for the list row, lowercase. */
