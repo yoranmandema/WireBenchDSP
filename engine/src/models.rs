@@ -111,7 +111,19 @@ impl Models {
             .cloned()
             .ok_or_else(|| format!("no such model: {id}"))?;
         let local = self.download(&record)?;
-        serde_json::to_value(&local).map_err(|e| e.to_string())
+        // Spec §10: the payload is `{ id, local_path, local }`, not the bare
+        // LocalState — the UI needs the stored relative path to mark the row
+        // downloaded without re-paging the whole result set.
+        let local_path = record
+            .local_path
+            .clone()
+            .unwrap_or_else(|| self.local_path(&record));
+        serde_json::to_value(&serde_json::json!({
+            "id": record.id,
+            "local_path": local_path,
+            "local": local,
+        }))
+        .map_err(|e| e.to_string())
     }
 
     /// Download a single model and update the index.
