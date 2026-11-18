@@ -87,8 +87,9 @@ The UI renders the per-band parameter columns only for the currently active band
   `dynamics.compressor`: `pedal_dsp::envelope::EnvelopeFollower` (`process(input[i].abs())`),
   one instance per band. Attack/release time constants are computed in `prepare` from the host
   sample rate and stored by value. No dynamic allocation; the envelope state is `f32` only.
-* **Detector level (dB):** `level_db = lin_to_db(max(level, 1e-9))` — matches the existing
-  `lin_to_db` floor so silence yields a finite negative value.
+* **Detector level (dB):** `level_db = lin_to_db(max(level, 1e-4))` — matches the existing
+  `dynamics.compressor` floor (`max(level, 1e-4)` ⇒ ≈ −80 dB) so silence maps to a finite,
+  negative dB value and never reaches `lin_to_db`.
 * **Gain computer (dB domain, no knee in v1):**
   ```
   excess   = level_db - threshold
@@ -116,8 +117,9 @@ The UI renders the per-band parameter columns only for the currently active band
 * **No locks.** The block holds only `f32` coefficients + per-band `EnvelopeFollower` (no atomics,
   no mutex). Parameter reads within a `process` call are safe because the executor snapshots
   params into the context and applies updates between frames/blocks.
-* **Denormal handling:** the detector floors its input at `1e-9` (matching `lin_to_db`) so it
-  never receives denormals; `db_to_lin`/`lin_to_db` use `libm` and are well-conditioned. The
+* **Denormal handling:** the detector floors its input at `1e-4` (matching the existing
+  `dynamics.compressor`) so the envelope follower never receives denormals; `db_to_lin`/
+  `lin_to_db` use `libm` and are well-conditioned. The
   biquad coefficients are computed with `libm` and are normalized at design time, so no
   denormal passes into the recombine sum. (Host may still flush denormals-to-zero; the block
   is denormal-clean as written.)
@@ -134,9 +136,9 @@ The UI renders the per-band parameter columns only for the currently active band
 * After each process block the block snapshots per-band values into a `Meters`-shaped
   per-block struct; the executor copies it into the global `Meters` (the server broadcasts this
   every 100 ms as `event: meters`).
-* `Meters` is extended from `{ in, out, cpu, xruns }` to:
+* `Meters` is extended from `{ in_peak, out_peak, xruns }` (see `engine/src/audio.rs`) to:
   ```
-  { in, out, cpu, xruns, bands: ReadonlyArray<{ band: string; gr_db: number; out_db: number }> }
+  { in_peak, out_peak, xruns, bands: ReadonlyArray<{ band: string; gr_db: number; out_db: number }> }
   ```
   where `band` is `band_1`…`band_N` and `gr_db`/`out_db` are the latest peak values.
 * **UI:** the multiband param editor shows a per-band "GR" column rendered as a horizontal
