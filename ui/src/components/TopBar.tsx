@@ -1,4 +1,4 @@
-import { meters, presetsOpen, state, loadPreset, setSource, setInputGain, tunerOpen } from "../state";
+import { meters, presetsOpen, state, loadPreset, setSource, setInputGain, setMasterOutVolume, tunerOpen, bufferSizeOptions, setConfig } from "../state";
 import { HeaderKnob } from "./HeaderKnob";
 import { TunerIcon } from "./Icon";
 
@@ -100,6 +100,39 @@ export function TopBar() {
           <span class="cpu-value text-[11px] tabular-nums text-text">{meters.value.cpu.toFixed(0)}%</span>
           <span class="cpu-label text-[9px] tracking-[0.6px] text-muted">DSP</span>
         </div>
+        {/* Latency readout: one-way IN/OUT and round-trip TOTAL, in ms. */}
+        <div class="latency flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-mono tabular-nums bg-[#1a1b21] border border-line rounded-md px-2 py-1.5">
+          <span class="text-muted">IN</span>
+          <span class="text-amber">{s.oneWayLatencyMs.toFixed(2)}</span>
+          <span class="text-muted">OUT</span>
+          <span class="text-amber">{s.oneWayLatencyMs.toFixed(2)}</span>
+          <span class="text-muted">TOT</span>
+          <span class="text-amber">{s.roundTripLatencyMs.toFixed(2)}</span>
+          <span class="text-muted">ms</span>
+        </div>
+        {/* Buffer-size control: a dropdown populated from the engine's supported
+            options (128/256/512 by default). Changing it re-routes the audio
+            streams; the engine replies with a fresh snapshot. */}
+        <label class="buffer-select grid items-center justify-items-center gap-1">
+          <span class="ctrlName">BUFFER</span>
+          <select
+            class="textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3"
+            value={s.bufferFrames}
+            onChange={(e) => void setConfig(Number((e.target as HTMLSelectElement).value))}
+            title="Change I/O buffer size"
+          >
+            {bufferSizeOptions.value.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </label>
+        {/* The master output knob: last child of the top-right area, top right. */}
+        <HeaderKnob
+          label="Master"
+          value={s.masterOutVolume ?? 0}
+          min={-60}
+          max={12}
+          defaultValue={0}
+          onChange={(v) => void setMasterOutVolume(v)}
+        />
       </div>
     </header>
   );
