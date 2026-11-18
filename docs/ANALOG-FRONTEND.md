@@ -95,7 +95,6 @@ battery).
 * Decouple every IC: 100 nF ceramic at each power pin, plus 10–100 µF bulk
   near the regulator.
 * The Pi 5 board wants 5 V on its USB/VIN pins; the audio interface supplies 3V3 for the codec — check the schematic before powering.
-  the schematic before powering.
 
 ### Grounding
 
@@ -125,7 +124,7 @@ Hum and buzz come from ground loops.
 |---|---|
 | Potentiometer | 3V3 — wiper — GND; wiper to an ADC pin. 10 kΩ linear. Add 100 nF across the ends to stop crackles. |
 | Expression pedal | Same as a pot, but a TRS jack: tip = wiper, one end to 3V3, the other to GND. |
-| Footswitch | Between the MCU pin and GND; enable the internal pull-up. Debounce in firmware (10–20 ms). |
+| Footswitch | Footswitch on the audio interface's footswitch input, bound to a control through the UI's control-binding layer and debounced on the host (10–20 ms). |
 
 **Always** put a 100 nF capacitor across a pot's ends and a 1 kΩ series
 resistor on the ADC pin. It costs nothing and removes noise and ESD risk.
