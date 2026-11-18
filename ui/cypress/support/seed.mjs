@@ -154,6 +154,8 @@ export function createSeedState() {
     presets: ["00-blank", "01-clean", "02-lead"],
     inputGain: 0,
     masterOutVolume: 0,
+    oneWayLatencyMs: 5.33,
+    roundTripLatencyMs: 10.67,
     source: "riff",
     registry,
     routings: [],
