@@ -1,4 +1,4 @@
-import { meters, presetsOpen, state, loadPreset, setSource, tunerOpen } from "../state";
+import { meters, presetsOpen, state, loadPreset, setSource, setInputGain, tunerOpen } from "../state";
 import { TunerIcon } from "./Icon";
 
 const SLOTS = ["A", "B", "C", "D", "E", "F", "G", "H"];
