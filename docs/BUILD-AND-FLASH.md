@@ -1,46 +1,58 @@
-# Building, flashing and debugging
+# Building, testing and deploying
 
-## Toolchain (already installed on this machine)
+## Toolchain
 
-| Tool | Version | Purpose |
-|---|---|---|
-| rustc / cargo | 1.99.1 | Host + cross compilation |
-| Rust targets | — | `x86_64-apple-darwin` (Mac), `aarch64-unknown-linux-gnu` (Linux/Pi 5) |
+The same host toolchain is used for macOS development, Linux/Pi 5
+deployment and any target cpal can reach. No embedded cross-compilation
+toolchain is needed for the active path.
 
-Install a target:
-
-```bash
-rustup target add x86_64-apple-darwin aarch64-unknown-linux-gnu
-```
+| Tool | Purpose |
+|---|---|
+| rustc / cargo | Host compiler for all crates |
+| cpal | Audio device I/O (CoreAudio / ALSA / WASAPI) |
+| Vite + pnpm | UI bundling (shell/) |
 
 ## Build
 
 ```bash
-cargo build --release
+# engine — the audio process (build once, runs on any cpal host)
+cargo build -p pedal-engine --release
+
+# simulator — offline signal generation, no audio device needed
+cargo run -p host-sim --release -- --rig demo --bench
 ```
 
-## Run
+## Run the desktop app
+
+From the repo root:
 
 ```bash
-cargo run --release
+./shell/run.sh dev        # dev: Vite UI + engine, debug shell
+./shell/run.sh ship       # rebuild and open the shipped Pedal.app
 ```
 
-## Verify
+`dev` loads Vite's dev URL and needs the Vite server to stay running; `ship`
+produces a self-contained app with the custom-protocol feature enabled. See
+`docs/RUN-THE-APP.md`.
+
+## Testing
 
 ```bash
-cargo test
+cargo test --workspace       # dsp, graph, host-sim, engine suites
 ```
 
-## Debug
+Cross-platform CI runs this on macOS and Linux.
 
-### Logging
+## Pi 5 deployment (later, hardware-dependent)
 
-Run the engine with `--features custom-protocol` and connect via the UI's
-dev server. Logs appear on stdout.
+When the Pi 5 and a USB audio interface are available, the same engine
+binary builds and runs under cpal's ALSA backend:
 
-## Common failures
+```bash
+cargo build -p pedal-engine --release
+./target/release/pedal-engine --rig <preset>
+```
 
-| Symptom | Cause |
-|---|---|
-| `cargo test` fails with linking errors | Missing target: `rustup target add aarch64-unknown-linux-gnu` |
-| Dev build loads dev URL | Run `tauri build --features custom-protocol` (see AGENTS.md) |
+The DSP, graph and host-sim crates need no changes. Packaging the
+fullscreen touchscreen app and its control bindings is parked until the
+hardware is available (see `docs/ROADMAP.md`).
