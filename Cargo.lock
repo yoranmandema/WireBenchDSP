@@ -2789,6 +2789,7 @@ dependencies = [
  "dsp-graph",
  "futures-util",
  "pedal-dsp",
+ "pedal-health",
  "rtrb",
  "serde",
  "serde_json",
@@ -2803,6 +2804,10 @@ dependencies = [
  "dsp-graph",
  "serde_json",
 ]
+
+[[package]]
+name = "pedal-health"
+version = "0.1.0"
 
 [[package]]
 name = "pedal-shell"

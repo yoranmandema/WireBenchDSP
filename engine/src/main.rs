@@ -13,6 +13,7 @@
 //! pedal can boot on a bench or a Pi with nothing attached. `--bench <seconds>`
 //! then measures the CPU cost of the rig and exits.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -171,6 +172,21 @@ async fn main() {
     };
 
     pedal_engine::tuner::spawn(tuner_ring, setup.sample_rate, meters.clone());
+
+    // Health monitor: every ~1 s, read the SoC temperature, the
+    // `vcgencmd get_throttled` flags (decoded) and the current ARM clock,
+    // append one timestamped CSV line, and print a clear alarm when any
+    // undervoltage or throttle bit is set. Runs unchanged on the Pi and on
+    // dev machines; every field degrades to `n/a` where the host lacks the
+    // Pi's sysfs / vcgencmd.
+    let health_log = std::env::var("PEDAL_HEALTH_LOG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| format!("pedal-health-{}.log", std::process::id()));
+    tokio::spawn(async move {
+        if let Err(e) = pedal_health::monitor::HealthMonitor::new(health_log, 1.0).run() {
+            eprintln!("pedal-health: monitor error: {e}");
+        }
+    });
 
     // --- IPC ---------------------------------------------------------------
     let sh = Arc::new(Shared::new(handle, registry, source, store));
