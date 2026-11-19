@@ -370,6 +370,8 @@ impl Block for PrecisionDrive {
             let e = (self.ef.process(x.abs()) / 0.5).clamp(0.0, 1.0);
             drive_eff = gain * (1.0 - tightness * e);
             self.shaper.set_drive(drive_eff);
+            self.shaper.set_mix(1.0);
+            self.shaper.set_level(1.0);
             x = self.shaper.process(x);
             x = self.tone.process(x);
             output[i] = x * pedal_dsp::util::db_to_lin(volume);
@@ -770,6 +772,7 @@ impl Block for Chorus {
         }
     }
 }
+
 /// The graph's input node. The executor writes the raw input into this node's
 /// output buffer before running the steps.
 #[derive(Default)]
@@ -2378,35 +2381,328 @@ impl Block for Tremolo {
         self.lfo.reset();
     }
 }
-pub fn builtin_registry() -> crate::Registry {
-    let mut r = crate::Registry::new();
-    r.add::<IoInput>();
-    r.add::<IoOutput>();
-    r.add::<Gain>();
-    r.add::<MixSum>();
-    r.add::<Sum>();
-    r.add::<Master>();
-    r.add::<Overdrive>();
-    r.add::<TubeScreamer>();
-    r.add::<PrecisionDrive>();
-    r.add::<Klon>();
-    r.add::<BigMuff>();
-    r.add::<Amp>();
-    r.add::<Cab>();
-    r.add::<ToneStack>();
-    r.add::<Delay>();
-    r.add::<PitchDelay>();
-    r.add::<Reverb>();
-    r.add::<ShimmerReverb>();
-    r.add::<Nam>();
-    r.add::<Compressor>();
-    r.add::<MultibandCompressor>();
-    r.add::<Gate>();
-    r.add::<Tremolo>();
-    r.add::<Octaver>();
-    r.add::<Chorus>();
-    r
-}
+/// The Looper effect (Time category).  Records a take into a fixed
+        /// circular buffer and plays it back with a constant-power, two-head
+        /// crossfade at the loop boundary; overdub appends with feedback and
+        /// decay; clear resets.
+        #[derive(Default)]
+        pub struct Looper {
+            inner: Option<LooperInner>,
+        }
+
+        /// A fixed-size circular buffer for loop recording and playback.
+        /// Real-time safe: no allocation, locking, or blocking in the audio
+        /// path.  `N` is the number of samples (the maximum loop length).
+        struct LoopBuffer<const N: usize> {
+            buf: [f32; N],
+            cursor: usize,
+            read: usize,
+        }
+
+        impl<const N: usize> LoopBuffer<N> {
+            pub fn new() -> Self {
+                Self { buf: [0.0; N], cursor: 0, read: 0 }
+            }
+
+            fn w(&self, i: usize) -> usize {
+                // Sample-accurate wrap.  `N` is always 480_000, which is much
+                // larger than the 256-sample block size, so the write head can
+                // never wrap mid-block (a wrap would corrupt the crossfade seam).
+                if i >= N {
+                    i % N
+                } else {
+                    i
+                }
+            }
+
+            pub fn write(&mut self, sample: f32) {
+                self.buf[self.cursor] = sample;
+                self.cursor = self.w(self.cursor + 1);
+            }
+
+            pub fn read(&self, pos: usize) -> f32 {
+                self.buf[self.w(pos)]
+            }
+
+            pub fn reset(&mut self) {
+                self.buf = [0.0; N];
+                self.cursor = 0;
+                self.read = 0;
+            }
+        }
+
+        /// Maximum loop length: 10 s of audio at 48 kHz.
+        const LOOP_MAX_SAMPLES: usize = 480_000;
+        /// Half the buffer, used as the constant-power crossfade region.
+        const LOOP_HALF: usize = LOOP_MAX_SAMPLES / 2;
+
+        #[derive(Clone, Copy, PartialEq)]
+        enum State {
+            Idle,
+            Recording,
+            Playing,
+            Overdubbing,
+            Stopped,
+        }
+
+        struct LooperInner {
+            buf: LoopBuffer<{ LOOP_MAX_SAMPLES }>,
+            cursor: usize,
+            read: usize,
+            delay: usize,
+            state: State,
+            gate_held: [bool; 5],
+            take_start: u64,
+            sample_count: u64,
+            /// Set when `trig_clear` fires: the buffer is zeroed and playback is
+            /// silent until a new take is recorded.
+            cleared: bool,
+        }
+
+        impl LooperInner {
+            fn reset(&mut self) {
+                self.buf.reset();
+                self.cursor = 0;
+                self.read = 0;
+                self.delay = 0;
+                self.state = State::Idle;
+                self.gate_held = [false; 5];
+                self.take_start = 0;
+                self.sample_count = 0;
+                self.cleared = false;
+            }
+        }
+        impl Default for LooperInner {
+            fn default() -> Self {
+                Self {
+                    buf: LoopBuffer::new(),
+                    cursor: 0,
+                    read: 0,
+                    delay: 0,
+                    state: State::Idle,
+                    gate_held: [false; 5],
+                    take_start: 0,
+                    sample_count: 0,
+                    cleared: false,
+                }
+            }
+        }
+
+        impl Looper {
+            fn inner(&mut self) -> &mut LooperInner {
+                self.inner.get_or_insert_with(LooperInner::default)
+            }
+        }
+impl Block for Looper {
+            fn spec(&self) -> BlockSpec {
+                BlockSpec {
+                    id: "time.looper",
+                    name: "Looper",
+                    category: Category::Time,
+                    inputs: vec![PortSpec::audio("in")],
+                    outputs: vec![PortSpec::audio("out")],
+                    params: vec![
+                        ParamSpec { id: "trig_record", name: "Record", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "trig_play", name: "Play", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "trig_overdub", name: "Overdub", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "trig_stop", name: "Stop", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "trig_clear", name: "Clear", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "time", name: "Loop length", unit: Unit::Milliseconds, min: 250.0, max: 10000.0, default: 1000.0, curve: Curve::Log },
+                        ParamSpec { id: "feedback", name: "Feedback", unit: Unit::Percent, min: 0.0, max: 95.0, default: 35.0, curve: Curve::Linear },
+                        ParamSpec { id: "mix", name: "Mix", unit: Unit::Percent, min: 0.0, max: 100.0, default: 100.0, curve: Curve::Linear },
+                        ParamSpec { id: "level", name: "Level", unit: Unit::Percent, min: 0.0, max: 100.0, default: 100.0, curve: Curve::Linear },
+                        ParamSpec { id: "half", name: "Half speed", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "reverse", name: "Reverse", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                    ],
+                    controls_in: vec![],
+                    controls_out: vec![],
+                }
+            }
+
+            fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
+                self.inner = Some(LooperInner::default());
+                Ok(())
+            }
+
+            fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+                let c = self.inner();
+                let n = ctx.n;
+                if n == 0 {
+                    return Ok(());
+                }
+
+                // --- Snapshot parameters (executor snapshot, per-frame safety) ------
+                let trig_record = ctx.param(0);
+                let trig_play = ctx.param(1);
+                let trig_overdub = ctx.param(2);
+                let trig_stop = ctx.param(3);
+                let trig_clear = ctx.param(4);
+                let time_ms = ctx.param(5);
+                let feedback = ctx.param(6) / 100.0;
+                let mix = ctx.param(7) / 100.0;
+                let level = ctx.param(8) / 100.0;
+                let half = ctx.param(9) >= 0.5;
+                let reverse = ctx.param(10) >= 0.5;
+
+                // --- Trigger sample-and-hold; detect rising edges --------------------
+                let rec = trig_record >= 0.5 && !c.gate_held[0];
+                let play = trig_play >= 0.5 && !c.gate_held[1];
+                let ovd = trig_overdub >= 0.5 && !c.gate_held[2];
+                let stop = trig_stop >= 0.5 && !c.gate_held[3];
+                let clr = trig_clear >= 0.5 && !c.gate_held[4];
+                c.gate_held = [rec, play, ovd, stop, clr];
+
+                // --- State machine ----------------------------------------------------
+                // Record/Play/Overdub are idempotent while already in that state;
+                // Stop and Clear are the only ones that force a transition out.
+                match c.state {
+                    State::Idle => {
+                        if rec { c.state = State::Recording; c.take_start = c.sample_count; }
+                        else if ovd { c.state = State::Overdubbing; c.take_start = c.sample_count; }
+                        else if play { c.state = State::Playing; c.take_start = c.sample_count; }
+                        else if stop { c.state = State::Stopped; }
+                        else if clr { c.state = State::Stopped; c.cleared = true; }
+                    }
+                    State::Recording => {
+                        if play { c.state = State::Playing; }
+                        else if ovd { c.state = State::Overdubbing; }
+                        else if stop { c.state = State::Stopped; }
+                        else if clr { c.state = State::Stopped; c.cleared = true; }
+                        else if rec { c.state = State::Stopped; } // Record falling.
+                        // held Record: stay in Recording
+                    }
+                    State::Playing => {
+                        if ovd { c.state = State::Overdubbing; }
+                        else if stop { c.state = State::Stopped; }
+                        else if clr { c.state = State::Stopped; c.cleared = true; }
+                        else if play { c.state = State::Stopped; } // Play falling.
+                        // held Play: stay in Playing
+                    }
+                    State::Overdubbing => {
+                        if ovd { c.state = State::Playing; } // Overdub falling.
+                        else if stop { c.state = State::Stopped; }
+                        else if clr { c.state = State::Stopped; c.cleared = true; }
+                        // held Overdub: stay in Overdubbing
+                    }
+                    State::Stopped => {
+                        if rec { c.state = State::Recording; }
+                        else if ovd { c.state = State::Overdubbing; }
+                        else if play { c.state = State::Playing; }
+                        // Stop/Clear held: stay in Stopped
+                    }
+                }
+
+                // Finalising triggers: the take ends, and the clear zeroes the
+                // buffer for a fresh take.
+                if clr {
+                    c.buf.reset();
+                }
+
+                // Loop length in samples (clamped to the buffer size).
+                let time_samples = (time_ms * ctx.sample_rate / 1000.0).round() as usize;
+                let time_samples = time_samples.max(250).min(LOOP_MAX_SAMPLES);
+
+                for i in 0..n {
+                    c.sample_count += 1;
+
+                    match c.state {
+                        State::Idle | State::Stopped => {
+                            if c.cleared {
+                                ctx.outputs[0][i] = 0.0;
+                            } else {
+                                ctx.outputs[0][i] = ctx.inputs[0][i];
+                            }
+                        }
+                        State::Recording => {
+                            // Write input into the buffer (record phase).
+                            c.buf.write(ctx.inputs[0][i]);
+                            c.cursor = c.buf.w(c.cursor + 1);
+                            c.read = 0;
+                            c.delay = c.cursor;
+                            // Auto-end recording when the buffer is full.
+                            if c.delay >= LOOP_MAX_SAMPLES {
+                                c.state = State::Stopped;
+                                c.read = 0;
+                            }
+                            ctx.outputs[0][i] = ctx.inputs[0][i];
+                        }
+                        State::Playing | State::Overdubbing => {
+                            let r = c.read;
+                            let dir = if reverse { -1 } else { 1 };
+                            let speed = if half { 2 } else { 1 };
+                            let next = c.buf.w((r as i32 + dir * speed) as usize);
+                            c.read = next;
+
+                            // Constant-power two-head read at the loop
+                            // boundary: out = cos(t·π/2)·a + sin(t·π/2)·b.
+                            let a = c.buf.read(r);
+                            let b = c.buf.read(c.buf.w(r + LOOP_HALF));
+                            let t = ((r % LOOP_HALF) as f32) / (LOOP_HALF as f32);
+                            let theta = t * core::f32::consts::PI / 2.0;
+                            let out = theta.cos() * a + theta.sin() * b;
+
+                            // 512-sample linear fade-in from take start.
+                            let fade_in = ((c.sample_count.saturating_sub(c.take_start)) as f32 / 512.0).min(1.0);
+
+                            let wet = out * fade_in * feedback;
+                            if c.state == State::Overdubbing {
+                                c.buf.write(ctx.inputs[0][i] + wet);
+                            } else {
+                                c.buf.write(wet);
+                            }
+                            c.cursor = c.buf.w(c.cursor + 1);
+
+                            // Loop length = write head position minus read head.
+                            c.delay = (c.cursor - c.read + LOOP_MAX_SAMPLES) % LOOP_MAX_SAMPLES;
+
+                            // Output: dry + wet.
+                            let dry = ctx.inputs[0][i] * (1.0 - mix);
+                            let wet_out = out * fade_in * mix * level;
+                            ctx.outputs[0][i] = dry + wet_out;
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+
+            fn reset(&mut self) {
+                if let Some(c) = &mut self.inner {
+                    c.reset();
+                }
+            }
+        }
+
+        pub fn builtin_registry() -> crate::Registry {
+            let mut r = crate::Registry::new();
+            r.add::<IoInput>();
+            r.add::<IoOutput>();
+            r.add::<Gain>();
+            r.add::<MixSum>();
+            r.add::<Sum>();
+            r.add::<Master>();
+            r.add::<Overdrive>();
+            r.add::<TubeScreamer>();
+            r.add::<PrecisionDrive>();
+            r.add::<Klon>();
+            r.add::<BigMuff>();
+            r.add::<Amp>();
+            r.add::<Cab>();
+            r.add::<ToneStack>();
+            r.add::<Delay>();
+            r.add::<PitchDelay>();
+            r.add::<Reverb>();
+            r.add::<ShimmerReverb>();
+            r.add::<Nam>();
+            r.add::<Compressor>();
+            r.add::<MultibandCompressor>();
+            r.add::<Gate>();
+            r.add::<Tremolo>();
+            r.add::<Octaver>();
+            r.add::<Chorus>();
+            r.add::<Looper>();
+            r
+        }
 /// A four-input summer. The output stage of a multi-channel rig: every
 /// channel master feeds one input, so the pedal's output is their sum.
 #[derive(Default)]
