@@ -6,6 +6,7 @@ use crate::prelude::*;
 use crate::overdrive::{InputHpf, ToneStage};
 use pedal_dsp::{
     Biquad, BiquadKind, EnvelopeFollower, Freeverb, Lfo, PitchShifter, resample,
+    waveshape::{Shaper, ShaperKind},
     delay::DelayLine, util::{clamp, smoothing_coef_ms},
 };
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -370,6 +371,8 @@ impl Block for PrecisionDrive {
             let e = (self.ef.process(x.abs()) / 0.5).clamp(0.0, 1.0);
             drive_eff = gain * (1.0 - tightness * e);
             self.shaper.set_drive(drive_eff);
+            self.shaper.set_mix(1.0);
+            self.shaper.set_level(1.0);
             x = self.shaper.process(x);
             x = self.tone.process(x);
             output[i] = x * pedal_dsp::util::db_to_lin(volume);
@@ -933,7 +936,6 @@ impl Block for Delay {
 // ---------------------------------------------------------------------------
 // Amp, cab, pitch delay, master
 // ---------------------------------------------------------------------------
-use pedal_dsp::waveshape::{Shaper, ShaperKind};
 use pedal_dsp::{DcBlocker, PitchMode};
 /// The amp voicing a `Choice` param selects.
 const AMP_VOICES: &[&str] = &["Clean", "Crunch", "Lead"];
@@ -1936,7 +1938,7 @@ impl Default for MultibandCompressor {
             makeups: [0.0; 4],
             bypass: [false; 4],
             solo: [false; 4],
-            envs: [EnvelopeFollower::new(1.0, 50.0, 48_000.0); 4],
+            envs: core::array::from_fn(|_| EnvelopeFollower::new(1.0, 50.0, 48_000.0)),
             dry_wet: 100.0,
             output_gain: 0.0,
             gr_db: [0.0; 4],
