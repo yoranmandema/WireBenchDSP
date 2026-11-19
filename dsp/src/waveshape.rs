@@ -21,6 +21,11 @@ pub enum ShaperKind {
     RectifyFull,
     Bitcrush,
     Decimator,
+    /// Two-stage "diode-like" clip: `y = tanh_approx(g * tanh_approx(x))`.
+    /// A single-pole diode would be just `tanh_approx(g * x)`; feeding the
+    /// output of one tanh into a second tanh pushes the transfer curve
+    /// further toward a hard clip while keeping even harmonics low.
+    DiodeClip,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +175,7 @@ impl Shaper {
             ShaperKind::RectifyHalf => d.max(0.0),
             ShaperKind::RectifyFull => d.abs(),
             ShaperKind::Bitcrush | ShaperKind::Decimator => d,
+            ShaperKind::DiodeClip => tanh_approx(self.drive * tanh_approx(x)),
         }
     }
 
