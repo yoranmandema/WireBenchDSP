@@ -204,7 +204,7 @@ fn looper_record_plays_reproduces_input() {
         ex.set_param_real("lo", "trig_overdub", 0.0).unwrap();
         ex.set_param_real("lo", "trig_stop", 0.0).unwrap();
         ex.set_param_real("lo", "trig_clear", 0.0).unwrap();
-        let mut out = ex.run(&vec![0.0f32; take + BLOCK], take + BLOCK).unwrap();
+        let out = ex.run(&vec![0.0f32; take + BLOCK], take + BLOCK).unwrap();
 
         // The playback should contain the recorded take (the input during
         // phase B is zero, so any signal in the output is the loop).
