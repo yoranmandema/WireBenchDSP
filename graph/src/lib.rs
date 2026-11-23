@@ -5,6 +5,7 @@
 //! macOS, Linux, and the Pi.
 
 pub mod blocks;
+pub mod overdrive;
 pub mod doc;
 pub mod block;
 pub mod executor;
