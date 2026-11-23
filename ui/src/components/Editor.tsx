@@ -9,6 +9,7 @@ import { ctrlName, emptyNote } from "../ui";
 import { AddBlockPicker } from "./AddBlockModal";
 import { GraphicEqEditor } from "./GraphicEqEditor";
 import { ParametricEQ } from "./ParametricEQ";
+import { MultibandCompressorPanel } from "./MultibandCompressorPanel";
 
 /** Format a parameter value with the unit the engine declares. */
 function formatParam(p: ParamSpec, v: number): string {
@@ -221,6 +222,8 @@ export function Editor() {
               void setGraphicEqBand(sel.channel, band, db);
             }}
           />
+        ) : block.type === "dynamics.multiband_compressor" ? (
+          <MultibandCompressorPanel channel={sel.channel} block={sel.block} />
         ) : (
           <>
             {params.length === 0 && <div class={`${emptyNote} editor-empty emptyNote`}>This block has no parameters.</div>}
