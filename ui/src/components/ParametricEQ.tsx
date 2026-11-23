@@ -1,6 +1,4 @@
 import { useCallback } from "preact/hooks";
-import { Knob } from "./Knob";
-import { FrequencyKnob } from "./FrequencyKnob";
 import { CurveChart } from "./CurveChart";
 import {
   bandControls,
@@ -12,10 +10,82 @@ import type { BlockSpec, ParamSpec } from "../protocol";
 import { ctrlName } from "../ui";
 import "./parametric-eq.css";
 
-// The parametric EQ panel: renders the selected `tone.eq` block's controls from
-// the engine's registry snapshot (state.registry), and the curve client-side.
-// The band structure and the curve live in `parametric-eq.ts`; the values are
-// the block's own params, which the engine drives over the IPC contract.
+// --- Real slider (used in place of the SVG knob) --------------------------
+// Renders a native `<input type="range">` with a label, unit and value
+// readback. Native range inputs are keyboard-operable (Tab to focus, ArrowUp/
+// ArrowDown / ArrowLeft / ArrowRight to step), which satisfies the a11y
+// requirement without a custom pointer-drag implementation.
+//
+// The `log` flag enables a logarithmic travel: equal pointer travel maps to a
+// constant ratio instead of a constant step. This is used for the frequency
+// controls (Hz), which is what the design doc (§3, curve = Log) requires.
+// The input's min/max/value are stored in log space; the readback is always in
+// the user's unit (Hz, dB, …).
+
+export interface SliderProps {
+  name: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  unit?: string;
+  log?: boolean;
+  format?: (v: number) => string;
+  onChange: (v: number) => void;
+}
+
+function Slider({
+  name,
+  value,
+  min,
+  max,
+  step = 1,
+  unit,
+  log = false,
+  format,
+  onChange,
+}: SliderProps) {
+  const display =
+    format !== undefined
+      ? format(value)
+      : `${value.toFixed(2)}${unit ? ` ${unit}` : ""}`;
+
+  const handleInput = (e: Event) => {
+    const input = e.target as HTMLInputElement;
+    const raw = parseFloat(input.value);
+    const v = log ? Math.exp(raw) : raw;
+    onChange(v);
+  };
+
+  const inputMin = log ? Math.log(min) : min;
+  const inputMax = log ? Math.log(max) : max;
+  const inputValue = log ? Math.log(value) : value;
+
+  return (
+    <div class="slider-unit">
+      <div class="slider-label">
+        <span class="slider-name">{name}</span>
+        {unit ? <span class="slider-unit">{unit}</span> : null}
+      </div>
+      <input
+        class="slider-input"
+        type="range"
+        min={inputMin}
+        max={inputMax}
+        step={log ? 0.01 : step}
+        value={inputValue}
+        aria-label={`${name}${unit ? ` ${unit}` : ""}`}
+        title={`${name}: ${display}`}
+        onInput={handleInput}
+      />
+      <div class="slider-readout">{display}</div>
+    </div>
+  );
+}
+
+// --- Band row -------------------------------------------------------------
+// One row per band: an enable toggle plus a frequency slider, and a gain and Q
+// slider where the band has those parameters (design §2).
 
 interface BandRowProps {
   band: EQBand;
@@ -60,44 +130,50 @@ function BandRow({ band, spec, value, onChange }: BandRowProps) {
         </label>
       </div>
       <div class="eq-band-controls">
-        {/* Frequency knob: log scale (design §3: Hz → Log curve). */}
+        {/* Frequency slider (log). */}
         <div class="eq-cell">
-          <FrequencyKnob
+          <Slider
             name={`${band.name} freq`}
             value={v(band.freqId)}
             min={p(band.freqId).min}
             max={p(band.freqId).max}
-            defaultValue={p(band.freqId).default}
+            step={1}
             unit="Hz"
-            format={(n) => `${n.toFixed(0)} Hz`}
+            log
+            format={(n) => {
+              const a = Math.abs(n);
+              if (a >= 1000) return `${(n / 1000).toFixed(1)} kHz`;
+              if (a >= 100) return `${n.toFixed(0)} Hz`;
+              if (a >= 10) return `${n.toFixed(1)} Hz`;
+              return `${n.toFixed(2)} Hz`;
+            }}
             onChange={(nv) => onChange(band.freqId, nv)}
           />
         </div>
-        {/* Gain knob (design §3: dB → AmpGain). */}
+        {/* Gain slider (dB). */}
         {gainId && (
           <div class="eq-cell">
-            <Knob
+            <Slider
               name={`${band.name} gain`}
               value={v(gainId)}
               min={p(gainId).min}
               max={p(gainId).max}
-              defaultValue={p(gainId).default}
+              step={0.1}
               unit="dB"
-              format={(n) => `${n.toFixed(2)}${n >= 0 ? " +" : ""} dB`}
+              format={(n) => `${n >= 0 ? "+" : ""}${n.toFixed(2)} dB`}
               onChange={(nv) => onChange(gainId, nv)}
             />
           </div>
         )}
-        {/* Q knob (peaking bands only, design §2). */}
+        {/* Q slider (peaking bands only). */}
         {qId && (
           <div class="eq-cell">
-            <Knob
+            <Slider
               name="Q"
               value={v(qId)}
               min={p(qId).min}
               max={p(qId).max}
-              defaultValue={p(qId).default}
-              unit=""
+              step={0.01}
               format={(n) => `${n.toFixed(2)}`}
               onChange={(nv) => onChange(qId, nv)}
             />
@@ -131,9 +207,6 @@ export function ParametricEQ() {
   const spec: BlockSpec | undefined = s.registry[block.type];
   if (!spec) return null;
 
-  // Rendered 1:1 from the engine registry (design §5): the UI never ships its
-  // own values; it reads the spec for ranges/defaults and the block for the
-  // current values.
   const bands = bandControls(spec);
   const value = useCallback(
     (id: string): number => block.params[id] ?? spec.params.find((p) => p.id === id)!.default,
@@ -164,14 +237,14 @@ export function ParametricEQ() {
         {/* Global output gain, applied after the band chain (design §2). */}
         <div class="eq-global">
           <div class={`${ctrlName} ctrlName`}>Output gain</div>
-          <Knob
+          <Slider
             name="Output gain"
             value={value("output_gain")}
             min={-12}
             max={12}
-            defaultValue={0}
+            step={0.1}
             unit="dB"
-            format={(n) => `${n.toFixed(2)}${n >= 0 ? " +" : ""} dB`}
+            format={(n) => `${n >= 0 ? "+" : ""}${n.toFixed(2)} dB`}
             onChange={(nv) => onChange("output_gain", nv)}
           />
         </div>
