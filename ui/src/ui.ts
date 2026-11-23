@@ -3,7 +3,7 @@
 
 /** The small square header button: preset step, presets, modal close. */
 export const navBtn =
-  "size-6.5 rounded-key border border-line bg-raised-2 leading-none text-muted hover:border-line-hi hover:text-text";
+  "size-[var(--ui-touch)] rounded-key border border-line bg-raised-2 leading-none text-muted hover:border-line-hi hover:text-text";
 
 /** A line of placeholder copy ("Select a block…", "No presets yet…"). */
 export const emptyNote = "text-base text-muted";
