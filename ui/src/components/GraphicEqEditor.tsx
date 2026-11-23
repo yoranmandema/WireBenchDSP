@@ -2,10 +2,8 @@ import { useMemo } from "preact/hooks";
 import { Graph, type GraphAxes, type GraphHandle, type GraphOverlay, type ChartPads } from "./Graph";
 import type { JSX } from "preact";
 
-/** 10-band ISO 1/1-octave centres, ascending (20 Hz–20 kHz, band 1 = 31.5 Hz). */
-export const EQ_CENTRES_HZ = [
-  31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000,
-] as const;
+import { EQ_CENTRES_HZ, bandParam, clampDb, flatWrites, keyStep } from "../graph/eq";
+export { EQ_CENTRES_HZ };
 
 /** The tone category hue (gold, per ui/src/theme.ts), used for the block accents. */
 const EQ_COLOR = "hsl(42 62% 58%)";
@@ -96,7 +94,7 @@ function eqBandMarkers(
   const chartH = h - top - bottom;
   return (
     <g>
-      {EQ_CENTRES_HZ.map((f, i) => {
+      {EQ_CENTRES_HZ.map((f) => {
         const x = left + (Math.log10(f / 20) / Math.log10(20000 / 20)) * chartW;
         return (
           <g key={f}>
@@ -110,15 +108,6 @@ function eqBandMarkers(
               strokeDasharray="4 4"
               opacity={0.8}
             />
-            <text
-              x={x}
-              y={top + chartH + 32}
-              textAnchor="middle"
-              fill="var(--color-muted)"
-              fontSize={9}
-            >
-              Band {i + 1} @ {f} Hz
-            </text>
           </g>
         );
       })}
@@ -159,11 +148,21 @@ export function GraphicEqEditor({ channel, block, onChange }: GraphicEqEditorPro
     value: gains[i] ?? 0,
     label: `Band ${i + 1} @ ${f} Hz`,
     color: EQ_COLOR,
-    onChange: (_id: string, v: number) => onChange(`gain${i}`, v),
+    onChange: (_id: string, v: number) => onChange(bandParam(i), clampDb(v)),
   }));
 
   return (
     <div class="graphic-eq-editor" data-channel={channel}>
+      <div class="flex justify-end mb-1">
+        <button
+          type="button"
+          class="graphic-eq-reset min-h-[var(--ui-touch)] px-3 rounded-md text-[11px] font-semibold bg-raised border border-line text-muted hover:text-text hover:border-line-hi"
+          title="Set all bands to 0 dB"
+          onClick={() => flatWrites().forEach(([p, v]) => onChange(p, v))}
+        >
+          Reset flat
+        </button>
+      </div>
       <div class="graphic-eq-graph">
         <Graph
           axes={{
@@ -200,8 +199,19 @@ export function GraphicEqEditor({ channel, block, onChange }: GraphicEqEditorPro
               step={0.1}
               value={gains[i] ?? 0}
               aria-label={`Band ${i + 1} gain`}
-              title={`Band ${i + 1} @ ${f} Hz: ${formatDb(gains[i] ?? 0)}`}
-              onInput={(e) => onChange(`gain${i}`, parseFloat((e.target as HTMLInputElement).value))}
+              title={`Band ${i + 1} @ ${f} Hz: ${formatDb(gains[i] ?? 0)} (double-click to reset)`}
+              onInput={(e) => onChange(bandParam(i), clampDb(parseFloat((e.target as HTMLInputElement).value)))}
+              onDblClick={() => onChange(bandParam(i), 0)}
+              onKeyDown={(e) => {
+                if (e.key === "Home" || e.key === "Delete" || e.key === "Backspace") {
+                  e.preventDefault();
+                  onChange(bandParam(i), 0);
+                } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  e.preventDefault();
+                  const d = (e.key === "ArrowUp" ? 1 : -1) * keyStep(e.shiftKey);
+                  onChange(bandParam(i), clampDb((gains[i] ?? 0) + d));
+                }
+              }}
             />
             <div class="graphic-eq-slider-readout text-[9px] font-mono tabular-nums text-muted">
               {formatDb(gains[i] ?? 0)}
