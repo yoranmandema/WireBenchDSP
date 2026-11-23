@@ -2480,6 +2480,88 @@ impl Block for Tremolo {
             }
         }
 
+pub struct GraphicEq {
+    bands: [Biquad; 10],
+    gains: [f32; 10],
+}
+
+impl Default for GraphicEq {
+    fn default() -> Self {
+        Self {
+            bands: [Biquad::identity(); 10],
+            gains: [0.0; 10],
+        }
+    }
+}
+
+impl Block for GraphicEq {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "tone.graphic_eq",
+            name: "Graphic EQ",
+            category: Category::Tone,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec { id: "gain0", name: "Band 1", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain1", name: "Band 2", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain2", name: "Band 3", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain3", name: "Band 4", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain4", name: "Band 5", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain5", name: "Band 6", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain6", name: "Band 7", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain7", name: "Band 8", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain8", name: "Band 9", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain9", name: "Band 10", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            // 0 dB is identity: design() with gain 0 yields the exact
+            // pass-through coefficients (b1/b2 = 0, a1/a2 = 0).
+            band.design(BiquadKind::Peak, sr, G_EQ_CENTRES_HZ[i], 1.0, 0.0);
+        }
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        // Snapshot the live gains, then bake each into the biquad
+        // coefficients for this sample — exactly like `ToneStack`.
+        // 0 dB is a per-band identity, so the cascade at 0 dB is
+        // sample-exact.
+        for (i, db) in self.gains.iter_mut().enumerate() {
+            *db = ctx.param(i);
+        }
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            band.design(BiquadKind::Peak, ctx.sample_rate, G_EQ_CENTRES_HZ[i], 1.0, self.gains[i]);
+        }
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let mut s = input[i];
+            for band in self.bands.iter_mut() {
+                s = band.process(s);
+            }
+            output[i] = s;
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        for band in &mut self.bands {
+            band.reset();
+        }
+    }
+}
+
+/// ISO 1/1-octave centre frequencies (Hz) for the 10-band graphic EQ.
+const G_EQ_CENTRES_HZ: [f32; 10] = [
+    31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+];
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
