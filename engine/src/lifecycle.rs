@@ -19,7 +19,7 @@
 //!   idempotent API for a clean shutdown: it sets `running=false`, wakes the main
 //!   loop, and the process exits 0. `Engine::stop()` is idempotent.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -206,6 +206,10 @@ pub struct Engine {
     /// The detached tuner thread. Dropped last, as the process exits when
     /// `main` returns and the OS reclaims all threads.
     pub tuner: Option<thread::JoinHandle<()>>,
+    /// Tells the tuner thread to exit.
+    tuner_stop: Arc<AtomicBool>,
+    /// The control-pipe watcher thread (if any).
+    watcher: Option<thread::JoinHandle<()>>,
 }
 
 impl Engine {
@@ -350,22 +354,31 @@ impl Engine {
         // control pipe until EOF or a `engine.wait` command. Either path
         // clears `running` and wakes the main loop so the streams, listener
         // and shared state tear down in order and the process exits 0.
-        if let Some(cp) = args.control_pipe.clone() {
+        let watcher = args.control_pipe.clone().map(|cp| {
             let running = running.clone();
+            let instance = instance.clone();
             thread::spawn(move || {
                 eprintln!("engine: watcher connecting to {:?}", cp);
-                let r = read_control_pipe(&cp, &running, &(*sh_watcher).shutdown);
+                let r = read_control_pipe(&cp, &instance, &running, &(*sh_watcher).shutdown);
                 if r.is_ok() {
                     eprintln!("engine: control pipe closed (parent died); starting teardown");
                 }
                 eprintln!("engine: watcher read_control_pipe returned {:?}", r);
-            });
-        }
+            })
+        });
 
         // 8. IPC listener + tuner thread.
         let listener = TcpListener::bind(("127.0.0.1", port)).await?;
+        // Port 0 asks the OS for a free port; report the real one.
+        let port = listener.local_addr()?.port();
         eprintln!("pedal-engine: ipc listening on ws://127.0.0.1:{port}");
-        let tuner = crate::tuner::spawn(tuner_ring, setup.sample_rate, sh.handle.meters.clone());
+        let tuner_stop = Arc::new(AtomicBool::new(false));
+        let tuner = crate::tuner::spawn(
+            tuner_ring,
+            setup.sample_rate,
+            sh.handle.meters.clone(),
+            tuner_stop.clone(),
+        );
 
         Ok(Self {
             instance,
@@ -377,6 +390,8 @@ impl Engine {
             headless: headless_device,
             sh,
             tuner: Some(tuner),
+            tuner_stop,
+            watcher,
         })
     }
 
@@ -390,6 +405,33 @@ impl Engine {
         // Wake the main loop so the streams/listener are dropped.
         self.sh.shutdown.notify_one();
         Ok(ExitStatus::default())
+    }
+
+    /// Explicit, idempotent full teardown: stops the audio callback, joins the
+    /// tuner thread and the simulated device thread, releases the audio device
+    /// and the IPC listener (the port is free on return). A second call is a
+    /// no-op. `Drop` calls this too.
+    pub fn shutdown(&mut self) -> Result<(), String> {
+        self.stopped.store(true, Ordering::Relaxed);
+        self.running.store(false, Ordering::Relaxed);
+        self.tuner_stop.store(true, Ordering::Relaxed);
+        self.sh.shutdown.notify_one();
+        self.streams = None;
+        self.listener = None;
+        if let Some(mut h) = self.headless.take() {
+            h.stop();
+        }
+        if let Some(t) = self.tuner.take() {
+            t.join().map_err(|_| "tuner thread panicked".to_string())?;
+        }
+        // The watcher blocks on the control pipe; it exits on EOF and is left
+        // detached while the pipe is still open.
+        if let Some(w) = self.watcher.take() {
+            if w.is_finished() {
+                let _ = w.join();
+            }
+        }
+        Ok(())
     }
 
     /// Current lifecycle state.
@@ -436,8 +478,7 @@ impl Drop for Engine {
         // Order: streams -> listener -> Shared (the struct fields are
         // dropped in declaration order, which is the order we want)
         // -> tuner (dropped last as it is the last field).
-        self.streams = None;
-        self.listener = None;
+        let _ = self.shutdown();
     }
 }
 
@@ -463,8 +504,10 @@ pub fn write_pidfile(path: &Path, pid: u32) -> std::io::Result<()> {
 /// EOF (`Ok(0)`) means the shell closed its write end: a normal quit sent
 /// `engine.wait` and then closed the write end, or the shell died. Either way
 /// the engine tears itself down.
-pub fn read_control_pipe(path: &Path, running: &AtomicBool, shutdown: &Notify) -> std::io::Result<()> {
+pub fn read_control_pipe(path: &Path, instance: &str, running: &AtomicBool, shutdown: &Notify) -> std::io::Result<()> {
     let mut stream = UnixStream::connect(path)?;
+    // Announce this instance's id to the host on boot: `instance <id>\n`.
+    stream.write_all(format!("instance {}\n", instance.trim()).as_bytes())?;
     let mut buf = [0u8; 4096];
     let mut line_buf = Vec::new();
     loop {

@@ -239,14 +239,18 @@ impl Block for TubeScreamer {
         let tone = ctx.param(4);
         let level = pedal_dsp::util::db_to_lin(ctx.param(5));
 
-        self.pre.set_pre_mid(ctx.sample_rate, pre_mid);
-        self.pre.set_pre_bass(ctx.sample_rate, pre_bass);
-        self.pre.set_pre_treble(ctx.sample_rate, pre_treble);
-        self.pre.set_post_tone(ctx.sample_rate, tone);
+        // Update tone stage targets (no sr param — begin_block handles smoothing & rebuild)
+        self.pre.set_pre_mid(pre_mid);
+        self.pre.set_pre_bass(pre_bass);
+        self.pre.set_pre_treble(pre_treble);
+        self.pre.set_post_tone(tone);
 
         self.shaper.set_drive(drive);
         self.shaper.set_mix(1.0);
         self.shaper.set_level(1.0);
+
+        // Advance tone smoothing & rebuild bins if needed (once per block)
+        self.pre.begin_block(ctx.sample_rate);
 
         let input = ctx.inputs[0];
         let output = &mut ctx.outputs[0][..];
@@ -338,6 +342,7 @@ impl Block for PrecisionDrive {
     fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
         self.hpf = InputHpf::new(sr);
         self.tone = ToneStage::new(sr);
+        self.tone.prepare(sr);
         self.ef = EnvelopeFollower::new(10.0, 600.0, sr);
         self.shaper = Shaper::new(ShaperKind::DiodeClip);
         Ok(())
@@ -355,11 +360,14 @@ impl Block for PrecisionDrive {
         // Recompute the pump coefficients from the current (real) knobs.
         self.ef.set_timeconstants(attack, release, ctx.sample_rate);
 
-        self.tone.set_post_tone(ctx.sample_rate, tone);
-        self.tone.set_presence(ctx.sample_rate, presence);
+        self.tone.set_post_tone(tone);
+        self.tone.set_presence(presence);
 
-        // Susceptibility to the punch envelope is set by `tightness`.
-        let mut drive_eff = gain;
+        // Hoist volume conversion out of the hot loop.
+        let volume_lin = pedal_dsp::util::db_to_lin(volume);
+
+        // Advance tone smoothing & rebuild bins if needed (once per block)
+        self.tone.begin_block(ctx.sample_rate);
 
         let input = ctx.inputs[0];
         let output = &mut ctx.outputs[0][..];
@@ -368,13 +376,13 @@ impl Block for PrecisionDrive {
             // Punch: smooth |x| with the attack follower, then let the pump
             // decay with the release follower.
             let e = (self.ef.process(x.abs()) / 0.5).clamp(0.0, 1.0);
-            drive_eff = gain * (1.0 - tightness * e);
+            let drive_eff = gain * (1.0 - tightness * e);
             self.shaper.set_drive(drive_eff);
             self.shaper.set_mix(1.0);
             self.shaper.set_level(1.0);
             x = self.shaper.process(x);
             x = self.tone.process(x);
-            output[i] = x * pedal_dsp::util::db_to_lin(volume);
+            output[i] = x * volume_lin;
         }
         Ok(())
     }
@@ -453,11 +461,16 @@ impl Block for Klon {
         self.shaper.set_mix(1.0);
         self.shaper.set_level(1.0);
 
+        // Convert tone (flat gain, per Klon spec) once per block.
+        let tone_lin = pedal_dsp::util::db_to_lin(tone);
+
         let input = ctx.inputs[0];
         let output = &mut ctx.outputs[0][..];
         for i in 0..ctx.n {
             // `tone` is a flat gain (transparent voicing), per the Klon spec.
-            output[i] = self.shaper.process(input[i]) * pedal_dsp::util::db_to_lin(tone);
+            let y = self.shaper.process(input[i]) * tone_lin * level;
+            // Denormal flush: tiny offset prevents subnormal accumulation.
+            output[i] = if y.abs() < 1e-15 { 0.0 } else { y };
         }
         Ok(())
     }
@@ -476,11 +489,20 @@ impl Block for Klon {
 /// Fuzz-ish drive with variable brightness. WaveShaper is `fuzz < 0.5 ? Tube
 /// : Fuzz`, scaled by drive. The tone is a variable peaking filter at `f0`.
 /// `blend` mixes the nonlinear output with a clean dry pass-through.
+///
+/// The dry path is delayed by the shaper's latency (≈30 samples) so `blend`
+/// does not create comb filtering between dry and wet.
 pub struct BigMuff {
     shaper: Shaper,
     tone: ToneStage,
+    /// HPF at 20 Hz to remove DC bias from Fuzz shaper.
+    hpf: InputHpf,
+    /// Delay line for the dry path to match shaper latency (30 samples).
+    dry_delay: DelayLine<{ MAX_BLOCK + 32 }>,
     blend: f32,
     level: f32,
+    /// Current fuzz kind to avoid rebuilding shaper every block.
+    fuzz_kind: ShaperKind,
 }
 
 impl Default for BigMuff {
@@ -488,8 +510,11 @@ impl Default for BigMuff {
         Self {
             shaper: Shaper::new(ShaperKind::Tube),
             tone: ToneStage::new(48_000.0),
+            hpf: InputHpf::new(48_000.0),
+            dry_delay: DelayLine::new(),
             blend: 0.5,
             level: 1.0,
+            fuzz_kind: ShaperKind::Tube,
         }
     }
 }
@@ -524,9 +549,16 @@ impl Block for BigMuff {
         }
     }
 
-    fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
+    fn prepare(&mut self, sr: f32, max_block: usize) -> Result<(), BlockError> {
         self.shaper = Shaper::new(ShaperKind::Tube);
-        self.tone = ToneStage::new(48_000.0);
+        self.tone = ToneStage::new(sr);
+        self.tone.prepare(sr);
+        self.hpf = InputHpf::new(sr);
+        // Buffer must hold the shaper latency (30) plus one block.
+        const LATENCY: usize = 30;
+        assert!(max_block + LATENCY <= MAX_BLOCK + 32, "BigMuff delay buffer too small");
+        self.dry_delay.clear();
+        self.fuzz_kind = ShaperKind::Tube;
         Ok(())
     }
 
@@ -539,27 +571,39 @@ impl Block for BigMuff {
 
         // Variable brightness: the tone is a peaking filter whose centre
         // frequency tracks the `tone` knob.
-        self.tone.set_bigmuff_tone(ctx.sample_rate, tone_hz, 0.0);
+        self.tone.set_bigmuff_tone(tone_hz, 0.0);
 
-        // The shaper kind switches between the asymmetric Tube and the
-        // aggressive, biased Fuzz at the mid point of the fuzz knob.
+        // Advance tone smoothing & rebuild bins if needed (once per block)
+        self.tone.begin_block(ctx.sample_rate);
+
+        // Only rebuild shaper when fuzz crosses the 0.5 threshold (avoids clicks).
         let kind = if fuzz < 0.5 {
             ShaperKind::Tube
         } else {
             ShaperKind::Fuzz
         };
-        self.shaper = Shaper::new(kind);
+        if kind != self.fuzz_kind {
+            self.shaper = Shaper::new(kind);
+            self.fuzz_kind = kind;
+        }
         self.shaper.set_drive(drive);
         self.shaper.set_mix(1.0);
         self.shaper.set_level(1.0);
 
         let input = ctx.inputs[0];
         let output = &mut ctx.outputs[0][..];
+
+        // Process block: shaper has ~30 sample latency (4× oversampling).
+        // Delay dry path by same amount so `blend` doesn't comb-filter.
         for i in 0..ctx.n {
-            // `blend` mixes the dry (clean) input with the wet
-            // (distorted) shaper output.
-            let x = self.shaper.process(input[i]);
-            output[i] = pedal_dsp::util::mix(input[i], x, blend) * level;
+            let mut wet = self.shaper.process(input[i]);
+            // HPF at 20 Hz to remove DC bias from Fuzz shaper.
+            wet = self.hpf.process(wet);
+            wet = self.tone.process(wet);
+            // Delay the dry path by the shaper latency so blend is aligned.
+            self.dry_delay.write(input[i]);
+            let dry = self.dry_delay.read_at(30.0);
+            output[i] = pedal_dsp::util::mix(dry, wet, blend) * level;
         }
         Ok(())
     }
@@ -567,6 +611,9 @@ impl Block for BigMuff {
     fn reset(&mut self) {
         self.shaper.reset();
         self.tone.reset();
+        self.hpf.reset();
+        self.dry_delay.clear();
+        self.fuzz_kind = ShaperKind::Tube;
     }
 
     fn latency_samples(&self) -> u32 {
