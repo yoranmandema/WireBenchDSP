@@ -647,6 +647,14 @@ function PopulatedChannel({ channel, chainRefEl }: { channel: import("../protoco
                 <span class="block-icon grid place-items-center text-cat">
                   {spec && <BlockIcon type={b.type} category={spec.category} size={32} />}
                 </span>
+                {b.type === "dynamics.multiband_compressor" && (
+                  <span
+                    class="band-chip absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 rounded-full border border-line bg-[#1a1b21] text-[9px] font-semibold leading-[14px] whitespace-nowrap text-cat pointer-events-none"
+                    title={`${Math.min(4, Math.max(2, Math.round(b.params.bands ?? 3)))} bands`}
+                  >
+                    Multiband ({Math.min(4, Math.max(2, Math.round(b.params.bands ?? 3)))}b)
+                  </span>
+                )}
                 <span
                   class={`block-name max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-[11px] font-semibold text-center leading-[1.2] ${b.bypass ? "line-through" : ""}`}
                 >
