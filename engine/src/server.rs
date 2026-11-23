@@ -830,7 +830,7 @@ pub async fn serve(sh: Arc<Shared>) -> Result<(), String> {
 pub async fn serve_port(sh: Arc<Shared>, port: u16) -> Result<(), String> {
     let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| e.to_string())?;
     eprintln!("pedal-engine: ipc listening on ws://127.0.0.1:{port}");
-    serve_listener(sh, &listener).await
+    serve_listener(sh, listener).await
 }
 
 /// Serve on an already-bound listener.
@@ -838,7 +838,7 @@ pub async fn serve_port(sh: Arc<Shared>, port: u16) -> Result<(), String> {
 /// Split out from [`serve`] so a test can bind an ephemeral port instead of
 /// the production [`PORT`] (which a stale engine from an earlier session may
 /// still hold).
-pub async fn serve_listener(sh: Arc<Shared>, listener: &TcpListener) -> Result<(), String> {
+pub async fn serve_listener(sh: Arc<Shared>, listener: TcpListener) -> Result<(), String> {
     eprintln!(
         "pedal-engine: ipc listening on {}",
         listener.local_addr().map_err(|e| e.to_string())?

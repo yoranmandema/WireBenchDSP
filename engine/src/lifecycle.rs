@@ -143,7 +143,9 @@ impl EngineArgs {
             *b = (state & 0xFF) as u8;
             state = state.wrapping_mul(0x9E3779B97F4A7C15);
         }
-        format!("{}\n", String::from_utf8(out.to_vec()).expect("determinism"))
+        // The 16 bytes are random non-UTF-8, so render them as a hex string.
+        let hex: String = out.iter().map(|b| format!("{:02x}", b)).collect();
+        format!("{}\n", hex)
     }
 
     /// Where the engine writes its pidfile and prints the `ready` line. The
@@ -307,6 +309,14 @@ impl Engine {
         // 5. IPC shared state.
         let running_flag = running.clone();
         let sh = Arc::new(Shared::new(handle, registry, source, store, running_flag));
+        // Install the compiled initial rig (built from the preset named by
+        // `--rig`, or the compiled-in default `04-rainbow`). The empty rig
+        // `Rig::default()` only supplies slot ids; the shipped presets own
+        // content, so the UI's `state` must report the preset's channels.
+        *sh.rig.lock().unwrap() = rig;
+        // The initial rig is compiled from the rig named by `--rig` (or the
+        // compiled-in default `04-rainbow`); report it as the current preset.
+        *sh.preset.lock().unwrap() = args.rig.clone();
         // `self.running` keeps the flag; `sh.running` mirrors it so the server
         // (`apply`) can observe it.
 
@@ -369,7 +379,7 @@ impl Engine {
     /// The main loop: serve clients until the listener is dropped or the
     /// shutdown signal fires, then tear everything down and return.
     pub async fn run(&mut self) -> Result<(), String> {
-        let listener = self.listener.as_ref().expect("listener set in new()");
+        let listener = self.listener.take().expect("listener set in new()");
         // `serve_listener` runs the accept loop. When the shutdown signal fires
         // we drop the listener, which makes `accept()` return and the loop
         // unwind, releasing the port and clients.
