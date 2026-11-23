@@ -206,3 +206,28 @@ fn registered_in_registry() {
     let r = dsp_graph::blocks::builtin_registry();
     assert!(r.get("dynamics.multiband_compressor").is_some());
 }
+
+#[test]
+fn per_band_gr_matches_formula_across_ratio_and_threshold() {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Fast attack + max release hold the peak detector at the tone's peak, so
+    // GR = (peak_dB - threshold) * (1 - 1/ratio) can be checked tightly.
+    let amp = 0.5f32; // -6.02 dBFS peak
+    let peak_db = 20.0 * amp.log10();
+    for (ratio, thr) in [(2.0f32, -40.0f32), (4.0, -20.0), (10.0, -10.0)] {
+        let params = [
+            ("band_1_ratio", 1.0), ("band_3_ratio", 1.0),
+            ("band_2_threshold", thr), ("band_2_ratio", ratio),
+            ("band_2_attack", 0.1), ("band_2_release", 500.0),
+        ];
+        let mut ex = build(48_000.0, &params);
+        // 1 kHz sits mid band 2 (200 Hz..4 kHz).
+        let _ = sine_rms(&mut ex, 48_000.0, 1000.0, amp, 1.0);
+        let expect = (peak_db - thr).max(0.0) * (1.0 - 1.0 / ratio);
+        let gr = multiband_meters()[1].0;
+        assert!(
+            (gr - expect).abs() < 0.1,
+            "ratio {ratio} thr {thr}: meter GR {gr:.3} dB vs expected {expect:.3} dB"
+        );
+    }
+}
