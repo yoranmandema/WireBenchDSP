@@ -3,15 +3,15 @@
 //! These are the reusable pieces every overdrive variant is built from:
 //!
 //! - **B1** input high-pass (20 Hz, fixed),
-//! - **B2/B5** tone bins (pre-bass / pre-mid / pre-treble / post-tone / presence
-//!   / Big Muff tone) and the tone stage that cascades them,
+//! - **B2/B5** tone bins (pre-bass / pre-mid / pre-treble / post-tone /
+//!   presence / Big Muff tone) and the tone stage that cascades them,
 //! - **B3** waveshapers (soft clip, tanh, Tube, Fuzz, DiodeClip — see
 //!   `pedal_dsp::waveshape`),
 //! - **B4** anti-aliasing (4× oversampling — see
 //!   `pedal_dsp::oversample`),
 //! - **B6** level/gain staging (the variant blocks apply `db_to_lin` to the
 //!   final `level` knob).
-//！
+//!
 //! The variant blocks in `graph/src/blocks.rs` compose these helpers.
 
 use pedal_dsp::biquad::Biquad;
