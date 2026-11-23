@@ -238,3 +238,41 @@
 .block-card.routing-target {
   box-shadow: 0 0 0 2px var(--color-amber), 0 0 0 3px var(--color-amber-dim);
 }
+
+/* Expression pedal slider: full-width range input with a custom track and
+ * thumb, reusing the HeaderKnob's amber accent. `appearance: none` on the
+ * root removes the browser's default track so the custom one applies. */
+.expression-slider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.expression-slider input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-line-soft);
+  outline: none;
+  cursor: pointer;
+}
+.expression-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-amber);
+  border: 3px solid var(--color-bg);
+  box-shadow: 0 0 0 2px var(--color-amber-dim);
+  cursor: pointer;
+}
+.expression-slider input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-amber);
+  border: 3px solid var(--color-bg);
+  cursor: pointer;
+}

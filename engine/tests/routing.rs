@@ -534,7 +534,7 @@ async fn routing_commands_over_ipc() {
     handle.preset_dir = store.dir.clone();
 
     let (rig, amp, delay, reverb) = rig_with_two_channels();
-    let sh = Arc::new(Shared::new(handle, registry, source, store));
+    let sh = Arc::new(Shared::new(handle, registry, source, store, Arc::new(pedal_engine::models::Models::new())));
     *sh.rig.lock().unwrap() = rig;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
