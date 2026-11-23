@@ -5,13 +5,13 @@
 //! thread did. The audio thread never touches the WebSocket.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 use tokio_tungstenite::tungstenite::Message;
 
 use dsp_graph::{Doc, EdgeDoc, Executor, Graph, NodeDoc, Registry, RoutingEndpoint};
@@ -44,6 +44,11 @@ pub struct Shared {
     /// Sample rate in Hz, `None` keeps the device default.
     pub sample_rate: Mutex<Option<u32>>,
     pub clients: Mutex<Vec<mpsc::UnboundedSender<String>>>,
+    /// The audio thread's running flag. `false` starts the shutdown sequence.
+    pub running: Arc<AtomicBool>,
+    /// Woken when `engine.wait` is received (via `apply`), so the main loop
+    /// drops the streams and listener and returns. Set in `Engine::new`.
+    pub shutdown: Notify,
     /// Cross-channel routings.
     /// The bypass graph for a rig with no blocks in any slot. Built once and
     /// recompiled (cheaply) whenever an empty pedalboard needs an executor, so
@@ -56,7 +61,7 @@ pub struct Shared {
 }
 
 impl Shared {
-    pub fn new(handle: Handle, registry: Arc<Registry>, source: Arc<AtomicU8>, store: Store) -> Self {
+    pub fn new(handle: Handle, registry: Arc<Registry>, source: Arc<AtomicU8>, store: Store, running: Arc<AtomicBool>) -> Self {
         Self {
             rig: Mutex::new(Rig::default()),
             store: Mutex::new(store),
@@ -67,6 +72,8 @@ impl Shared {
             buffer_frames: Mutex::new(DEFAULT_IO_BUFFER_FRAMES),
             sample_rate: Mutex::new(None),
             clients: Mutex::new(Vec::new()),
+            running,
+            shutdown: Notify::new(),
             bypass: Mutex::new(None),
             rev: AtomicU64::new(0),
         }
@@ -681,6 +688,20 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
         }
         "listPresets" => Ok(json!({ "presets": sh.presets() })),
         "listRoutings" => Ok(list_routings(sh)),
+        "engine.wait" => {
+            // Idempotent graceful stop: signal the main loop to tear down.
+            sh.running.store(false, Ordering::Relaxed);
+            sh.shutdown.notify_one();
+            Ok(snapshot(sh))
+        }
+        "engine.status" => {
+            let status = if sh.running.load(Ordering::Relaxed) {
+                "running"
+            } else {
+                "stopped"
+            };
+            Ok(json!({ "status": status }))
+        }
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -809,7 +830,7 @@ pub async fn serve(sh: Arc<Shared>) -> Result<(), String> {
 pub async fn serve_port(sh: Arc<Shared>, port: u16) -> Result<(), String> {
     let listener = TcpListener::bind(("127.0.0.1", port)).await.map_err(|e| e.to_string())?;
     eprintln!("pedal-engine: ipc listening on ws://127.0.0.1:{port}");
-    serve_listener(sh, listener).await
+    serve_listener(sh, &listener).await
 }
 
 /// Serve on an already-bound listener.
@@ -817,7 +838,7 @@ pub async fn serve_port(sh: Arc<Shared>, port: u16) -> Result<(), String> {
 /// Split out from [`serve`] so a test can bind an ephemeral port instead of
 /// the production [`PORT`] (which a stale engine from an earlier session may
 /// still hold).
-pub async fn serve_listener(sh: Arc<Shared>, listener: TcpListener) -> Result<(), String> {
+pub async fn serve_listener(sh: Arc<Shared>, listener: &TcpListener) -> Result<(), String> {
     eprintln!(
         "pedal-engine: ipc listening on {}",
         listener.local_addr().map_err(|e| e.to_string())?
