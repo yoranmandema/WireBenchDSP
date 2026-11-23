@@ -370,6 +370,8 @@ impl Block for PrecisionDrive {
             let e = (self.ef.process(x.abs()) / 0.5).clamp(0.0, 1.0);
             drive_eff = gain * (1.0 - tightness * e);
             self.shaper.set_drive(drive_eff);
+            self.shaper.set_mix(1.0);
+            self.shaper.set_level(1.0);
             x = self.shaper.process(x);
             x = self.tone.process(x);
             output[i] = x * pedal_dsp::util::db_to_lin(volume);
@@ -770,6 +772,7 @@ impl Block for Chorus {
         }
     }
 }
+
 /// The graph's input node. The executor writes the raw input into this node's
 /// output buffer before running the steps.
 #[derive(Default)]
@@ -2378,6 +2381,36 @@ impl Block for Tremolo {
         self.lfo.reset();
     }
 }
+    struct Looper {
+        inner: Option<LooperInner>,
+    }
+
+    /// A fixed-size circular buffer for loop recording and playback.
+    /// Real-time safe: no allocation, locking, or blocking in the audio
+    /// path.  `N` is the number of samples (the maximum loop length).
+    struct LoopBuffer<const N: usize> {
+        buf: [f32; N],
+        cursor: usize,
+        read: usize,
+    }
+
+    impl<const N: usize> LoopBuffer<N> {
+        pub fn new() -> Self {
+            Self { buf: [0.0; N], cursor: 0, read: 0 }
+        }
+
+        fn w(&self, i: usize) -> usize {
+            // Sample-accurate wrap.  `N` is always 480_000, which is much
+            // larger than the 256-sample block size, so the write head can
+            // never wrap mid-block (a wrap would corrupt the crossfade seam).
+            if i >= N {
+                i % N
+            } else {
+                i
+            }
+        }
+    }
+
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
