@@ -9,6 +9,9 @@ interface KnobProps {
   unit?: string;
   format?: (v: number) => string;
   onChange: (v: number) => void;
+  /** "log" maps the arc logarithmically (equal perceptual steps); "linear"
+   * maps the value directly. Defaults to "linear". */
+  curve?: "linear" | "log";
 }
 
 /** Geometry of the indicator ring around the knob face. */
@@ -36,12 +39,21 @@ export function Knob({
   unit = "",
   format,
   onChange,
+  curve = "linear",
 }: KnobProps) {
   const [dragging, setDragging] = useState(false);
   const start = useRef({ y: 0, v: 0 });
 
   const span = max - min || 1;
-  const t = Math.min(1, Math.max(0, (value - min) / span));
+  let t = Math.min(1, Math.max(0, (value - min) / span));
+  if (curve === "log" && min > 0) {
+    // Log spacing: equal steps of the parameter map to equal steps of the arc,
+    // which is how pitch and time (ms) read off the dial. Guard against min <= 0
+    // (only the linear path is valid there).
+    const logMin = Math.log(min);
+    const logMax = Math.log(max);
+    t = Math.min(1, Math.max(0, (Math.log(value) - logMin) / (logMax - logMin)));
+  }
   // 270 degrees of travel, from -135deg to +135deg.
   const angle = -135 + t * 270;
   const display = format ? format(value) : `${value.toFixed(2)}${unit}`;

@@ -1,5 +1,6 @@
 import type { JSX } from "preact";
 import { Knob } from "./Knob";
+import { LooperEditor } from "./LooperEditor";
 import { catStyle } from "../theme";
 import { selected, setBypass, setParam, setGraphicEqBand, state, addBlockFor } from "../state";
 import { useState } from "preact/hooks";
@@ -7,6 +8,7 @@ import type { BlockSpec, ParamSpec } from "../protocol";
 import { ctrlName, emptyNote } from "../ui";
 import { AddBlockPicker } from "./AddBlockModal";
 import { GraphicEqEditor } from "./GraphicEqEditor";
+import { ParametricEQ } from "./ParametricEQ";
 
 /** Format a parameter value with the unit the engine declares. */
 function formatParam(p: ParamSpec, v: number): string {
@@ -15,11 +17,9 @@ function formatParam(p: ParamSpec, v: number): string {
   return `${v.toFixed(decimals)}${p.unit ? ` ${p.unit}` : ""}`;
 }
 
-/**
- * A `choice` parameter. A knob is the wrong control for a small set of named
- * options, so these render as a segmented row (or a dropdown when there are
- * too many to lay out).
- */
+/** A `choice` parameter. A knob is the wrong control for a small set of named
+ *  options, so these render as a segmented row (or a dropdown when there are
+ *  too many to lay out). */
 function ChoiceControl({
   p,
   value,
@@ -38,7 +38,11 @@ function ChoiceControl({
     return (
       <label class="select-unit grid items-center justify-items-center gap-1 w-full col-span-2">
         <span class={`${ctrlName} ctrlName`}>{p.name}</span>
-        <select class="select textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3" value={current} onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}>
+        <select
+          class="select textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3"
+          value={current}
+          onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}
+        >
           {choices.map((c, i) => (
             <option key={c} value={i}>{c}</option>
           ))}
@@ -180,6 +184,10 @@ export function Editor() {
     setGate(engaged ? 1 : 0);
   };
 
+  if (block.type === "time.looper") {
+    return <LooperEditor />;
+  }
+
   const resetAll = (): void => {
     for (const p of params) void setParam(sel.channel, sel.block, p.id, p.default);
   };
@@ -202,7 +210,9 @@ export function Editor() {
       </div>
 
       <div class="editor-controls grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4 min-w-0 w-full max-w-[var(--ui-ctrl-row)] mx-auto">
-        {isGraphicEq ? (
+        {block.type === "tone.eq" ? (
+          <ParametricEQ />
+        ) : isGraphicEq ? (
           <GraphicEqEditor
             channel={sel.channel}
             block={block}

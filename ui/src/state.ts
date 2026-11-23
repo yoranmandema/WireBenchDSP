@@ -7,6 +7,7 @@ import { type BlockPayload } from "./dnd";
 import { type Config } from "./protocol";
 import {
   asState,
+  isLooper,
   isMeters,
   isState,
   isTuner,
@@ -22,6 +23,10 @@ export const bridge: Bridge = createBridge();
 export const state = signal<State | null>(null);
 export const meters = signal<Meters>({ in: 0, out: 0, cpu: 0, xruns: 0 });
 export const ready = signal(false);
+/** Looper playback position, 0..1. Updated on `event: looper` at ~10 Hz while
+ * the looper is Playing or Overdubbing; a plain signal so the panel re-renders
+ * to a new number without animating. */
+export const looperFrac = signal(0);
 /** Supported I/O buffer sizes, in frames, from the engine's `getConfig`. */
 export const bufferSizeOptions = signal<number[]>([]);
 /** Fatal: the UI could not reach the engine at all. */
@@ -96,6 +101,7 @@ function fold(next: State): boolean {
   if (next.rev < lastRev) lastRev = -1;
   lastRev = next.rev;
   state.value = next;
+  console.log("[state] fold rev=", next.rev, "state.value===next?", state.value === next);
   ready.value = true;
   // A snapshot means the engine is reachable; drop any boot-time error so a
   // slow-starting engine doesn't leave the UI stuck on the error screen.
@@ -109,6 +115,7 @@ export async function init(): Promise<void> {
     if (isState(msg)) fold(asState(msg.payload));
     else if (isMeters(msg)) meters.value = msg.payload;
     else if (isTuner(msg)) tuner.value = msg.payload;
+    else if (isLooper(msg)) looperFrac.value = msg.payload.frac;
   });
   try {
     fold(asState(await bridge.request("getState")));
