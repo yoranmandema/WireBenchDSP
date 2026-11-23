@@ -1,11 +1,12 @@
 import type { JSX } from "preact";
 import { Knob } from "./Knob";
 import { catStyle } from "../theme";
-import { selected, setBypass, setParam, state, addBlockFor } from "../state";
+import { selected, setBypass, setParam, setGraphicEqBand, state, addBlockFor } from "../state";
 import { useState } from "preact/hooks";
 import type { BlockSpec, ParamSpec } from "../protocol";
 import { ctrlName, emptyNote } from "../ui";
 import { AddBlockPicker } from "./AddBlockModal";
+import { GraphicEqEditor } from "./GraphicEqEditor";
 
 /** Format a parameter value with the unit the engine declares. */
 function formatParam(p: ParamSpec, v: number): string {
@@ -157,6 +158,7 @@ export function Editor() {
     );
   }
 
+  const isGraphicEq = block.type === "tone.graphic_eq";
   const spec: BlockSpec | undefined = s.registry[block.type];
   const params = spec?.params ?? [];
   const knobs = params.filter((p) => p.kind !== "choice");
@@ -200,14 +202,27 @@ export function Editor() {
       </div>
 
       <div class="editor-controls grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4 min-w-0 w-full max-w-[var(--ui-ctrl-row)] mx-auto">
-        {params.length === 0 && <div class={`${emptyNote} editor-empty emptyNote`}>This block has no parameters.</div>}
-        {choices.map((p) => (
-          <ChoiceControl key={p.id} p={p} value={block.params[p.id] ?? p.default} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
-        ))}
-        {knobs.map((p) => (
-          <Knob key={p.id} name={p.name} value={block.params[p.id] ?? p.default} min={p.min} max={p.max} defaultValue={p.default} unit={p.unit} format={(v) => formatParam(p, v)} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
-        ))}
-        <FootswitchControl active={sweepGate > 0} onChange={toggleFootswitch} />
+        {isGraphicEq ? (
+          <GraphicEqEditor
+            channel={sel.channel}
+            block={block}
+            onChange={(param: string, db: number) => {
+              const band = parseInt(param.replace("gain", ""), 10);
+              void setGraphicEqBand(sel.channel, band, db);
+            }}
+          />
+        ) : (
+          <>
+            {params.length === 0 && <div class={`${emptyNote} editor-empty emptyNote`}>This block has no parameters.</div>}
+            {choices.map((p) => (
+              <ChoiceControl key={p.id} p={p} value={block.params[p.id] ?? p.default} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
+            ))}
+            {knobs.map((p) => (
+              <Knob key={p.id} name={p.name} value={block.params[p.id] ?? p.default} min={p.min} max={p.max} defaultValue={p.default} unit={p.unit} format={(v) => formatParam(p, v)} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
+            ))}
+            <FootswitchControl active={sweepGate > 0} onChange={toggleFootswitch} />
+          </>
+        )}
       </div>
       <ExpressionControl value={sweepGate} onChange={setSweepGate} />
     </>

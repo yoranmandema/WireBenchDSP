@@ -15,7 +15,7 @@ import {
   makeLogScale,
   niceTicks,
   snap,
-} from "./scale";
+} from "./scale.ts";
 
 // Float-tolerant equality for the round-trips that live in the IEEE 754 zone.
 const close = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
