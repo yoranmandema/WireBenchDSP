@@ -3,10 +3,16 @@
 //! These are real, working blocks — not stubs. They demonstrate the plugin
 //! architecture and give the host simulator something to run.
 use crate::prelude::*;
+use crate::overdrive::{InputHpf, ToneStage};
 use pedal_dsp::{
     Biquad, BiquadKind, EnvelopeFollower, Freeverb, Lfo, PitchShifter, resample,
     delay::DelayLine, util::{clamp, smoothing_coef_ms},
 };
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Maximum number of samples processed per block (≤ the executor's max block
+/// size). All block-local state that mirrors `BlockCtx` is sized against this.
+const MAX_BLOCK: usize = 64;
 /// A simple gain stage, in dB.
 pub struct Gain {
     gain_db: f32,
@@ -157,6 +163,417 @@ impl Block for Overdrive {
     }
     fn reset(&mut self) {}
 }
+/// A reverb, using `pedal-dsp`'s Freeverb.
+/// Tube Screamer — block id `drive.tube_screamer`.
+///
+/// Stages, in order: input HPF (B1) → pre-EQ (B2: pre_mid 720 Hz + pre_bass +
+/// pre_treble) → waveshaper (B3: Tube, scaled by drive) → post-tone (B2:
+/// tone) → level (B6).
+///
+/// The Tube shaper is the asymmetric soft clip that captures the "diode
+/// clipping in the feedback loop" character (design §1 B3). A real
+/// delay-feedback loop is deferred to v2.
+pub struct TubeScreamer {
+    hpf: InputHpf,
+    pre: ToneStage,
+    shaper: Shaper,
+    level: f32,
+}
+
+impl Default for TubeScreamer {
+    fn default() -> Self {
+        Self {
+            hpf: InputHpf::new(48_000.0),
+            pre: ToneStage::new(48_000.0),
+            shaper: Shaper::new(ShaperKind::Tube),
+            level: 1.0,
+        }
+    }
+}
+
+impl Block for TubeScreamer {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "drive.tube_screamer",
+            name: "Tube Screamer",
+            category: Category::Distortion,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "drive", name: "Drive", unit: Unit::Linear, min: 0.1, max: 10.0, default: 1.0, curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "pre_mid", name: "Pre Mid", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "pre_bass", name: "Pre Bass", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "pre_treble", name: "Pre Treble", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "tone", name: "Tone", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "level", name: "Level", unit: Unit::Decibels, min: -30.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.hpf = InputHpf::new(sr);
+        self.pre = ToneStage::new(sr);
+        self.shaper = Shaper::new(ShaperKind::Tube);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let drive = ctx.param(0);
+        let pre_mid = ctx.param(1);
+        let pre_bass = ctx.param(2);
+        let pre_treble = ctx.param(3);
+        let tone = ctx.param(4);
+        let level = pedal_dsp::util::db_to_lin(ctx.param(5));
+
+        self.pre.set_pre_mid(ctx.sample_rate, pre_mid);
+        self.pre.set_pre_bass(ctx.sample_rate, pre_bass);
+        self.pre.set_pre_treble(ctx.sample_rate, pre_treble);
+        self.pre.set_post_tone(ctx.sample_rate, tone);
+
+        self.shaper.set_drive(drive);
+        self.shaper.set_mix(1.0);
+        self.shaper.set_level(1.0);
+
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let mut x = self.hpf.process(input[i]);
+            x = self.pre.process(x);
+            x = self.shaper.process(x);
+            output[i] = x * level;
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.hpf.reset();
+        self.pre.reset();
+        self.shaper.reset();
+    }
+
+    fn latency_samples(&self) -> u32 {
+        // B4: 4× oversampling adds ≈30 samples @48 kHz.
+        30
+    }
+}
+
+/// Precision Drive — block id `drive.precision_drive`.
+///
+/// Stages: input HPF → diode-feedback clipper (B3 DiodeClip + punch
+/// envelope) → tone (B2: post_tone low shelf + presence high shelf) →
+/// volume (B6).
+///
+/// "Punch" transient pump: `|x|` is smoothed by two one-poles in series
+/// (one_pole.rs). `e = clamp(pump_env / 0.5, 0, 1)`; `drive_eff =
+/// gain * (1 - tightness * e)`; the clipper is `DiodeClip` with drive
+/// `drive_eff`, run 4× sampled.
+pub struct PrecisionDrive {
+    hpf: InputHpf,
+    tone: ToneStage,
+    ef: EnvelopeFollower,
+    shaper: Shaper,
+}
+
+impl Default for PrecisionDrive {
+    fn default() -> Self {
+        Self {
+            hpf: InputHpf::new(48_000.0),
+            tone: ToneStage::new(48_000.0),
+            ef: EnvelopeFollower::new(10.0, 600.0, 48_000.0),
+            shaper: Shaper::new(ShaperKind::DiodeClip),
+        }
+    }
+}
+
+impl Block for PrecisionDrive {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "drive.precision_drive",
+            name: "Precision Drive",
+            category: Category::Distortion,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "gain", name: "Gain", unit: Unit::Linear, min: 0.1, max: 20.0, default: 2.0, curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "tightness", name: "Punch", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.5, curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "attack", name: "Attack", unit: Unit::Milliseconds, min: 1.0, max: 200.0, default: 10.0, curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "release", name: "Release", unit: Unit::Milliseconds, min: 100.0, max: 3000.0, default: 600.0, curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "tone", name: "Tone", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "presence", name: "Presence", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "volume", name: "Volume", unit: Unit::Decibels, min: -30.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.hpf = InputHpf::new(sr);
+        self.tone = ToneStage::new(sr);
+        self.ef = EnvelopeFollower::new(10.0, 600.0, sr);
+        self.shaper = Shaper::new(ShaperKind::DiodeClip);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let gain = ctx.param(0);
+        let tightness = ctx.param(1);
+        let attack = ctx.param(2);
+        let release = ctx.param(3);
+        let tone = ctx.param(4);
+        let presence = ctx.param(5);
+        let volume = ctx.param(6);
+
+        // Recompute the pump coefficients from the current (real) knobs.
+        self.ef.set_timeconstants(attack, release, ctx.sample_rate);
+
+        self.tone.set_post_tone(ctx.sample_rate, tone);
+        self.tone.set_presence(ctx.sample_rate, presence);
+
+        // Susceptibility to the punch envelope is set by `tightness`.
+        let mut drive_eff = gain;
+
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let mut x = self.hpf.process(input[i]);
+            // Punch: smooth |x| with the attack follower, then let the pump
+            // decay with the release follower.
+            let e = (self.ef.process(x.abs()) / 0.5).clamp(0.0, 1.0);
+            drive_eff = gain * (1.0 - tightness * e);
+            self.shaper.set_drive(drive_eff);
+            self.shaper.set_mix(1.0);
+            self.shaper.set_level(1.0);
+            x = self.shaper.process(x);
+            x = self.tone.process(x);
+            output[i] = x * pedal_dsp::util::db_to_lin(volume);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.hpf.reset();
+        self.tone.reset();
+        self.ef.reset();
+        self.shaper.reset();
+    }
+
+    fn latency_samples(&self) -> u32 {
+        30
+    }
+}
+
+/// Klon — block id `drive.klon`.
+///
+/// Transparent, symmetric soft clip: `y = softclip(x * (1 + feel*0.5))`
+/// where `softclip(u) = u / (1 + |u|)` (ShaperKind::SoftClip).
+///
+/// The `tone` parameter is a flat gain (no tone filter), per design §2.3
+/// which specifies no tone stage for the Klon.
+pub struct Klon {
+    shaper: Shaper,
+}
+
+impl Default for Klon {
+    fn default() -> Self {
+        Self {
+            shaper: Shaper::new(ShaperKind::SoftClip),
+        }
+    }
+}
+
+impl Block for Klon {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "drive.klon",
+            name: "Klon",
+            category: Category::Distortion,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "drive", name: "Drive", unit: Unit::Linear, min: 0.1, max: 10.0, default: 1.0, curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "feel", name: "Feel", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "tone", name: "Tone", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+                ParamSpec {
+                    id: "level", name: "Level", unit: Unit::Decibels, min: -30.0, max: 12.0, default: 0.0, curve: Curve::AmpGain,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.shaper = Shaper::new(ShaperKind::SoftClip);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let drive = ctx.param(0);
+        let feel = ctx.param(1);
+        let tone = ctx.param(2);
+        let level = pedal_dsp::util::db_to_lin(ctx.param(3));
+
+        // Effective drive combines the drive knob with the feel knob.
+        self.shaper.set_drive(drive * (1.0 + feel * 0.5));
+        self.shaper.set_mix(1.0);
+        self.shaper.set_level(1.0);
+
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            // `tone` is a flat gain (transparent voicing), per the Klon spec.
+            output[i] = self.shaper.process(input[i]) * pedal_dsp::util::db_to_lin(tone);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.shaper.reset();
+    }
+
+    fn latency_samples(&self) -> u32 {
+        30
+    }
+}
+
+/// Big Muff — block id `drive.big_muff`.
+///
+/// Fuzz-ish drive with variable brightness. WaveShaper is `fuzz < 0.5 ? Tube
+/// : Fuzz`, scaled by drive. The tone is a variable peaking filter at `f0`.
+/// `blend` mixes the nonlinear output with a clean dry pass-through.
+pub struct BigMuff {
+    shaper: Shaper,
+    tone: ToneStage,
+    blend: f32,
+    level: f32,
+}
+
+impl Default for BigMuff {
+    fn default() -> Self {
+        Self {
+            shaper: Shaper::new(ShaperKind::Tube),
+            tone: ToneStage::new(48_000.0),
+            blend: 0.5,
+            level: 1.0,
+        }
+    }
+}
+
+impl Block for BigMuff {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "drive.big_muff",
+            name: "Big Muff",
+            category: Category::Distortion,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec {
+                    id: "drive", name: "Drive", unit: Unit::Linear, min: 0.1, max: 10.0, default: 1.0, curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "fuzz", name: "Fuzz", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.5, curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "tone", name: "Tone", unit: Unit::Hertz, min: 200.0, max: 10000.0, default: 2000.0, curve: Curve::Log,
+                },
+                ParamSpec {
+                    id: "blend", name: "Blend", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.5, curve: Curve::Linear,
+                },
+                ParamSpec {
+                    id: "level", name: "Level", unit: Unit::Decibels, min: -24.0, max: 24.0, default: 0.0, curve: Curve::AmpGain,
+                },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.shaper = Shaper::new(ShaperKind::Tube);
+        self.tone = ToneStage::new(48_000.0);
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let drive = ctx.param(0);
+        let fuzz = ctx.param(1);
+        let tone_hz = ctx.param(2);
+        let blend = ctx.param(3);
+        let level = pedal_dsp::util::db_to_lin(ctx.param(4));
+
+        // Variable brightness: the tone is a peaking filter whose centre
+        // frequency tracks the `tone` knob.
+        self.tone.set_bigmuff_tone(ctx.sample_rate, tone_hz, 0.0);
+
+        // The shaper kind switches between the asymmetric Tube and the
+        // aggressive, biased Fuzz at the mid point of the fuzz knob.
+        let kind = if fuzz < 0.5 {
+            ShaperKind::Tube
+        } else {
+            ShaperKind::Fuzz
+        };
+        self.shaper = Shaper::new(kind);
+        self.shaper.set_drive(drive);
+        self.shaper.set_mix(1.0);
+        self.shaper.set_level(1.0);
+
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            // `blend` mixes the dry (clean) input with the wet
+            // (distorted) shaper output.
+            let x = self.shaper.process(input[i]);
+            output[i] = pedal_dsp::util::mix(input[i], x, blend) * level;
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.shaper.reset();
+        self.tone.reset();
+    }
+
+    fn latency_samples(&self) -> u32 {
+        30
+    }
+}
+
 /// A reverb, using `pedal-dsp`'s Freeverb.
 pub struct Reverb {
     inner: Option<pedal_dsp::reverb::FreeverbMono<1760, 605>>,
@@ -355,6 +772,7 @@ impl Block for Chorus {
         }
     }
 }
+
 /// The graph's input node. The executor writes the raw input into this node's
 /// output buffer before running the steps.
 #[derive(Default)]
@@ -1435,7 +1853,7 @@ impl Block for Compressor {
         for i in 0..ctx.n {
             let level = self.env.process(input[i].abs());
             // Convert to dB with a floor so silence maps to a finite value.
-            let level_db = pedal_dsp::util::lin_to_db(level.max(1e-4));
+            let level_db = pedal_dsp::util::lin_to_db(level.max(1e-9));
             let excess = level_db - threshold;
             // Gain reduction grows linearly with the excess, by 1 - 1/ratio.
             let gr_db = if excess > 0.0 {
@@ -1453,6 +1871,317 @@ impl Block for Compressor {
         self.env.reset();
     }
 }
+// ---------------------------------------------------------------------------
+// Multiband compressor: crossover -> per-band compressors -> recombine.
+// ---------------------------------------------------------------------------
+
+/// Latest per-band gain reduction (dB, >= 0) and output peak (dBFS), stored as
+/// f32 bits. Written by the audio thread after each block (lock-free); the
+/// last multiband block to process wins. Read by the engine's meters loop.
+pub static MULTIBAND_GR_DB: [AtomicU32; 4] =
+    [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+pub static MULTIBAND_OUT_DB: [AtomicU32; 4] =
+    [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+
+/// Number of active bands (0 = no multiband block has processed yet).
+pub static MULTIBAND_ACTIVE: AtomicU32 = AtomicU32::new(0);
+
+/// Read the latest per-band `(gr_db, out_db)` for all four slots (use
+/// `MULTIBAND_ACTIVE` for how many are live).
+pub fn multiband_meters() -> [(f32, f32); 4] {
+    let mut m = [(0.0, 0.0); 4];
+    for i in 0..4 {
+        m[i] = (
+            f32::from_bits(MULTIBAND_GR_DB[i].load(Ordering::Relaxed)),
+            f32::from_bits(MULTIBAND_OUT_DB[i].load(Ordering::Relaxed)),
+        );
+    }
+    m
+}
+
+/// Floor for the output-level meter (dBFS).
+const MB_METER_FLOOR_DB: f32 = -120.0;
+
+/// Multiband compressor. `bands` (2..4) are split by cascaded Linkwitz-Riley
+/// 4th-order crossovers. Edge `j` splits the running "rest" signal into
+/// `LP_j` (band `j`) and `HP_j` (continues up). Band `j` is then passed
+/// through the all-pass `LP_k + HP_k` of every higher edge `k > j` so every
+/// band shares the same phase response and the bands sum flat in magnitude.
+///
+/// Each band has a peak envelope follower and a dB-domain gain computer
+/// (threshold / ratio / makeup, no knee). Bypass passes the band through
+/// uncompressed; solo restricts the sum to the soloed bands.
+///
+/// Real-time safe: all state is inline, no allocation or locks in `process`.
+/// Parameters arrive already smoothed by the executor.
+pub struct MultibandCompressor {
+    lp: [[Biquad; 2]; 3],
+    hp: [[Biquad; 2]; 3],
+    /// All-pass compensation, indexed `[band j][edge k]` (used for k > j).
+    comp_lp: [[[Biquad; 2]; 3]; 3],
+    comp_hp: [[[Biquad; 2]; 3]; 3],
+    /// Crossover frequencies and sample rate the filters are designed for.
+    designed_f: [f32; 3],
+    designed_edges: usize,
+    designed_sr: f32,
+    envs: [EnvelopeFollower; 4],
+    env_times: [(f32, f32); 4],
+    /// Latest per-band gain reduction / output peak (dB) of the last block.
+    gr_db: [f32; 4],
+    out_db: [f32; 4],
+}
+
+impl Default for MultibandCompressor {
+    fn default() -> Self {
+        Self {
+            lp: [[Biquad::identity(); 2]; 3],
+            hp: [[Biquad::identity(); 2]; 3],
+            comp_lp: [[[Biquad::identity(); 2]; 3]; 3],
+            comp_hp: [[[Biquad::identity(); 2]; 3]; 3],
+            designed_f: [0.0; 3],
+            designed_edges: 0,
+            designed_sr: 0.0,
+            envs: [EnvelopeFollower::new(1.0, 50.0, 48_000.0); 4],
+            env_times: [(0.0, 0.0); 4],
+            gr_db: [0.0; 4],
+            out_db: [MB_METER_FLOOR_DB; 4],
+        }
+    }
+}
+
+fn mb_band_specs() -> &'static [ParamSpec] {
+    static SPECS: std::sync::OnceLock<Vec<ParamSpec>> = std::sync::OnceLock::new();
+    SPECS.get_or_init(mb_band_specs_build)
+}
+
+fn mb_band_specs_build() -> Vec<ParamSpec> {
+    const NAMES: [(&str, &str); 4] = [
+        ("band_1", "Band 1"),
+        ("band_2", "Band 2"),
+        ("band_3", "Band 3"),
+        ("band_4", "Band 4"),
+    ];
+    let mut v = Vec::new();
+    for (id, name) in NAMES {
+        let mk = |suffix: &'static str, label: &'static str, unit, min, max, default, curve| {
+            // Leak-free: ids/names are built once at spec() time (not on the
+            // audio thread), so leaking the tiny strings is acceptable.
+            let id: &'static str = Box::leak(format!("{id}_{suffix}").into_boxed_str());
+            let name: &'static str = Box::leak(format!("{name} {label}").into_boxed_str());
+            ParamSpec { id, name, unit, min, max, default, curve }
+        };
+        v.push(mk("threshold", "threshold", Unit::Decibels, -60.0, 0.0, -20.0, Curve::AmpGain));
+        v.push(mk("ratio", "ratio", Unit::Ratio, 1.0, 20.0, 4.0, Curve::Linear));
+        v.push(mk("attack", "attack", Unit::Milliseconds, 0.1, 50.0, 1.0, Curve::Log));
+        v.push(mk("release", "release", Unit::Milliseconds, 1.0, 500.0, 50.0, Curve::Log));
+        v.push(mk("makeup", "makeup", Unit::Decibels, 0.0, 30.0, 0.0, Curve::AmpGain));
+        v.push(mk("bypass", "bypass", Unit::Linear, 0.0, 1.0, 0.0, Curve::Linear));
+        v.push(mk("solo", "solo", Unit::Linear, 0.0, 1.0, 0.0, Curve::Linear));
+    }
+    v
+}
+
+impl Block for MultibandCompressor {
+    fn spec(&self) -> BlockSpec {
+        let mut params = vec![
+            ParamSpec { id: "bands", name: "Bands", unit: Unit::Linear, min: 2.0, max: 4.0, default: 3.0, curve: Curve::Linear },
+            ParamSpec { id: "crossover_1", name: "Crossover 1", unit: Unit::Hertz, min: 20.0, max: 2000.0, default: 200.0, curve: Curve::Log },
+            ParamSpec { id: "crossover_2", name: "Crossover 2", unit: Unit::Hertz, min: 200.0, max: 20000.0, default: 4000.0, curve: Curve::Log },
+            ParamSpec { id: "crossover_3", name: "Crossover 3", unit: Unit::Hertz, min: 200.0, max: 20000.0, default: 8000.0, curve: Curve::Log },
+            ParamSpec { id: "output_gain", name: "Output gain", unit: Unit::Decibels, min: -24.0, max: 24.0, default: 0.0, curve: Curve::AmpGain },
+            ParamSpec { id: "dry_wet", name: "Dry/Wet", unit: Unit::Percent, min: 0.0, max: 100.0, default: 100.0, curve: Curve::Linear },
+        ];
+        params.extend(mb_band_specs().iter().cloned());
+        BlockSpec {
+            id: "dynamics.multiband_compressor",
+            name: "Multiband Compressor",
+            category: Category::Dynamics,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params,
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
+        self.designed_sr = 0.0; // force a redesign on the first block
+        self.reset();
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        let n = ctx.n;
+        let sr = ctx.sample_rate.max(1.0);
+        let bands = (ctx.param(0).round().clamp(2.0, 4.0)) as usize;
+        let edges = bands - 1;
+
+        // Crossover frequencies: ascending, below Nyquist.
+        let mut f = [ctx.param(1), ctx.param(2), ctx.param(3)];
+        let fmax = sr * 0.45;
+        for j in 0..3 {
+            f[j] = f[j].clamp(20.0, fmax);
+            if j > 0 {
+                f[j] = f[j].max(f[j - 1] * 1.1).min(fmax);
+            }
+        }
+        self.design_crossover(sr, f, edges);
+
+        let output_gain = pedal_dsp::util::db_to_lin(ctx.param(4).clamp(-24.0, 24.0));
+        let wet_mix = (ctx.param(5) / 100.0).clamp(0.0, 1.0);
+        let dry_mix = 1.0 - wet_mix;
+
+        let mut thr = [0.0f32; 4];
+        let mut ratio = [1.0f32; 4];
+        let mut makeup = [1.0f32; 4];
+        let mut bypass = [false; 4];
+        let mut solo = [false; 4];
+        for i in 0..bands {
+            let p = 6 + i * 7;
+            thr[i] = ctx.param(p).clamp(-60.0, 0.0);
+            ratio[i] = ctx.param(p + 1).clamp(1.0, 20.0);
+            let (a, r) = (ctx.param(p + 2).max(0.01), ctx.param(p + 3).max(0.1));
+            if self.env_times[i] != (a, r) || self.designed_sr != sr {
+                self.envs[i].set_timeconstants(a, r, sr);
+                self.env_times[i] = (a, r);
+            }
+            makeup[i] = pedal_dsp::util::db_to_lin(ctx.param(p + 4).clamp(0.0, 30.0));
+            bypass[i] = ctx.param(p + 5) > 0.5;
+            solo[i] = ctx.param(p + 6) > 0.5;
+        }
+        self.designed_sr = sr;
+        let any_solo = solo[..bands].iter().any(|s| *s);
+
+        let mut gr_peak = [0.0f32; 4];
+        let mut out_peak = [0.0f32; 4];
+
+        for s in 0..n {
+            let x = ctx.inputs[0][s];
+            let x = if x.is_finite() { x } else { 0.0 };
+
+            // ---- split ----
+            let mut band = [0.0f32; 4];
+            let mut rest = x;
+            for j in 0..edges {
+                let t = self.lp[j][0].process(rest);
+                let mut low = self.lp[j][1].process(t);
+                let t = self.hp[j][0].process(rest);
+                rest = self.hp[j][1].process(t);
+                for k in (j + 1)..edges {
+                    let t = self.comp_lp[j][k][0].process(low);
+                    let a = self.comp_lp[j][k][1].process(t);
+                    let t = self.comp_hp[j][k][0].process(low);
+                    let b = self.comp_hp[j][k][1].process(t);
+                    low = a + b;
+                }
+                band[j] = low;
+            }
+            band[edges] = rest;
+
+            // ---- compress + sum ----
+            let mut wet = 0.0f32;
+            for i in 0..bands {
+                let xb = band[i];
+                let y = if bypass[i] {
+                    xb
+                } else {
+                    let level = self.envs[i].process(xb);
+                    let level_db = pedal_dsp::util::lin_to_db(level.max(1e-4));
+                    let excess = level_db - thr[i];
+                    let gr = if excess > 0.0 { excess * (1.0 - 1.0 / ratio[i]) } else { 0.0 };
+                    if gr > gr_peak[i] {
+                        gr_peak[i] = gr;
+                    }
+                    xb * pedal_dsp::util::db_to_lin(-gr) * makeup[i]
+                };
+                let ya = y.abs();
+                if ya > out_peak[i] {
+                    out_peak[i] = ya;
+                }
+                if !any_solo || solo[i] {
+                    wet += y;
+                }
+            }
+            let mut out = (dry_mix * x + wet_mix * wet) * output_gain;
+            // Flush denormals / clamp non-finite so nothing poisons the chain.
+            if !out.is_finite() {
+                out = 0.0;
+            } else if out.abs() < 1e-20 {
+                out = 0.0;
+            }
+            ctx.outputs[0][s] = out;
+        }
+
+        MULTIBAND_ACTIVE.store(bands as u32, Ordering::Relaxed);
+        for i in 0..4 {
+            self.gr_db[i] = if i < bands { gr_peak[i] } else { 0.0 };
+            self.out_db[i] = if i < bands {
+                pedal_dsp::util::lin_to_db(out_peak[i].max(1e-6)).max(MB_METER_FLOOR_DB)
+            } else {
+                MB_METER_FLOOR_DB
+            };
+            MULTIBAND_GR_DB[i].store(self.gr_db[i].to_bits(), Ordering::Relaxed);
+            MULTIBAND_OUT_DB[i].store(self.out_db[i].to_bits(), Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        let clear = |b: &mut Biquad| b.reset();
+        for j in 0..3 {
+            self.lp[j].iter_mut().for_each(clear);
+            self.hp[j].iter_mut().for_each(clear);
+            for k in 0..3 {
+                self.comp_lp[j][k].iter_mut().for_each(clear);
+                self.comp_hp[j][k].iter_mut().for_each(clear);
+            }
+        }
+        for e in self.envs.iter_mut() {
+            e.reset();
+        }
+        self.gr_db = [0.0; 4];
+        self.out_db = [MB_METER_FLOOR_DB; 4];
+    }
+}
+
+impl MultibandCompressor {
+    /// Latest per-band gain reduction in dB (>= 0) from the last block.
+    pub fn gain_reduction_db(&self) -> [f32; 4] {
+        self.gr_db
+    }
+
+    /// Latest per-band output peak in dBFS from the last block.
+    pub fn output_peak_db(&self) -> [f32; 4] {
+        self.out_db
+    }
+
+    /// (Re)design the crossover filters. Coefficients are only recomputed when
+    /// the frequencies, edge count or sample rate change, and filter state is
+    /// kept (`design` does not clear it), so sweeping a crossover is click-free.
+    fn design_crossover(&mut self, sr: f32, f: [f32; 3], edges: usize) {
+        if self.designed_sr == sr && self.designed_edges == edges && self.designed_f == f {
+            return;
+        }
+        const Q: f32 = core::f32::consts::FRAC_1_SQRT_2;
+        for j in 0..edges {
+            for st in 0..2 {
+                self.lp[j][st].design(BiquadKind::LowPass, sr, f[j], Q, 0.0);
+                self.hp[j][st].design(BiquadKind::HighPass, sr, f[j], Q, 0.0);
+            }
+            for k in (j + 1)..edges {
+                for st in 0..2 {
+                    self.comp_lp[j][k][st].design(BiquadKind::LowPass, sr, f[k], Q, 0.0);
+                    self.comp_hp[j][k][st].design(BiquadKind::HighPass, sr, f[k], Q, 0.0);
+                }
+            }
+        }
+        self.designed_f = f;
+        self.designed_edges = edges;
+        // designed_sr is updated by the caller after the envelope retune.
+    }
+}
+
+
 /// Tremolo: amplitude modulation. The input gain is swept by an LFO so the
 /// volume pulses rhythmically.
 ///
@@ -1662,15 +2391,395 @@ impl Block for Tremolo {
         self.lfo.reset();
     }
 }
+/// The Looper effect (Time category).  Records a take into a fixed
+        /// circular buffer and plays it back with a constant-power, two-head
+        /// crossfade at the loop boundary; overdub appends with feedback and
+        /// decay; clear resets.
+        #[derive(Default)]
+        pub struct Looper {
+            inner: Option<LooperInner>,
+        }
+
+        /// A fixed-size circular buffer for loop recording and playback.
+        /// Real-time safe: no allocation, locking, or blocking in the audio
+        /// path.  `N` is the number of samples (the maximum loop length).
+        struct LoopBuffer<const N: usize> {
+            buf: [f32; N],
+            cursor: usize,
+            read: usize,
+        }
+
+        impl<const N: usize> LoopBuffer<N> {
+            pub fn new() -> Self {
+                Self { buf: [0.0; N], cursor: 0, read: 0 }
+            }
+
+            fn w(&self, i: usize) -> usize {
+                // Sample-accurate wrap.  `N` is always 480_000, which is much
+                // larger than the 256-sample block size, so the write head can
+                // never wrap mid-block (a wrap would corrupt the crossfade seam).
+                if i >= N {
+                    i % N
+                } else {
+                    i
+                }
+            }
+
+            pub fn write(&mut self, sample: f32) {
+                self.buf[self.cursor] = sample;
+                self.cursor = self.w(self.cursor + 1);
+            }
+
+            pub fn read(&self, pos: usize) -> f32 {
+                self.buf[self.w(pos)]
+            }
+
+            pub fn reset(&mut self) {
+                self.buf = [0.0; N];
+                self.cursor = 0;
+                self.read = 0;
+            }
+        }
+
+        /// Maximum loop length: 10 s of audio at 48 kHz.
+        const LOOP_MAX_SAMPLES: usize = 480_000;
+        /// Half the buffer, used as the constant-power crossfade region.
+        const LOOP_HALF: usize = LOOP_MAX_SAMPLES / 2;
+
+        #[derive(Clone, Copy, PartialEq)]
+        enum State {
+            Idle,
+            Recording,
+            Playing,
+            Overdubbing,
+            Stopped,
+        }
+
+        struct LooperInner {
+            buf: LoopBuffer<{ LOOP_MAX_SAMPLES }>,
+            cursor: usize,
+            read: usize,
+            delay: usize,
+            state: State,
+            gate_held: [bool; 5],
+            take_start: u64,
+            sample_count: u64,
+            /// Set when `trig_clear` fires: the buffer is zeroed and playback is
+            /// silent until a new take is recorded.
+            cleared: bool,
+        }
+
+        impl LooperInner {
+            fn reset(&mut self) {
+                self.buf.reset();
+                self.cursor = 0;
+                self.read = 0;
+                self.delay = 0;
+                self.state = State::Idle;
+                self.gate_held = [false; 5];
+                self.take_start = 0;
+                self.sample_count = 0;
+                self.cleared = false;
+            }
+        }
+        impl Default for LooperInner {
+            fn default() -> Self {
+                Self {
+                    buf: LoopBuffer::new(),
+                    cursor: 0,
+                    read: 0,
+                    delay: 0,
+                    state: State::Idle,
+                    gate_held: [false; 5],
+                    take_start: 0,
+                    sample_count: 0,
+                    cleared: false,
+                }
+            }
+        }
+
+        impl Looper {
+            fn inner(&mut self) -> &mut LooperInner {
+                self.inner.get_or_insert_with(LooperInner::default)
+            }
+        }
+impl Block for Looper {
+            fn spec(&self) -> BlockSpec {
+                BlockSpec {
+                    id: "time.looper",
+                    name: "Looper",
+                    category: Category::Time,
+                    inputs: vec![PortSpec::audio("in")],
+                    outputs: vec![PortSpec::audio("out")],
+                    params: vec![
+                        ParamSpec { id: "trig_record", name: "Record", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "trig_play", name: "Play", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "trig_overdub", name: "Overdub", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "trig_stop", name: "Stop", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "trig_clear", name: "Clear", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "time", name: "Loop length", unit: Unit::Milliseconds, min: 250.0, max: 10000.0, default: 1000.0, curve: Curve::Log },
+                        ParamSpec { id: "feedback", name: "Feedback", unit: Unit::Percent, min: 0.0, max: 95.0, default: 35.0, curve: Curve::Linear },
+                        ParamSpec { id: "mix", name: "Mix", unit: Unit::Percent, min: 0.0, max: 100.0, default: 100.0, curve: Curve::Linear },
+                        ParamSpec { id: "level", name: "Level", unit: Unit::Percent, min: 0.0, max: 100.0, default: 100.0, curve: Curve::Linear },
+                        ParamSpec { id: "half", name: "Half speed", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                        ParamSpec { id: "reverse", name: "Reverse", unit: Unit::Linear, min: 0.0, max: 1.0, default: 0.0, curve: Curve::Linear },
+                    ],
+                    controls_in: vec![],
+                    controls_out: vec![],
+                }
+            }
+
+            fn prepare(&mut self, _sr: f32, _max: usize) -> Result<(), BlockError> {
+                self.inner = Some(LooperInner::default());
+                Ok(())
+            }
+
+            fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+                let c = self.inner();
+                let n = ctx.n;
+                if n == 0 {
+                    return Ok(());
+                }
+
+                // --- Snapshot parameters (executor snapshot, per-frame safety) ------
+                let trig_record = ctx.param(0);
+                let trig_play = ctx.param(1);
+                let trig_overdub = ctx.param(2);
+                let trig_stop = ctx.param(3);
+                let trig_clear = ctx.param(4);
+                let time_ms = ctx.param(5);
+                let feedback = ctx.param(6) / 100.0;
+                let mix = ctx.param(7) / 100.0;
+                let level = ctx.param(8) / 100.0;
+                let half = ctx.param(9) >= 0.5;
+                let reverse = ctx.param(10) >= 0.5;
+
+                // --- Trigger sample-and-hold; detect rising edges --------------------
+                let rec = trig_record >= 0.5 && !c.gate_held[0];
+                let play = trig_play >= 0.5 && !c.gate_held[1];
+                let ovd = trig_overdub >= 0.5 && !c.gate_held[2];
+                let stop = trig_stop >= 0.5 && !c.gate_held[3];
+                let clr = trig_clear >= 0.5 && !c.gate_held[4];
+                c.gate_held = [rec, play, ovd, stop, clr];
+
+                // --- State machine ----------------------------------------------------
+                // Record/Play/Overdub are idempotent while already in that state;
+                // Stop and Clear are the only ones that force a transition out.
+                match c.state {
+                    State::Idle => {
+                        if rec { c.state = State::Recording; c.take_start = c.sample_count; }
+                        else if ovd { c.state = State::Overdubbing; c.take_start = c.sample_count; }
+                        else if play { c.state = State::Playing; c.take_start = c.sample_count; }
+                        else if stop { c.state = State::Stopped; }
+                        else if clr { c.state = State::Stopped; c.cleared = true; }
+                    }
+                    State::Recording => {
+                        if play { c.state = State::Playing; }
+                        else if ovd { c.state = State::Overdubbing; }
+                        else if stop { c.state = State::Stopped; }
+                        else if clr { c.state = State::Stopped; c.cleared = true; }
+                        else if rec { c.state = State::Stopped; } // Record falling.
+                        // held Record: stay in Recording
+                    }
+                    State::Playing => {
+                        if ovd { c.state = State::Overdubbing; }
+                        else if stop { c.state = State::Stopped; }
+                        else if clr { c.state = State::Stopped; c.cleared = true; }
+                        else if play { c.state = State::Stopped; } // Play falling.
+                        // held Play: stay in Playing
+                    }
+                    State::Overdubbing => {
+                        if ovd { c.state = State::Playing; } // Overdub falling.
+                        else if stop { c.state = State::Stopped; }
+                        else if clr { c.state = State::Stopped; c.cleared = true; }
+                        // held Overdub: stay in Overdubbing
+                    }
+                    State::Stopped => {
+                        if rec { c.state = State::Recording; }
+                        else if ovd { c.state = State::Overdubbing; }
+                        else if play { c.state = State::Playing; }
+                        // Stop/Clear held: stay in Stopped
+                    }
+                }
+
+                // Finalising triggers: the take ends, and the clear zeroes the
+                // buffer for a fresh take.
+                if clr {
+                    c.buf.reset();
+                }
+
+                // Loop length in samples (clamped to the buffer size).
+                let time_samples = (time_ms * ctx.sample_rate / 1000.0).round() as usize;
+                let time_samples = time_samples.max(250).min(LOOP_MAX_SAMPLES);
+
+                for i in 0..n {
+                    c.sample_count += 1;
+
+                    match c.state {
+                        State::Idle | State::Stopped => {
+                            if c.cleared {
+                                ctx.outputs[0][i] = 0.0;
+                            } else {
+                                ctx.outputs[0][i] = ctx.inputs[0][i];
+                            }
+                        }
+                        State::Recording => {
+                            // Write input into the buffer (record phase).
+                            c.buf.write(ctx.inputs[0][i]);
+                            c.cursor = c.buf.w(c.cursor + 1);
+                            c.read = 0;
+                            c.delay = c.cursor;
+                            // Auto-end recording when the buffer is full.
+                            if c.delay >= LOOP_MAX_SAMPLES {
+                                c.state = State::Stopped;
+                                c.read = 0;
+                            }
+                            ctx.outputs[0][i] = ctx.inputs[0][i];
+                        }
+                        State::Playing | State::Overdubbing => {
+                            let r = c.read;
+                            let dir = if reverse { -1 } else { 1 };
+                            let speed = if half { 2 } else { 1 };
+                            let next = c.buf.w((r as i32 + dir * speed) as usize);
+                            c.read = next;
+
+                            // Constant-power two-head read at the loop
+                            // boundary: out = cos(t·π/2)·a + sin(t·π/2)·b.
+                            let a = c.buf.read(r);
+                            let b = c.buf.read(c.buf.w(r + LOOP_HALF));
+                            let t = ((r % LOOP_HALF) as f32) / (LOOP_HALF as f32);
+                            let theta = t * core::f32::consts::PI / 2.0;
+                            let out = theta.cos() * a + theta.sin() * b;
+
+                            // 512-sample linear fade-in from take start.
+                            let fade_in = ((c.sample_count.saturating_sub(c.take_start)) as f32 / 512.0).min(1.0);
+
+                            let wet = out * fade_in * feedback;
+                            if c.state == State::Overdubbing {
+                                c.buf.write(ctx.inputs[0][i] + wet);
+                            } else {
+                                c.buf.write(wet);
+                            }
+                            c.cursor = c.buf.w(c.cursor + 1);
+
+                            // Loop length = write head position minus read head.
+                            c.delay = (c.cursor - c.read + LOOP_MAX_SAMPLES) % LOOP_MAX_SAMPLES;
+
+                            // Output: dry + wet.
+                            let dry = ctx.inputs[0][i] * (1.0 - mix);
+                            let wet_out = out * fade_in * mix * level;
+                            ctx.outputs[0][i] = dry + wet_out;
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+
+            fn reset(&mut self) {
+                if let Some(c) = &mut self.inner {
+                    c.reset();
+                }
+            }
+        }
+
+
+pub struct GraphicEq {
+    bands: [Biquad; 10],
+    gains: [f32; 10],
+}
+
+impl Default for GraphicEq {
+    fn default() -> Self {
+        Self {
+            bands: [Biquad::identity(); 10],
+            gains: [0.0; 10],
+        }
+    }
+}
+
+impl Block for GraphicEq {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "tone.graphic_eq",
+            name: "Graphic EQ",
+            category: Category::Tone,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec { id: "gain0", name: "Band 1", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain1", name: "Band 2", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain2", name: "Band 3", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain3", name: "Band 4", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain4", name: "Band 5", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain5", name: "Band 6", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain6", name: "Band 7", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain7", name: "Band 8", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain8", name: "Band 9", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain9", name: "Band 10", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            // 0 dB is identity: design() with gain 0 yields the exact
+            // pass-through coefficients (b1/b2 = 0, a1/a2 = 0).
+            band.design(BiquadKind::Peak, sr, G_EQ_CENTRES_HZ[i], 1.0, 0.0);
+        }
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        // Snapshot the live gains, then bake each into the biquad
+        // coefficients for this sample — exactly like `ToneStack`.
+        // 0 dB is a per-band identity, so the cascade at 0 dB is
+        // sample-exact.
+        for (i, db) in self.gains.iter_mut().enumerate() {
+            *db = ctx.param(i);
+        }
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            band.design(BiquadKind::Peak, ctx.sample_rate, G_EQ_CENTRES_HZ[i], 1.0, self.gains[i]);
+        }
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let mut s = input[i];
+            for band in self.bands.iter_mut() {
+                s = band.process(s);
+            }
+            output[i] = s;
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        for band in &mut self.bands {
+            band.reset();
+        }
+    }
+}
+
+/// ISO 1/1-octave centre frequencies (Hz) for the 10-band graphic EQ.
+const G_EQ_CENTRES_HZ: [f32; 10] = [
+    31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+];
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
+    r.add::<GraphicEq>();
     r.add::<IoOutput>();
     r.add::<Gain>();
     r.add::<MixSum>();
     r.add::<Sum>();
     r.add::<Master>();
     r.add::<Overdrive>();
+    r.add::<TubeScreamer>();
+    r.add::<PrecisionDrive>();
+    r.add::<Klon>();
+    r.add::<BigMuff>();
     r.add::<Amp>();
     r.add::<Cab>();
     r.add::<ToneStack>();
@@ -1680,10 +2789,14 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<ShimmerReverb>();
     r.add::<Nam>();
     r.add::<Compressor>();
+    r.add::<MultibandCompressor>();
     r.add::<Gate>();
     r.add::<Tremolo>();
     r.add::<Octaver>();
     r.add::<Chorus>();
+    r.add::<Looper>();
+    r.add::<crate::waveshaper::WaveShaper>();
+    r.add::<crate::fuzz::Fuzz>();
     r
 }
 /// A four-input summer. The output stage of a multi-channel rig: every
