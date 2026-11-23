@@ -274,3 +274,62 @@ async fn instance_id_is_sent_on_the_control_pipe() {
     engine.shutdown().unwrap();
     let _ = std::fs::remove_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// Host-side registry: two engines addressed by instance id (t_c7df07e0).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn host_registry_routes_two_engines_by_id_and_closes_one() {
+    use pedal_engine::registry::{HostEvent, Registry};
+    use std::time::Duration;
+
+    let mut reg = Registry::new(engine_bin(), true);
+    let pa = reg.open("alpha", "04-rainbow").expect("open alpha");
+    let pb = reg.open("beta", "04-rainbow").expect("open beta");
+    assert_ne!(pa, pb);
+    assert_eq!(reg.ids(), vec!["alpha".to_string(), "beta".to_string()]);
+    assert!(reg.open("alpha", "04-rainbow").is_err(), "duplicate id rejected");
+
+    // Each engine announces its own id over its own pipe.
+    let mut seen = Vec::new();
+    while seen.len() < 2 {
+        match reg.next_event(Duration::from_secs(10)).expect("announce") {
+            HostEvent::Announced(id) => seen.push(id),
+            _ => {}
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, vec!["alpha".to_string(), "beta".to_string()]);
+
+    let pid_a = reg.pid("alpha").unwrap();
+    assert!(reg.close("alpha", Duration::from_secs(10)).unwrap().unwrap().success());
+    // alpha is gone (no orphan process); beta is untouched.
+    let alive = |pid: u32| Command::new("kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().unwrap().success();
+    assert!(!alive(pid_a), "alpha process must be gone");
+    assert!(reg.is_running("beta"));
+    assert_eq!(reg.ids(), vec!["beta".to_string()]);
+
+    // Dropping the registry (host exit) stops the remaining engine.
+    let pid_b = reg.pid("beta").unwrap();
+    drop(reg);
+    assert!(!alive(pid_b), "beta process must be gone after registry drop");
+}
+
+#[test]
+fn host_disconnect_stops_only_that_engine() {
+    use pedal_engine::registry::Registry;
+    use std::time::Duration;
+    let mut reg = Registry::new(engine_bin(), true);
+    reg.open("one", "04-rainbow").unwrap();
+    reg.open("two", "04-rainbow").unwrap();
+    // Simulate the engine crashing: kill "one" externally; registry notices.
+    let pid = reg.pid("one").unwrap();
+    let _ = Command::new("kill").arg(pid.to_string()).status();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while reg.is_running("one") && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(reg.ids(), vec!["two".to_string()]);
+    assert!(reg.is_running("two"));
+}
