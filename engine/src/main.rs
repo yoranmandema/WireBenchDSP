@@ -66,6 +66,21 @@ async fn main() {
         }
     }
 
+    // Health monitor (~1 Hz): SoC temperature, decoded `vcgencmd get_throttled`
+    // flags and ARM clock, one timestamped CSV line per tick, with an alarm on
+    // any undervoltage/throttle bit. Fields degrade to `n/a` off the Pi.
+    // Blocking loop, so it gets its own detached thread (not a tokio task).
+    if args.bench.is_none() {
+        let health_log = std::env::var("PEDAL_HEALTH_LOG")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| format!("pedal-health-{}.log", std::process::id()).into());
+        let _ = std::thread::Builder::new().name("pedal-health".into()).spawn(move || {
+            if let Err(e) = pedal_health::monitor::HealthMonitor::new(health_log, 1.0).run() {
+                eprintln!("pedal-health: monitor error: {e}");
+            }
+        });
+    }
+
     // Bench: measured on the simulated device, then the process exits 0.
     if let Some(secs) = args.bench {
         if let Some(h) = &engine.headless {
