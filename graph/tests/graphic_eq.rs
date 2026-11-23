@@ -220,7 +220,7 @@ fn node_doc_params_round_trip_and_recompile_finite() {
             .collect(),
         bypass: false,
         pos: None,
-        model: None,
+        model: None, curve: None,
     };
     let doc = Doc {
         name: "roundtrip".into(),
