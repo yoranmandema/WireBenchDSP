@@ -20,7 +20,14 @@
 use crate::dc_blocker::DcBlocker;
 use crate::oversample::{Downsampler2, Oversampler4, Upsampler2};
 use crate::Biquad;
-use crate::{BiquadKind, util::{clamp, soft_limit}};
+use crate::{BiquadKind, util::clamp};
+
+/// Cubic soft limiter: unity-ish slope near 0, saturates at ±1 (NaN-safe).
+#[inline]
+fn soft_limit(x: f32) -> f32 {
+    let x = if x.is_finite() { clamp(x, -1.5, 1.5) } else { 0.0 };
+    x - x * x * x / 6.75
+}
 
 /// The three fuzz variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,25 +154,11 @@ impl Fuzz {
 
         // 4× oversampled waveshaper → downsample to native rate.
         let [a, b, c, d] = self.up4.up(x);
+        let rest = self.rest();
         let ys = match self.model {
-            FuzzModel::Face => [
-                self.face(a),
-                self.face(b),
-                self.face(c),
-                self.face(d),
-            ],
-            FuzzModel::Muff => [
-                self.muff(a),
-                self.muff(b),
-                self.muff(c),
-                self.muff(d),
-            ],
-            FuzzModel::Bender => [
-                self.bender(a),
-                self.bender(b),
-                self.bender(c),
-                self.bender(d),
-            ],
+            FuzzModel::Face => [self.face(a) - rest, self.face(b) - rest, self.face(c) - rest, self.face(d) - rest],
+            FuzzModel::Muff => [self.muff(a) - rest, self.muff(b) - rest, self.muff(c) - rest, self.muff(d) - rest],
+            FuzzModel::Bender => [self.bender(a) - rest, self.bender(b) - rest, self.bender(c) - rest, self.bender(d) - rest],
         };
         let mut y = 0.0;
         for v in ys {
@@ -182,6 +175,17 @@ impl Fuzz {
         // Cubic soft limiter + level, then output DC block.
         let y = soft_limit(y) * self.level;
         self.dc_out.process(y)
+    }
+
+    /// Shaper output at zero input (the bias point), subtracted so silence
+    /// in gives silence out.
+    #[inline]
+    fn rest(&self) -> f32 {
+        match self.model {
+            FuzzModel::Face => self.face(0.0),
+            FuzzModel::Muff => self.muff(0.0),
+            FuzzModel::Bender => self.bender(0.0),
+        }
     }
 
     /// Reset all stateful components (oversamplers, DC blockers, tone biquads).
@@ -245,21 +249,18 @@ impl Fuzz {
     /// Big Muff (model 1): cascaded tanh (k1 ≈ 3.0) + knee→clamp (k2 grows
     /// with drive = feedback/sustain).
     fn muff(&self, x: f32) -> f32 {
-        let y1 = crate::util::tanh_approx(self.k1_muff() * x);
+        // Biased first stage: the offset makes the clip asymmetric, which
+        // puts energy into the even harmonics.
+        let y1 = crate::util::tanh_approx(self.k1_muff() * x + 0.6);
         self.muff_stage2(y1)
     }
 
     fn muff_stage2(&self, x: f32) -> f32 {
-        let v_d = 0.6;
-        let k2 = self.k2_muff();
-        // Asymmetric knee: the negative side is considerably softer than the
-        // positive side, which shifts energy into the 2nd harmonic. The hard
-        // (clipped) side is on the positive swing, the soft side on the
-        // negative swing.
-        if x >= v_d {
-            v_d + k2 * (x - v_d)
-        } else if x <= -v_d {
-            -(v_d + 0.25 * k2 * (-x - v_d))
+        // Continuous diode-style clamp: the positive swing is squashed
+        // toward 0.5, the negative swing passes (softly limited at -1).
+        let k2 = self.k2_muff() / 4.0; // 0.45 .. 1.0
+        if x > 0.0 {
+            0.5 * crate::util::tanh_approx(x * 2.0 * k2)
         } else {
             x
         }
@@ -280,22 +281,19 @@ impl Fuzz {
     /// zener-style hard clamp at Vz ≈ 0.7.
     fn bender(&self, x: f32) -> f32 {
         let k1 = self.k1_bender();
-        let y1 = crate::util::tanh_approx(k1 * x);
+        let y1 = crate::util::tanh_approx(k1 * x + 0.5);
         self.bender_stage2(y1)
     }
 
     fn bender_stage2(&self, x: f32) -> f32 {
-        let v_z = 0.7;
-        if x > v_z {
-            // Above zener threshold: hard clamp to Vz (strong, even-harmonic
-            // generating clip).
-            v_z
-        } else if x <= -v_z {
-            // Below the threshold on the negative side: much softer clamp, so
-            // the negative swing passes through with little distortion.
-            -v_z * 0.15
+        let v_z = 0.5;
+        if x >= 0.0 {
+            // Zener-style hard clamp on the positive swing.
+            if x > v_z { v_z } else { x }
         } else {
-            x
+            // Continuous, much softer clip on the negative swing.
+            // Gated: the negative swing is starved.
+            0.25 * x
         }
     }
 
@@ -418,23 +416,6 @@ mod tests {
 
 
 
-    #[test]
-    fn debug_bounded() {
-        let mut f = super::Fuzz::new();
-        f.set_params(super::FuzzModel::Face, 10.0, 12.0, 12.0, 12.0, 4.0, 48_000.0);
-        let input = sine_samples(440.0, 4096, 1.0);
-        let mut max_out = f32::MIN;
-        let mut min_out = f32::MAX;
-        for (idx, &s) in input.iter().enumerate() {
-            let y = f.process(s);
-            if idx < 15 {
-                println!("debug: idx={} input={:+.4} out={:+.6}", idx, s, y);
-            }
-            max_out = max_out.max(y);
-            min_out = min_out.min(y);
-        }
-        println!("debug: max_out={max_out} min_out={min_out} level={}", f.level);
-    }
     #[test]
     fn bounded_at_max_settings() {
         let mut f = Fuzz::new();
