@@ -173,7 +173,8 @@ async fn main() {
     pedal_engine::tuner::spawn(tuner_ring, setup.sample_rate, meters.clone());
 
     // --- IPC ---------------------------------------------------------------
-    let sh = Arc::new(Shared::new(handle, registry, source, store));
+    let models = Arc::new(pedal_engine::models::Models::new());
+    let sh = Arc::new(Shared::new(handle, registry, source, store, models.clone()));
     {
         let mut r = sh.rig.lock().unwrap();
         *r = rig;
