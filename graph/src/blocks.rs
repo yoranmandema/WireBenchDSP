@@ -2790,6 +2790,7 @@ pub fn builtin_registry() -> crate::Registry {
     r.add::<Octaver>();
     r.add::<Chorus>();
     r.add::<Looper>();
+    r.add::<crate::waveshaper::WaveShaper>();
     r
 }
 /// A four-input summer. The output stage of a multi-channel rig: every

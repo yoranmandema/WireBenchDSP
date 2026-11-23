@@ -157,6 +157,12 @@ fn snapshot(sh: &Shared) -> Value {
                             params.insert(p.id.to_string(), json!(v));
                         }
                     }
+                    if b.block == "dist.waveshaper" {
+                        params.insert(
+                            "curve".to_string(),
+                            b.curve.clone().unwrap_or_else(|| dsp_graph::waveshaper::TransferCurve::identity().to_json()),
+                        );
+                    }
                     json!({
                         "id": b.id,
                         "type": b.block,
@@ -230,7 +236,7 @@ fn out_master() -> NodeDoc {
         params: [("volume".to_string(), 0.0), ("ceiling".to_string(), -1.0)].into_iter().collect(),
         bypass: false,
         pos: Some([1320.0, 400.0]),
-        model: None,
+        model: None, curve: None,
     }
 }
 
@@ -247,7 +253,7 @@ fn bypass_doc() -> Doc {
         params: BTreeMap::new(),
         bypass: false,
         pos: Some([60.0, 400.0]),
-        model: None,
+        model: None, curve: None,
     });
     doc.nodes.push(NodeDoc {
         id: "out".into(),
@@ -255,7 +261,7 @@ fn bypass_doc() -> Doc {
         params: BTreeMap::new(),
         bypass: false,
         pos: Some([1400.0, 400.0]),
-        model: None,
+        model: None, curve: None,
     });
     doc.nodes.push(out_master());
     doc.edges.push(EdgeDoc {
@@ -351,6 +357,34 @@ fn set_param(sh: &Shared, channel: &str, block: &str, param: &str, value: f32) -
         node.params.insert(param.to_string(), value);
     }
     sh.handle.push(Cmd::SetParam { node: nidx, param: pidx, value }).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// `setParam` with the composite param `"curve"` (waveshaper transfer curve).
+/// Validated strictly *before* any state changes; the compiled graph is then
+/// rebuilt so the new table is baked off the audio thread and swapped in.
+fn set_curve(sh: &Shared, channel: &str, block: &str, value: &Value) -> Result<(), String> {
+    {
+        let rig = sh.rig.lock().unwrap();
+        let ch = rig.channel(channel).ok_or_else(|| format!("no such channel: {channel}"))?;
+        let node = ch.blocks.iter().find(|b| b.id == block).ok_or_else(|| format!("no such block: {block}"))?;
+        if node.block != "dist.waveshaper" {
+            return Err(format!("block {block} has no curve param"));
+        }
+    }
+    dsp_graph::waveshaper::TransferCurve::from_json(value)?;
+    let prev = {
+        let mut rig = sh.rig.lock().unwrap();
+        let ch = rig.channel_mut(channel).unwrap();
+        let node = ch.blocks.iter_mut().find(|b| b.id == block).unwrap();
+        node.curve.replace(value.clone())
+    };
+    if let Err(e) = rebuild(sh) {
+        let mut rig = sh.rig.lock().unwrap();
+        let ch = rig.channel_mut(channel).unwrap();
+        ch.blocks.iter_mut().find(|b| b.id == block).unwrap().curve = prev;
+        return Err(e);
+    }
     Ok(())
 }
 
@@ -591,7 +625,11 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
             match cmd {
                 "getState" => {},
                 "setParam" => {
-                    set_param(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, &s("param").ok_or("param")?, f("value"))?;
+                    if s("param").as_deref() == Some("curve") {
+                        set_curve(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, args.get("value").ok_or("value")?)?;
+                    } else {
+                        set_param(sh, &s("channel").ok_or("channel")?, &s("block").ok_or("block")?, &s("param").ok_or("param")?, f("value"))?;
+                    }
                 }
                 "setMasterVolume" => {
                     set_master_volume(sh, &s("channel").ok_or("channel")?, f("value"))?;
