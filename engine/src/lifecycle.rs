@@ -104,6 +104,8 @@ pub struct EngineArgs {
     pub log: Option<PathBuf>,
     pub bench: Option<f32>,
     pub headless: bool,
+    /// Headless input source: 0 riff (default), 1 live tone, 2 silence.
+    pub source: u8,
     pub rig: String,
     pub migrate_presets: bool,
 }
@@ -128,6 +130,11 @@ impl EngineArgs {
                 .and_then(|v| v.parse::<f32>().ok())
                 .filter(|s| *s > 0.0),
             headless: flag("--headless"),
+            source: match value("--source").as_deref() {
+                Some("live") => 1,
+                Some("silence") => 2,
+                _ => 0,
+            },
             rig: value("--rig").unwrap_or_else(|| "04-rainbow".into()),
             migrate_presets: flag("--migrate-presets"),
         }
@@ -292,15 +299,17 @@ impl Engine {
         let (streams, tuner_ring);
         let mut headless_device;
         if args.headless {
+            handle.set_source(args.source);
             let headless = crate::headless::start(
                 setup,
                 cmd_rx,
                 trash_tx,
                 running.clone(),
                 handle.meters.clone(),
-                source.clone(),
+                handle.source.clone(),
             );
             tuner_ring = headless.tuner_ring.clone();
+            eprintln!("pedal-engine: headless (no audio device)");
             streams = None;
             // The headless device is owned by `Engine` and dropped with it.
             headless_device = Some(headless);

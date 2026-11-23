@@ -35,6 +35,7 @@ fn headless_args(instance: &str, port: u16) -> EngineArgs {
         log: None,
         bench: None,
         headless: true,
+        source: 2,
         rig: "04-rainbow".to_string(),
         migrate_presets: false,
     }
