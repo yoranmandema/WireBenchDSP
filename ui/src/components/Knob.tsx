@@ -9,8 +9,11 @@ interface KnobProps {
   unit?: string;
   format?: (v: number) => string;
   onChange: (v: number) => void;
+  /** Discrete step for keyboard arrows (defaults to `1`). The per-band strip
+   *  passes the schema's `step` so each control snaps to its granularity. */
+  step?: number;
   /** "log" maps the arc logarithmically (equal perceptual steps); "linear"
-   * maps the value directly. Defaults to "linear". */
+   *  maps the value directly. Defaults to "linear". */
   curve?: "linear" | "log";
 }
 
@@ -38,6 +41,7 @@ export function Knob({
   defaultValue,
   unit = "",
   format,
+  step = 1,
   onChange,
   curve = "linear",
 }: KnobProps) {
@@ -72,11 +76,42 @@ export function Knob({
   };
   const up = () => setDragging(false);
 
+  const handleKeyDown = (e: KeyboardEvent) => {
+    switch (e.key) {
+      case "ArrowUp":
+      case "ArrowRight":
+        e.preventDefault();
+        onChange(Math.min(max, Math.max(min, value + step)));
+        break;
+      case "ArrowDown":
+      case "ArrowLeft":
+        e.preventDefault();
+        onChange(Math.min(max, Math.max(min, value - step)));
+        break;
+      case "Home":
+        e.preventDefault();
+        onChange(min);
+        break;
+      case "End":
+        e.preventDefault();
+        onChange(max);
+        break;
+    }
+  };
+
   return (
     <div class="knob-unit flex flex-col items-center w-full gap-1 p-0">
       <div
         class={`knob relative size-[var(--ui-knob)] rounded-full bg-[radial-gradient(circle_at_34%_28%,#454956,#1a1b20_72%)] shadow-knob cursor-ns-resize touch-none ${dragging ? "dragging" : ""}`}
         style={{ "--angle": `${angle}deg` }}
+        tabIndex={0}
+        role="slider"
+        aria-label={name}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        aria-valuetext={format ? format(value) : `${value.toFixed(2)}${unit}`}
+        onKeyDown={handleKeyDown}
         onPointerDown={down}
         onPointerMove={move}
         onPointerUp={up}

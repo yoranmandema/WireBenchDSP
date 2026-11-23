@@ -8,6 +8,7 @@ import type { BlockSpec, ParamSpec } from "../protocol";
 import { ctrlName, emptyNote } from "../ui";
 import { AddBlockPicker } from "./AddBlockModal";
 import { GraphicEqEditor } from "./GraphicEqEditor";
+import { MultibandCompressorEditor } from "./MultibandCompressorEditor";
 import { ParametricEQ } from "./ParametricEQ";
 
 /** Format a parameter value with the unit the engine declares. */
@@ -192,7 +193,11 @@ export function Editor() {
     for (const p of params) void setParam(sel.channel, sel.block, p.id, p.default);
   };
 
-  const body: JSX.Element = (
+  let body: JSX.Element;
+  if (spec?.name === "Multiband Compressor") {
+    body = <MultibandCompressorEditor channel={sel.channel} block={block} spec={spec} />;
+  } else {
+    body = (
     <>
       <div class="editor-id cat-scope grid grid-cols-[minmax(0,1fr)] items-center justify-items-start gap-1 pl-3 min-h-0 phone:flex phone:flex-wrap phone:items-center phone:gap-x-3 phone:gap-y-1 phone:px-2 phone:py-2" style={spec ? catStyle(spec.category) : undefined}>
         <div class="editor-name flex items-center gap-2 min-w-0 max-w-full">
@@ -237,7 +242,7 @@ export function Editor() {
       <ExpressionControl value={sweepGate} onChange={setSweepGate} />
     </>
   );
-
+}
   return (
     <footer
       class="editor relative row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 min-h-0 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start"
