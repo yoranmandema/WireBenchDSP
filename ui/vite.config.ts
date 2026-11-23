@@ -14,6 +14,12 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        demo: "src/demo/index.html",
+      },
+    },
   },
   server: {
     port: 5173,
