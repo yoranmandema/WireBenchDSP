@@ -74,7 +74,7 @@ function TriggerButton({
       onPointerCancel={() => setGate(trigger.id, 0)}
       onPointerLeave={() => setGate(trigger.id, 0)}
       onKeyDown={(e) => {
-        if (e.key === "Escape") setGate(trigger.id, 0);
+        if (e.key === "Escape" || e.key === "Enter") setGate(trigger.id, 0);
       }}
     >
       {trigger.label}
@@ -126,6 +126,13 @@ export function LooperEditor() {
       aria-label={`${block.name} controls`}
       style={spec ? catStyle(spec.category) : undefined}
     >
+      {/* Block identity header, matching the shared Editor banner contract so
+       * the block-selection command can wait for it (and other blocks reuse
+       * the same selector). */}
+      <div class="editor-name flex items-center gap-2 min-w-0 max-w-full">
+        <span class="min-w-0 truncate text-xl font-semibold">{block.name}</span>
+      </div>
+
       {/* Banner: block name + current state word, colour per state. */}
       <div class="looper-banner">
         <div class="looper-banner-name" title={block.name}>
@@ -189,17 +196,22 @@ export function LooperEditor() {
       {/* Two-option toggle chips: Half speed, Reverse. */}
       <div class="looper-chips">
         {toggleIds.map((p) => (
-          <button
-            key={p.id}
-            class="looper-chip"
-            role="switch"
-            aria-checked={(block.params[p.id] ?? 0) >= 0.5}
-            aria-label={`Looper ${p.name}`}
-            title={p.name}
-            onClick={() => setToggle(p.id, ((block.params[p.id] ?? 0) >= 0.5) ? 0 : 1)}
-          >
-            {p.name}
-          </button>
+          <div class="choice-unit">
+            <span class="ctrlName">{p.name}</span>
+            <div class="segmented">
+              <button
+                key={p.id}
+                class="seg"
+                role="switch"
+                aria-checked={(block.params[p.id] ?? 0) >= 0.5}
+                aria-label={`Looper ${p.name}`}
+                title={p.name}
+                onClick={() => setToggle(p.id, ((block.params[p.id] ?? 0) >= 0.5) ? 0 : 1)}
+              >
+                {p.choices?.[0]} / {p.choices?.[1]}
+              </button>
+            </div>
+          </div>
         ))}
       </div>
     </div>

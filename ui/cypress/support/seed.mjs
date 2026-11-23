@@ -98,6 +98,23 @@ export function seedRegistry() {
         num("mix", "Mix", 0, 100, 40, "%"),
       ],
     },
+    "time.looper": {
+      name: "Looper",
+      category: "Time",
+      params: [
+        num("trig_record", "Record", 0, 1, 0),
+        num("trig_play", "Play", 0, 1, 0),
+        num("trig_overdub", "Overdub", 0, 1, 0),
+        num("trig_stop", "Stop", 0, 1, 0),
+        num("trig_clear", "Clear", 0, 1, 0),
+        num("time", "Loop length", 250, 10000, 1000, "ms"),
+        num("feedback", "Feedback", 0, 95, 35, "%"),
+        num("mix", "Mix", 0, 100, 100, "%"),
+        num("level", "Level", 0, 100, 100, "%"),
+        choice("half", "Half speed", ["Off", "On"], 0),
+        choice("reverse", "Reverse", ["Off", "On"], 0),
+      ],
+    },
     "util.gain": {
       name: "Gain",
       category: "Utility",
@@ -142,8 +159,12 @@ export function createSeedState() {
     inputGain: 0,
     masterOutVolume: 0,
     source: "riff",
+    oneWayLatencyMs: 15.3,
+    roundTripLatencyMs: 30.6,
     registry,
     routings: [],
+    looper_state: 0,
+    looper_frac: 0,
     channels: [
       {
         id: "ch1",
@@ -165,6 +186,8 @@ export function createSeedState() {
         blocks: [
           block("drive", "dist.overdrive", "Overdrive", defaultParams(spec("dist.overdrive"))),
           block("voices", "util.voices", "Voices", defaultParams(spec("util.voices"))),
+          // Test hook: the looper is used by the Looper UI card's e2e spec.
+          block("looper", "time.looper", "Looper", defaultParams(spec("time.looper"))),
         ],
       },
       { id: "ch3", name: "Channel 3", volume: 0, sources: [], blocks: [] },
