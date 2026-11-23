@@ -2381,35 +2381,104 @@ impl Block for Tremolo {
         self.lfo.reset();
     }
 }
-    struct Looper {
-        inner: Option<LooperInner>,
-    }
-
-    /// A fixed-size circular buffer for loop recording and playback.
-    /// Real-time safe: no allocation, locking, or blocking in the audio
-    /// path.  `N` is the number of samples (the maximum loop length).
-    struct LoopBuffer<const N: usize> {
-        buf: [f32; N],
-        cursor: usize,
-        read: usize,
-    }
-
-    impl<const N: usize> LoopBuffer<N> {
-        pub fn new() -> Self {
-            Self { buf: [0.0; N], cursor: 0, read: 0 }
+        pub struct Looper {
+            inner: Option<LooperInner>,
         }
 
-        fn w(&self, i: usize) -> usize {
-            // Sample-accurate wrap.  `N` is always 480_000, which is much
-            // larger than the 256-sample block size, so the write head can
-            // never wrap mid-block (a wrap would corrupt the crossfade seam).
-            if i >= N {
-                i % N
-            } else {
-                i
+        struct LoopBuffer<const N: usize> {
+            buf: [f32; N],
+            cursor: usize,
+            read: usize,
+        }
+
+        impl<const N: usize> LoopBuffer<N> {
+            pub fn new() -> Self {
+                Self { buf: [0.0; N], cursor: 0, read: 0 }
+            }
+
+            fn w(&self, i: usize) -> usize {
+                if i >= N {
+                    i % N
+                } else {
+                    i
+                }
+            }
+
+            pub fn write(&mut self, sample: f32) {
+                self.buf[self.cursor] = sample;
+                self.cursor = self.w(self.cursor + 1);
+            }
+
+            pub fn read(&self, pos: usize) -> f32 {
+                self.buf[self.w(pos)]
+            }
+
+            pub fn reset(&mut self) {
+                self.buf = [0.0; N];
+                self.cursor = 0;
+                self.read = 0;
             }
         }
-    }
+
+        const LOOP_MAX_SAMPLES: usize = 480_000;
+        const LOOP_HALF: usize = LOOP_MAX_SAMPLES / 2;
+
+        #[derive(Clone, Copy, PartialEq)]
+        enum State {
+            Idle,
+            Recording,
+            Playing,
+            Overdubbing,
+            Stopped,
+        }
+
+        struct LooperInner {
+            buf: LoopBuffer<{ LOOP_MAX_SAMPLES }>,
+            cursor: usize,
+            read: usize,
+            delay: usize,
+            state: State,
+            gate_held: [bool; 5],
+            take_start: u64,
+            sample_count: u64,
+            cleared: bool,
+        }
+
+        impl LooperInner {
+            fn reset(&mut self) {
+                self.buf.reset();
+                self.cursor = 0;
+                self.read = 0;
+                self.delay = 0;
+                self.state = State::Idle;
+                self.gate_held = [false; 5];
+                self.take_start = 0;
+                self.sample_count = 0;
+                self.cleared = false;
+            }
+        }
+
+        impl Default for LooperInner {
+            fn default() -> Self {
+                Self {
+                    buf: LoopBuffer::new(),
+                    cursor: 0,
+                    read: 0,
+                    delay: 0,
+                    state: State::Idle,
+                    gate_held: [false; 5],
+                    take_start: 0,
+                    sample_count: 0,
+                    cleared: false,
+                }
+            }
+        }
+
+        impl Looper {
+            fn inner(&mut self) -> &mut LooperInner {
+                self.inner.get_or_insert_with(LooperInner::default)
+            }
+        }
 
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
