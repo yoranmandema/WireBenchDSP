@@ -219,3 +219,58 @@ async fn engine_wait_stops_the_engine_cleanly() {
     let _ = std::fs::remove_file(&control_path);
     let _ = std::fs::remove_file(&stderr_path);
 }
+
+// ---------------------------------------------------------------------------
+// 6. Handle-level isolation (t_2d3d9694): distinct ports, independent
+//    shutdown, idempotent shutdown that releases the port, id on the pipe.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn two_instances_have_distinct_ports_and_independent_shutdown() {
+    let mut ea = Engine::new(&headless_args("iso-a", 0)).await.unwrap();
+    let mut eb = Engine::new(&headless_args("iso-b", 0)).await.unwrap();
+    assert_ne!(ea.port, 0);
+    assert_ne!(eb.port, 0);
+    assert_ne!(ea.port, eb.port, "ports must not collide");
+    assert_ne!(ea.instance, eb.instance);
+
+    let port_a = ea.port;
+    ea.shutdown().unwrap();
+    // A's port is released; B is untouched.
+    TcpListener::bind(("127.0.0.1", port_a)).await.expect("a's port is free");
+    assert_eq!(eb.status(), pedal_engine::lifecycle::EngineStatus::Running);
+    assert!(tokio::net::TcpStream::connect(("127.0.0.1", eb.port)).await.is_ok());
+    eb.shutdown().unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_is_idempotent_and_drop_after_shutdown_is_safe() {
+    let mut e = Engine::new(&headless_args("idem", 0)).await.unwrap();
+    e.shutdown().unwrap();
+    e.shutdown().unwrap();
+    assert_eq!(e.status(), pedal_engine::lifecycle::EngineStatus::Stopped);
+    drop(e);
+    // Drop without an explicit shutdown also tears down cleanly.
+    let e2 = Engine::new(&headless_args("idem2", 0)).await.unwrap();
+    let port = e2.port;
+    drop(e2);
+    TcpListener::bind(("127.0.0.1", port)).await.expect("port released by drop");
+}
+
+#[tokio::test]
+async fn instance_id_is_sent_on_the_control_pipe() {
+    use std::io::{BufRead, BufReader};
+    let path = std::env::temp_dir().join(format!("t_2d3d9694_cp_{}", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).expect("control pipe");
+    let mut args = headless_args("echo-me", 0);
+    args.control_pipe = Some(path.clone());
+    let mut engine = Engine::new(&args).await.unwrap();
+    let (sock, _) = listener.accept().expect("engine connects");
+    let mut line = String::new();
+    BufReader::new(&sock).read_line(&mut line).unwrap();
+    assert_eq!(line.trim(), "instance echo-me");
+    drop(sock);
+    engine.shutdown().unwrap();
+    let _ = std::fs::remove_file(&path);
+}
