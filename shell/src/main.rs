@@ -219,6 +219,9 @@ impl EngineHandle {
     ///    `SIGKILL` if needed.
     pub fn stop(&mut self, timeout: Duration) -> std::io::Result<ExitStatus> {
         // Ask the engine to shut down gracefully.
+        if let Some(s) = self.child.try_wait()? {
+            return Ok(s); // already gone: idempotent
+        }
         let _ = self.control_stream.write_all(b"engine.wait\n");
         match self.wait_timeout(timeout)? {
             Some(s) => return Ok(s),
@@ -380,9 +383,17 @@ fn main() {
 
     // Window close, Cmd-Q and exit requests all end in `RunEvent::Exit`: ask
     // the engine to shut down, wait (SIGKILL after the timeout), then exit.
-    app.run(|app, event| {
-        if let tauri::RunEvent::Exit = event {
-            stop_engine(app);
+    // The window-close and quit-request events shut the engine down *before*
+    // the window goes away (bounded by the 5 s timeout inside `stop`);
+    // `Exit` is the backstop. `stop` is idempotent. Page reload/beforeunload
+    // deliberately does not stop the engine: the shell owns its lifetime.
+    app.run(|app, event| match event {
+        tauri::RunEvent::WindowEvent {
+            event: tauri::WindowEvent::CloseRequested { .. },
+            ..
         }
+        | tauri::RunEvent::ExitRequested { .. }
+        | tauri::RunEvent::Exit => stop_engine(app),
+        _ => {}
     });
 }

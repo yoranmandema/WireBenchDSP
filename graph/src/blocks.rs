@@ -1853,7 +1853,7 @@ impl Block for Compressor {
         for i in 0..ctx.n {
             let level = self.env.process(input[i].abs());
             // Convert to dB with a floor so silence maps to a finite value.
-            let level_db = pedal_dsp::util::lin_to_db(level.max(1e-4));
+            let level_db = pedal_dsp::util::lin_to_db(level.max(1e-9));
             let excess = level_db - threshold;
             // Gain reduction grows linearly with the excess, by 1 - 1/ratio.
             let gr_db = if excess > 0.0 {
@@ -1883,7 +1883,11 @@ pub static MULTIBAND_GR_DB: [AtomicU32; 4] =
 pub static MULTIBAND_OUT_DB: [AtomicU32; 4] =
     [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
 
-/// Read the latest per-band `(gr_db, out_db)` for the first `bands` bands.
+/// Number of active bands (0 = no multiband block has processed yet).
+pub static MULTIBAND_ACTIVE: AtomicU32 = AtomicU32::new(0);
+
+/// Read the latest per-band `(gr_db, out_db)` for all four slots (use
+/// `MULTIBAND_ACTIVE` for how many are live).
 pub fn multiband_meters() -> [(f32, f32); 4] {
     let mut m = [(0.0, 0.0); 4];
     for i in 0..4 {
@@ -2108,6 +2112,7 @@ impl Block for MultibandCompressor {
             ctx.outputs[0][s] = out;
         }
 
+        MULTIBAND_ACTIVE.store(bands as u32, Ordering::Relaxed);
         for i in 0..4 {
             self.gr_db[i] = if i < bands { gr_peak[i] } else { 0.0 };
             self.out_db[i] = if i < bands {
