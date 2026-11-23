@@ -281,3 +281,40 @@ async fn clean_shutdown_releases_resources_and_leaves_no_orphan_process() {
 
     
 }
+
+/// The shell disappearing (control pipe closed) shuts the engine down on its
+/// own: it exits 0 and frees its port, with no `engine.wait` ever sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn engine_exits_when_the_shell_closes_the_control_pipe() {
+    let port = free_port();
+    let sock = std::env::temp_dir().join(format!("pedal-lifecycle-{}-{port}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&sock);
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind control pipe");
+
+    let child = Command::new(BIN)
+        .args(["--headless", "--port", &port.to_string(), "--control-pipe"])
+        .arg(&sock)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn engine");
+    let mut guard = Kill(child);
+    let (conn, _) = listener.accept().expect("engine connects to control pipe");
+    wait_listening(port, Duration::from_secs(30)).await;
+
+    // "Shell dies": the write end closes.
+    drop(conn);
+    drop(listener);
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let status = loop {
+        if let Some(st) = guard.0.try_wait().expect("try_wait") {
+            break st;
+        }
+        assert!(Instant::now() < deadline, "engine did not exit after the control pipe closed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(status.success(), "parent-death shutdown must exit 0, got {status}");
+    let _ = TcpListener::bind(("127.0.0.1", port)).expect("port must be free after parent death");
+    let _ = std::fs::remove_file(&sock);
+}

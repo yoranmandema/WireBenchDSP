@@ -333,15 +333,17 @@ impl Engine {
         // 6. Shutdown signal: the main loop wakes on `shutdown`, woken by
         //    `engine.wait` (handled in `server.rs`'s `apply()`) or parent death
         //    (control-pipe EOF).
-        let shutdown = Notify::new();
-
         // 7. Parent-death detection: read the control pipe until EOF.
         if let Some(cp) = args.control_pipe.clone() {
+            let sh = sh.clone();
             thread::spawn(move || {
                 if let Err(e) = read_control_pipe(&cp) {
                     eprintln!("pedal-engine: control pipe {:?}: {e}", cp);
                 }
-                shutdown.notify_one();
+                // The shell is gone (EOF or unreachable): same teardown as
+                // `engine.wait`.
+                sh.running.store(false, Ordering::Relaxed);
+                sh.shutdown.notify_one();
             });
         }
 
