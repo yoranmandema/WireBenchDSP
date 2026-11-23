@@ -208,10 +208,7 @@ function AddBlockButton({ channel }: { channel: import("../protocol").Channel })
     <button
       class="add-block flex-none size-8 rounded-full border border-dashed border-[#3f424d] text-muted hover:text-text hover:border-amber"
       data-add={channel.id}
-      onClick={() => {
-        console.log("[debug] AddBlockButton onClick for", channel.id);
-        openBlockPicker(channel.id);
-      }}
+      onClick={() => openBlockPicker(channel.id)}
       title="Search and add a block"
       aria-label="Search and add a block"
     >

@@ -15,8 +15,13 @@ describe("Parametric EQ (tone.eq) panel", () => {
   // the 4th block in ch1, so selectBlock(0, 3).
   beforeEach(() => {
     cy.boot();
-    cy.addBlock("tone.eq", "Parametric EQ");
-    cy.selectBlock(0, 3);
+    // Channel 3 is empty in the seed rig; add the EQ through the picker.
+    cy.get(".channel").eq(2).find(".add-block").click();
+    cy.get(".modal.picker").should("be.visible");
+    cy.get(".picker-search").type("tone.eq");
+    cy.get(".picker .rack-item").should("have.length", 1).click();
+    cy.get(".modal.picker").should("not.exist");
+    cy.selectBlock(2, 0);
   });
 
   it("renders the block identity, six band sections and the curve", () => {
