@@ -18,7 +18,7 @@ pub mod headless;
 pub mod host;
 pub mod lifecycle;
 pub mod models;
-pub mod tuner;
 pub mod model_index;
+pub mod tuner;
 pub mod server;
 pub mod store;

@@ -1,5 +1,5 @@
-import { useCallback } from "preact/hooks";
-import { CurveChart } from "./CurveChart";
+import { useCallback, useMemo } from "preact/hooks";
+import { Graph, type GraphHandle, type GraphSeries } from "./Graph";
 import {
   bandControls,
   eqCurve,
@@ -10,17 +10,34 @@ import type { BlockSpec, ParamSpec } from "../protocol";
 import { ctrlName } from "../ui";
 import "./parametric-eq.css";
 
+// Per-band trace colours in EQ_BANDS order (Tone category amber first, then
+// five supporting hues - mirrored from the existing CurveChart palette).
+const TRACE_COLORS = [
+  "var(--color-amber)",
+  "#4a8f5c",
+  "#5b6ce0",
+  "#e8638a",
+  "#c084d8",
+  "#8a9bd0",
+];
+
+/** Format a frequency value for the draggable-band handle labels. */
+function formatFreq(f: number): string {
+  const a = Math.abs(f);
+  if (a >= 1000) return `${(f / 1000).toFixed(1)} kHz`;
+  if (a >= 100) return `${Math.round(f)} Hz`;
+  if (a >= 10) return `${f.toFixed(1)} Hz`;
+  return `${f.toFixed(2)} Hz`;
+}
+
 // --- Real slider (used in place of the SVG knob) --------------------------
 // Renders a native `<input type="range">` with a label, unit and value
 // readback. Native range inputs are keyboard-operable (Tab to focus, ArrowUp/
 // ArrowDown / ArrowLeft / ArrowRight to step), which satisfies the a11y
 // requirement without a custom pointer-drag implementation.
-//
 // The `log` flag enables a logarithmic travel: equal pointer travel maps to a
 // constant ratio instead of a constant step. This is used for the frequency
-// controls (Hz), which is what the design doc (§3, curve = Log) requires.
-// The input's min/max/value are stored in log space; the readback is always in
-// the user's unit (Hz, dB, …).
+// controls (Hz), which is what the design doc requires.
 
 export interface SliderProps {
   name: string;
@@ -85,7 +102,7 @@ function Slider({
 
 // --- Band row -------------------------------------------------------------
 // One row per band: an enable toggle plus a frequency slider, and a gain and Q
-// slider where the band has those parameters (design §2).
+// slider where the band has those parameters (design section 2).
 
 interface BandRowProps {
   band: EQBand;
@@ -184,7 +201,7 @@ function BandRow({ band, spec, value, onChange }: BandRowProps) {
   );
 }
 
-/** Fixed Q values (design §3): shelves 0.707, HP 0.707, LP 0.54. */
+/** Fixed Q values (design section 3): shelves 0.707, HP 0.707, LP 0.54. */
 export const FIXED_Q: Record<string, number> = {
   low_shelf: 0.707,
   low_peak: 1.0,
@@ -220,10 +237,47 @@ export function ParametricEQ() {
     [sel.channel, sel.block],
   );
 
-  const curve = eqCurve(block.params);
+  // ---- client-side frequency-response curve (pure function of band params) --
+  // One trace per band: log-frequency x (20 Hz...20 kHz), linear dB y,
+  // computed client-side from the band parameters with the same RBJ biquad
+  // math as the engine block (see blocks/parametric-eq.ts). The curve is a
+  // graphic proxy: steady-state magnitude only, no filter state; the sound is
+  // defined by the engine block.
+  const curves = useMemo(() => eqCurve(block.params), [block.params]);
+
+  const series: GraphSeries<number>[] = curves.map(({ band, points }, i) => ({
+    key: `pe-${band.id}`,
+    label: band.name,
+    color: TRACE_COLORS[i % TRACE_COLORS.length],
+    kind: "line+area",
+    data: points.map((p) => p.db),
+  }));
+
+  // ---- draggable band handles over the curve -------------------------------
+  // One handle per band that carries a gain parameter (shelving + peaking).
+  // The handle rides a vertical dashed guide at the band's current centre
+  // frequency; dragging it writes `gain${i}` through the existing `setParam`
+  // contract. Frequency/Q toggles keep their own sliders; a disabled band has
+  // no gain handle (its trace is flat at 0 dB).
+  const handles: GraphHandle<number>[] = curves
+    .filter(({ band }) => band.gainId !== undefined)
+    .map(({ band }, i) => {
+      const gainId = band.gainId!; // guaranteed by the filter above
+      return {
+        id: `pe-band-${i}`,
+        // Fixed x coordinate on the x axis = the band's current centre
+        // frequency (Hz); the knob moves the gain (dB), drawing a vertical
+        // dashed guide.
+        x: value(band.freqId),
+        value: value(gainId),
+        label: `${band.name} @ ${formatFreq(value(band.freqId))}`,
+        color: TRACE_COLORS[i % TRACE_COLORS.length],
+        onChange: (_id: string, db: number) => onChange(gainId, db),
+      };
+    });
 
   return (
-    <div class="eq-panel">
+    <div class="eq-panel" data-channel={channel?.id}>
       <div class="eq-identity">
         <div class="eq-identity-name">Parametric EQ</div>
         <div class="eq-identity-type">tone.eq</div>
@@ -234,7 +288,7 @@ export function ParametricEQ() {
           <BandRow key={band.id} band={band} spec={spec} value={value} onChange={onChange} />
         ))}
 
-        {/* Global output gain, applied after the band chain (design §2). */}
+        {/* Global output gain, applied after the band chain (design section 2). */}
         <div class="eq-global">
           <div class={`${ctrlName} ctrlName`}>Output gain</div>
           <Slider
@@ -249,10 +303,38 @@ export function ParametricEQ() {
           />
         </div>
 
-        {/* Frequency-response curve: log x, dB y, 0..±24 dB, one trace per
-            band; flat for a disabled or 0-gain band (design §1). */}
+        {/* Frequency-response curve: log x, linear dB y, -24..+24 dB, one trace
+            per band; flat for a disabled or 0-gain band. */}
         <div class="eq-curve-wrap">
-          <CurveChart bands={curve} caption="Parametric EQ frequency response" />
+          <div class="graph">
+            <Graph
+              axes={{
+                x: { type: "log", min: 20, max: 20000, units: "Hz", ticks: 8 },
+                y: { type: "linear", min: -24, max: 24, units: "dB", ticks: 8 },
+              }}
+              dataDomain={[20, 20000]}
+              series={series}
+              handles={handles}
+              grid
+              zeroLine
+              xLabel="Frequency"
+              yLabel="Gain"
+            />
+          </div>
+
+          {/* Accessible legend: maps each curve trace to its band, in chain
+              order. */}
+          <div class="eq-curve-legend">
+            {curves.map(({ band }, i) => (
+              <div class="eq-curve-legend-item" key={band.id}>
+                <span
+                  class="eq-curve-legend-swatch"
+                  style={{ backgroundColor: TRACE_COLORS[i % TRACE_COLORS.length] }}
+                />
+                <span class="eq-curve-legend-name">{band.name}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

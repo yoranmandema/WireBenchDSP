@@ -132,10 +132,6 @@ pub fn start(
     meters: Arc<Meters>,
     source: Arc<AtomicU8>,
 ) -> Headless {
-    // The simulated device owns no real hardware; its output is discarded
-    // (see the module docs) so the pedal can boot on a bench or a Pi with
-    // nothing attached.
-    eprintln!("pedal-engine: headless (no audio device)");
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
     let stats = Arc::new(Stats::default());

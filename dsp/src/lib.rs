@@ -40,6 +40,7 @@ pub mod resample;
 pub mod svf;
 pub mod util;
 pub mod waveshape;
+pub mod fuzz;
 pub mod one_pole;
 
 pub use biquad::{Biquad, BiquadKind, StereoBiquad};

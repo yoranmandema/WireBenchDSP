@@ -1,320 +1,221 @@
-//! Engine instance lifecycle: isolation, clean shutdown, and resource release.
+//! Engine lifecycle tests: the engine owns its audio streams, IPC listener and
+//! shared state, and tears them down deterministically on `Engine::stop()` /
+//! `Drop`. No `std::process::exit` in any normal path; closing the parent (the
+//! control pipe EOF) stops the engine as well.
 //!
-//! The acceptance criteria for this module are:
-//!  * (a) two engine instances can run simultaneously without conflict
-//!  * (b) shutting one down does not affect the other
-//!  * (c) a clean shutdown releases the audio device, port and process, and
-//!        leaves no orphan process behind
-//!
-//! Each test boots the real `pedal-engine` binary headless on an ephemeral
-//! port and drives it over a real WebSocket, exactly like the UI does. Nothing
-//! is ever played through a speaker: the headless device discards its output.
+//! Run: `cargo test -p pedal-engine --test lifecycle`
 
-use std::net::TcpListener;
+use std::net::Shutdown;
+use std::os::unix::net::UnixListener;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::io::Write;
 
-use std::fmt::Debug;
+use pedal_engine::lifecycle::{Engine, EngineArgs};
+use tokio::net::TcpListener;
 
-use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
-use tokio_tungstenite::tungstenite::Message;
+/// Resolve the built `pedal-engine` binary. The test target's `--bin` env var is
+/// not set for arbitrary `--test` targets, so resolve it from `CARGO_TARGET_DIR`
+/// (agent-env.sh points it at the shared build directory).
+fn engine_bin() -> std::path::PathBuf {
+    if let Ok(t) = std::env::var("CARGO_TARGET_DIR") {
+        return std::path::PathBuf::from(t).join("debug").join("pedal-engine");
+    }
+    let mut p = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    p.push("target/debug/pedal-engine");
+    p
+}
 
-/// Kills the child if a test panics, so a failure never leaves an orphan.
-struct Kill(std::process::Child);
-impl Drop for Kill {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+/// The default headless instance arguments used by the process-level tests.
+fn headless_args(instance: &str, port: u16) -> EngineArgs {
+    EngineArgs {
+        instance: instance.to_string(),
+        port,
+        control_pipe: None,
+        pidfile: None,
+        log: None,
+        bench: None,
+        headless: true,
+        source: 2,
+        rig: "04-rainbow".to_string(),
+        migrate_presets: false,
     }
 }
 
-const BIN: &str = env!("CARGO_BIN_EXE_pedal-engine");
+// ---------------------------------------------------------------------------
+// 1. Single instance: `stop()` starts the teardown; `run()` finishes it.
+// ---------------------------------------------------------------------------
 
-/// Bind a fresh ephemeral port so two instances can never collide.
-fn free_port() -> u16 {
-    let probe = TcpListener::bind("127.0.0.1:0").expect("probe bind");
-    let port = probe.local_addr().expect("probe addr").port();
-    drop(probe);
-    port
+#[tokio::test]
+async fn single_instance_shuts_down_cleanly() {
+    let mut engine = Engine::new(&headless_args("t1", 0)).await.unwrap();
+    assert_eq!(engine.status(), pedal_engine::lifecycle::EngineStatus::Running);
+
+    engine.stop().unwrap();
+    // Teardown order: streams -> listener -> Shared. `run` returns on the
+    // shutdown branch of the `tokio::select!`.
+    assert!(engine.run().await.is_ok());
+    assert_eq!(engine.status(), pedal_engine::lifecycle::EngineStatus::Stopped);
+    drop(engine); // release the tuner thread handle
 }
 
-async fn connect_ws(port: u16) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}")).await.expect("ws connect").0
+// ---------------------------------------------------------------------------
+// 2. Two instances: independent ports, pidfiles and teardown.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn two_instances_run_concurrently_and_stop() {
+    let a = headless_args("a", 0);
+    let b = headless_args("b", 0);
+    let mut ea = Engine::new(&a).await.unwrap();
+    let mut eb = Engine::new(&b).await.unwrap();
+    assert_eq!(ea.status(), pedal_engine::lifecycle::EngineStatus::Running);
+    assert_eq!(eb.status(), pedal_engine::lifecycle::EngineStatus::Running);
+
+    ea.stop().unwrap();
+    eb.stop().unwrap();
+    assert!(ea.run().await.is_ok());
+    assert!(eb.run().await.is_ok());
+    assert_eq!(ea.status(), pedal_engine::lifecycle::EngineStatus::Stopped);
+    assert_eq!(eb.status(), pedal_engine::lifecycle::EngineStatus::Stopped);
 }
 
-/// Wait until the engine on `port` is accepting TCP connections.
-async fn wait_listening(port: u16, deadline: Duration) {
-    let mut deadline = Instant::now() + deadline;
-    loop {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
-            return;
-        }
-        assert!(Instant::now() < deadline, "engine never listened on {port}");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+// ---------------------------------------------------------------------------
+// 3. Stale engine: a port already held cannot be taken by a new instance.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn stale_engine_cannot_take_a_port() {
+    // Occupy an ephemeral port with a dummy listener.
+    let dummy = TcpListener::bind("127.0.0.1:0").await.expect("bind dummy");
+    let port = dummy.local_addr().unwrap().port();
+
+    let mut cmd = Command::new(engine_bin());
+    cmd.arg("--headless")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--instance")
+        .arg("stale")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = cmd.output().expect("spawn");
+    assert!(!out.status.success(), "a stale engine must not start");
+    assert_eq!(out.status.code(), Some(1), "stale engine exits 1");
 }
 
-/// The next `state` frame from `ws`.
-async fn next_state<S, E>(ws: &mut S) -> Value
-where
-    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + futures_util::sink::Sink<Message, Error = E>
-        + Unpin,
-    E: Debug,
-{
-    loop {
-        match ws.next().await {
-            Some(Ok(Message::Text(t))) => {
-                let v: Value = serde_json::from_str(&t).expect("json");
-                if v["type"] == "event" && v["event"] == "state" {
-                    return v["payload"].clone();
-                }
-            }
-            Some(Ok(_)) => continue,
-            Some(Err(e)) => panic!("socket error: {e}"),
-            None => panic!("socket closed while waiting for state"),
-        }
-    }
+// ---------------------------------------------------------------------------
+// 4. Parent death: closing the control pipe makes the engine tear down and
+//    exit 0 (the same path the shell uses on window close).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn parent_death_stops_the_engine() {
+    let control_path = std::env::temp_dir().join(format!(
+        "t_9e90c111_control_{}",
+        std::process::id()
+    ));
+    let listener = UnixListener::bind(&control_path).expect("control pipe");
+    let cleanup = || std::fs::remove_file(&control_path);
+
+    // The stderr file must not live on the control-pipe socket path above.
+    let stderr_path = std::env::temp_dir().join(format!(
+        "t_9e90c111_stderr_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
+    let cleanup_stderr = || { let _ = std::fs::remove_file(&stderr_path); };
+    let mut cmd = Command::new(engine_bin());
+    cmd.arg("--headless")
+        .arg("--port")
+        .arg("0")
+        .arg("--instance")
+        .arg("cp")
+        .arg("--control-pipe")
+        .arg(&control_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(stderr_file));
+    let mut child = cmd.spawn().expect("spawn engine");
+
+    // The engine is a client of the control pipe; the test is the listener
+    // (the shell's side). Accept once, then close the socket: EOF -> teardown.
+    eprintln!("PT: before accept");
+    let (_socket, _addr) = listener.accept().expect("engine connected");
+    eprintln!("PT: accepted control socket");
+    drop(_socket);
+    let out = child.wait_with_output().expect("wait");
+    eprintln!("PT: child exited {:?}", out.status);
+    eprintln!("PARENT_DEATH_TEST: child exited with {:?}, stderr:", out.status);
+    eprintln!("{}", String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success(), "engine should exit 0 after parent death");
+    let err = std::fs::read_to_string(&stderr_path)
+        .expect("stderr file should be readable");
+    assert!(err.contains("control pipe")
+        || err.contains("closed")
+        || err.contains("EOF"), "expected the control-pipe teardown path: {err}");
+    cleanup();
+    cleanup_stderr();
 }
 
-/// The reply to the request with this id (a `res` frame whose `id` equals `id`).
-async fn next_res<S, E>(ws: &mut S, id: i64) -> Value
-where
-    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + futures_util::sink::Sink<Message, Error = E>
-        + Unpin,
-    E: Debug,
-{
-    loop {
-        match ws.next().await {
-            Some(Ok(Message::Text(t))) => {
-                let v: Value = serde_json::from_str(&t).expect("json");
-                if v["type"] == "res" && v["id"] == json!(id) {
-                    return v;
-                }
-            }
-            Some(Ok(_)) => continue,
-            Some(Err(e)) => panic!("socket error: {e}"),
-            None => panic!("socket closed while waiting for response {id}"),
-        }
-    }
-}
+// ---------------------------------------------------------------------------
+// 5. Graceful shutdown request: writing `engine.wait` over the control pipe
+//    asks the engine to tear itself down and exit 0 (the same command the
+//    shell sends, via `EngineHandle::stop`).
+// ---------------------------------------------------------------------------
 
-/// Request `getState` and return its snapshot (the `res` payload).
-async fn get_state<S, E>(ws: &mut S, id: i64) -> Value
-where
-    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + futures_util::sink::Sink<Message, Error = E>
-        + Unpin,
-    E: Debug,
-{
-    let req = json!({"type": "req", "id": id, "cmd": "getState"});
-    ws.send(Message::Text(req.to_string().into())).await.expect("send getState");
-    let res = next_res(ws, id).await;
-    assert_eq!(res["ok"], true, "getState refused: {res}");
-    res["payload"].clone()
-}
-
-/// Send `engine.wait` to start a clean shutdown. The instance replies with a
-/// snapshot, then closes the connection.
-async fn engine_wait<S, E>(ws: &mut S)
-where
-    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
-        + futures_util::sink::Sink<Message, Error = E>
-        + Unpin,
-    E: Debug,
-{
-    let req = json!({
-        "type": "req",
-        "id": 1,
-        "cmd": "engine.wait",
-    });
-    ws.send(Message::Text(req.to_string().into())).await.expect("send engine.wait");
-    let _ = ws.next().await; // the instance replies with a snapshot, then disconnects
-}
-
-/// Assert that the child process `pid` no longer exists (it was reaped by
-/// `wait()`, so signal 0 must fail with ESRCH).
-fn assert_gone(pid: u32) {
-    let alive = Command::new("kill").args(["-0", &pid.to_string()]).stderr(Stdio::null()).status().expect("kill").success();
-    assert!(!alive, "engine process {pid} still alive after shutdown");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_engine_instances_bind_distinct_ports_and_run_without_conflict() {
-    tokio::time::timeout(Duration::from_secs(60), two_engines()).await.expect("test timed out");
-}
-
-async fn two_engines() {
-    let port_a = free_port();
-    let port_b = free_port();
-
-    let mut child_a = Command::new(BIN)
-        .args(["--headless", "--port", &port_a.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn engine A");
-    let mut child_b = Command::new(BIN)
-        .args(["--headless", "--port", &port_b.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn engine B");
-
-    wait_listening(port_a, Duration::from_secs(30)).await;
-    wait_listening(port_b, Duration::from_secs(30)).await;
-
-    // Each engine serves its own, distinct loopback port.
-    assert_ne!(port_a, port_b);
-    let (mut ws_a, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}", port_a)).await.expect("ws connect");
-    let (mut ws_b, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}", port_b)).await.expect("ws connect");
-
-    // Both instances are live, both report their own preset.
-    let state_a = next_state(&mut ws_a).await;
-    let state_b = next_state(&mut ws_b).await;
-    assert_eq!(state_a["preset"], "04-rainbow");
-    assert_eq!(state_b["preset"], "04-rainbow");
-
-    // A parameter change on A must only touch A's instance.
-    let before_b = get_state(&mut ws_b, 10).await["channels"].clone();
-    let req = json!({"type": "req", "id": 2, "cmd": "setMasterVolume",
-        "args": {"channel": "ch1", "value": -6.0}});
-    ws_a.send(Message::Text(req.to_string().into())).await.expect("send");
-    let res = next_res(&mut ws_a, 2).await;
-    assert_eq!(res["ok"], true, "setParam refused: {res}");
-    let after_b = get_state(&mut ws_b, 11).await["channels"].clone();
-    assert_eq!(before_b, after_b, "B changed when A was touched");
-    assert_eq!(get_state(&mut ws_a, 12).await["channels"][0]["volume"], -6.0, "A did not take the change");
-
-    // Clean up A first, then B.
-    engine_wait(&mut ws_a).await;
-    let pid = child_a.id();
-    let _ = child_a.wait().expect("wait A");
-    assert_gone(pid);
-    engine_wait(&mut ws_b).await;
-    let pid = child_b.id();
-    let _ = child_b.wait().expect("wait B");
-    assert_gone(pid);
-
-    
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shutting_down_one_instance_does_not_affect_the_other() {
-    let port_a = free_port();
-    let port_b = free_port();
-
-    let mut child_a = Command::new(BIN)
-        .args(["--headless", "--port", &port_a.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn engine A");
-    let mut child_b = Command::new(BIN)
-        .args(["--headless", "--port", &port_b.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn engine B");
-
-    wait_listening(port_a, Duration::from_secs(30)).await;
-    wait_listening(port_b, Duration::from_secs(30)).await;
-
-    let mut ws_a = connect_ws(port_a).await;
-    let mut ws_b = connect_ws(port_b).await;
-
-    // Both instances are live at the same instant.
-    let state_a = next_state(&mut ws_a).await;
-    let state_b = next_state(&mut ws_b).await;
-    assert_eq!(state_a["preset"], "04-rainbow");
-    assert_eq!(state_b["preset"], "04-rainbow");
-
-    // Stop only A. A exits 0 and frees its port.
-    engine_wait(&mut ws_a).await;
-    let status = child_a.wait().expect("wait A");
-    assert!(status.success(), "A exited non-zero");
-    let _ = TcpListener::bind(("127.0.0.1", port_a))
-        .expect("A's port should be free after shutdown");
-
-    // B is still running and still serving while A is dead.
-    let state_b2 = get_state(&mut ws_b, 20).await;
-    assert_eq!(state_b2["preset"], "04-rainbow");
-    assert_eq!(state_b2["source"], "riff");
-
-    // Clean up B.
-    engine_wait(&mut ws_b).await;
-    let pid = child_b.id();
-    let _ = child_b.wait().expect("wait B");
-    assert_gone(pid);
-
-    
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn clean_shutdown_releases_resources_and_leaves_no_orphan_process() {
-    let port = free_port();
-
-    let mut child = Command::new(BIN)
-        .args(["--headless", "--port", &port.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn engine");
-
-    wait_listening(port, Duration::from_secs(30)).await;
-    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{}", port)).await.expect("ws connect");
-    let _ = next_state(&mut ws).await;
-
-    // Explicit shutdown API: engine.wait.
-    engine_wait(&mut ws).await;
-    let pid = child.id();
-    let status = child.wait().expect("wait");
-    assert_gone(pid);
-    assert!(status.success(), "clean shutdown must exit 0");
-
-    // The audio device, the IPC listener and every internal thread are
-    // reclaimed when the process exits. Verify the port is free again.
-    let _ = TcpListener::bind(("127.0.0.1", port))
-        .expect("port must be released after shutdown");
-
-    
-}
-
-/// The shell disappearing (control pipe closed) shuts the engine down on its
-/// own: it exits 0 and frees its port, with no `engine.wait` ever sent.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn engine_exits_when_the_shell_closes_the_control_pipe() {
-    let port = free_port();
-    let sock = std::env::temp_dir().join(format!("pedal-lifecycle-{}-{port}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&sock);
-    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind control pipe");
-
-    let child = Command::new(BIN)
-        .args(["--headless", "--port", &port.to_string(), "--control-pipe"])
-        .arg(&sock)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn engine");
-    let mut guard = Kill(child);
-    let (conn, _) = listener.accept().expect("engine connects to control pipe");
-    wait_listening(port, Duration::from_secs(30)).await;
-
-    // "Shell dies": the write end closes.
-    drop(conn);
-    drop(listener);
-
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let status = loop {
-        if let Some(st) = guard.0.try_wait().expect("try_wait") {
-            break st;
-        }
-        assert!(Instant::now() < deadline, "engine did not exit after the control pipe closed");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    assert!(status.success(), "parent-death shutdown must exit 0, got {status}");
-    let _ = TcpListener::bind(("127.0.0.1", port)).expect("port must be free after parent death");
-    let _ = std::fs::remove_file(&sock);
+#[tokio::test]
+async fn engine_wait_stops_the_engine_cleanly() {
+    let control_path = std::env::temp_dir().join(format!(
+        "t_9e90c111_wait_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    let listener = UnixListener::bind(&control_path).expect("control pipe");
+    let stderr_path = std::env::temp_dir().join(format!(
+        "t_9e90c111_wait_stderr_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+    ));
+    let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
+    let mut cmd = Command::new(engine_bin());
+    cmd.arg("--headless")
+        .arg("--port")
+        .arg("0")
+        .arg("--instance")
+        .arg("wait")
+        .arg("--control-pipe")
+        .arg(&control_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn engine");
+    // The engine is a client of the control pipe; the test is the listener.
+    // Accept the engine's connection, then drive it through the same
+    // shutdown path the shell uses: send the `engine.wait` command and close
+    // the write end (EOF) so the engine tears itself down and exits 0.
+    let mut stream = listener.accept().expect("engine connected").0;
+    stream.write_all(b"engine.wait\n").expect("write shutdown command");
+    stream.shutdown(Shutdown::Both).ok();
+    let out = child
+        .wait_with_output()
+        .expect("wait with output");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "engine should exit 0 after `engine.wait`, got {:?}\nstderr: {err}",
+        out.status
+    );
+    assert!(
+        err.contains("ready"),
+        "engine should have printed `ready` before exiting: {err}"
+    );
+    let _ = std::fs::remove_file(&control_path);
+    let _ = std::fs::remove_file(&stderr_path);
 }

@@ -7,14 +7,11 @@
 //! pedal can boot on a bench or a Pi with nothing attached. `--bench <seconds>`
 //! then measures the CPU cost of the rig and exits.
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use pedal_engine::audio::Cmd;
-use pedal_engine::channels::Rig;
 use pedal_engine::headless;
-use pedal_engine::host::{self, Config, Devices};
 use pedal_engine::lifecycle::{Engine, EngineArgs};
 use pedal_engine::model_index;
 use pedal_engine::server::Shared;
@@ -63,6 +60,11 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    if let Ok(guard) = engine.sh.store.lock() {
+        if let Some(e) = guard.error.as_ref() {
+            eprintln!("pedal-engine: store error: {e}");
+        }
+    }
 
     // Bench: measured on the simulated device, then the process exits 0.
     if let Some(secs) = args.bench {

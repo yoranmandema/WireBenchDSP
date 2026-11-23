@@ -20,9 +20,10 @@
 //!   loop, and the process exits 0. `Engine::stop()` is idempotent.
 
 use std::io::Read;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -103,10 +104,10 @@ pub struct EngineArgs {
     pub log: Option<PathBuf>,
     pub bench: Option<f32>,
     pub headless: bool,
-    pub rig: String,
-    pub migrate_presets: bool,
     /// Headless input source: 0 riff (default), 1 live tone, 2 silence.
     pub source: u8,
+    pub rig: String,
+    pub migrate_presets: bool,
 }
 
 impl EngineArgs {
@@ -129,18 +130,22 @@ impl EngineArgs {
                 .and_then(|v| v.parse::<f32>().ok())
                 .filter(|s| *s > 0.0),
             headless: flag("--headless"),
-            rig: value("--rig").unwrap_or_else(|| "04-rainbow".into()),
-            migrate_presets: flag("--migrate-presets"),
             source: match value("--source").as_deref() {
                 Some("live") => 1,
                 Some("silence") => 2,
                 _ => 0,
             },
+            rig: value("--rig").unwrap_or_else(|| "04-rainbow".into()),
+            migrate_presets: flag("--migrate-presets"),
         }
     }
 
     fn default_instance_id() -> String {
-        // `<pid>-<random16>`, hex.
+        // `<pid>-<random16>`, hex. The 16 bytes are random-looking but
+        // deterministic (same pid → same id), so two restarts of the same
+        // process get the same id: a stale pidfile from a killed instance is
+        // then owned by the new one, which is exactly the stale-engine
+        // resolver's contract (docs/IPC-PROTOCOL.md §3.3).
         let pid = std::process::id() as u64;
         let mut state = pid.wrapping_mul(0x9E3779B97F4A7C15);
         state ^= state >> 33;
@@ -150,8 +155,14 @@ impl EngineArgs {
             *b = (state & 0xFF) as u8;
             state = state.wrapping_mul(0x9E3779B97F4A7C15);
         }
-        // The 16 bytes are random non-UTF-8, so render them as a hex string.
-        let hex: String = out.iter().map(|b| format!("{:02x}", b)).collect();
+        // Hex-encode instead of UTF-8-lossily-decoding raw bytes: the PRNG
+        // output is not guaranteed to be valid UTF-8.
+        const HEX: &[u8] = b"0123456789abcdef";
+        let mut hex = String::with_capacity(32);
+        for &b in &out {
+            hex.push(HEX[(b >> 4) as usize] as char);
+            hex.push(HEX[(b & 0x0F) as usize] as char);
+        }
         format!("{}\n", hex)
     }
 
@@ -168,24 +179,33 @@ impl EngineArgs {
 
 /// An engine process instance: owns the audio streams, the listener and the
 /// shared state, and tears everything down in the right order.
+///
+/// The field order is the teardown order: `streams` and `listener` are dropped
+/// before `sh` (the shared state), which is dropped before `tuner`. This keeps
+/// the audio device and the IPC socket released before the executor /
+/// registry / meters are freed.
 pub struct Engine {
-    pub sh: Arc<Shared>,
-    /// The audio thread's running flag. `false` starts the shutdown sequence.
-    pub running: Arc<AtomicBool>,
-    /// Ordering handles the teardown of the audio device and the listener.
-    pub streams: Option<AudioStreams>,
-    pub listener: Option<TcpListener>,
-    /// The detached tuner thread. It is detached on purpose (like the existing
-    /// code); the process exits when `main` returns, and the OS reclaims all
-    /// threads.
-    pub tuner: Option<thread::JoinHandle<()>>,
-    /// The engine wakes its main loop via the `shutdown` field of `Shared`.
-    stopped: AtomicBool,
     /// Per-instance identity and endpoints.
     pub instance: String,
     pub port: u16,
+    /// Audio streams backed by the device. `None` for headless. Dropped before
+    /// the listener and the shared state.
+    pub streams: Option<AudioStreams>,
+    /// The IPC listener. Dropped before the shared state.
+    pub listener: Option<TcpListener>,
+    /// The audio thread's running flag. `false` starts the shutdown sequence.
+    pub running: Arc<AtomicBool>,
+    /// The idempotent stop flag.
+    pub stopped: AtomicBool,
     /// The simulated headless device (only used when `--headless`).
     pub headless: Option<headless::Headless>,
+    /// Everything the protocol can touch. Dropped last so the audio device and
+    /// the listener are released first, and the executor, registry and meters
+    /// are freed last (no live callbacks reference them).
+    pub sh: Arc<Shared>,
+    /// The detached tuner thread. Dropped last, as the process exits when
+    /// `main` returns and the OS reclaims all threads.
+    pub tuner: Option<thread::JoinHandle<()>>,
 }
 
 impl Engine {
@@ -250,7 +270,7 @@ impl Engine {
         let rig = crate::channels::Rig::from_doc(&doc);
         {
             let resolver = crate::model_index::resolver();
-            let mut g = rig.to_doc().build_in_with(&handle.registry, &handle.preset_dir, &resolver)
+            let mut g = doc.build_in_with(&handle.registry, &handle.preset_dir, &resolver)
                 .unwrap_or_else(|e| {
                     eprintln!("pedal-engine: could not build initial rig: {e}");
                     std::process::exit(1);
@@ -270,9 +290,7 @@ impl Engine {
                 .push(crate::audio::Cmd::Swap(ex, Vec::new()))
                 .unwrap_or_else(|e| eprintln!("pedal-engine: initial swap failed: {e}"));
         }
-        // Silence on a real device (the riff is opt-in); headless defaults to
-        // the riff so a bench measures a real load.
-        handle.set_source(if args.headless { args.source } else { 2 });
+        handle.set_source(2); // silence
 
         // 3. Per-instance log path (the shell also sets PEDAL_ENGINE_LOG).
         let _log = args.log_path();
@@ -281,6 +299,7 @@ impl Engine {
         let (streams, tuner_ring);
         let mut headless_device;
         if args.headless {
+            handle.set_source(args.source);
             let headless = crate::headless::start(
                 setup,
                 cmd_rx,
@@ -290,6 +309,7 @@ impl Engine {
                 handle.source.clone(),
             );
             tuner_ring = headless.tuner_ring.clone();
+            eprintln!("pedal-engine: headless (no audio device)");
             streams = None;
             // The headless device is owned by `Engine` and dropped with it.
             headless_device = Some(headless);
@@ -317,33 +337,28 @@ impl Engine {
 
         // 5. IPC shared state.
         let running_flag = running.clone();
-        let models = Arc::new(crate::models::Models::new());
-        let sh = Arc::new(Shared::with_running(handle, registry, source, store, models.clone(), running_flag));
-        // Install the compiled initial rig (built from the preset named by
-        // `--rig`, or the compiled-in default `04-rainbow`). The empty rig
-        // `Rig::default()` only supplies slot ids; the shipped presets own
-        // content, so the UI's `state` must report the preset's channels.
+        let sh = Arc::new(Shared::new(handle, registry, source, store, running_flag, Arc::new(crate::models::Models::new())));
+        // Record the rig name so the UI's snapshot shows it.
         *sh.rig.lock().unwrap() = rig;
-        // The initial rig is compiled from the rig named by `--rig` (or the
-        // compiled-in default `04-rainbow`); report it as the current preset.
         *sh.preset.lock().unwrap() = args.rig.clone();
+        let sh_watcher = sh.clone();
         // `self.running` keeps the flag; `sh.running` mirrors it so the server
         // (`apply`) can observe it.
-
-        // 6. Shutdown signal: the main loop wakes on `shutdown`, woken by
-        //    `engine.wait` (handled in `server.rs`'s `apply()`) or parent death
-        //    (control-pipe EOF).
-        // 7. Parent-death detection: read the control pipe until EOF.
+        // 6. Shutdown signal: the main loop wakes on `sh.shutdown`, woken by
+        //    `engine.wait` or parent death (control-pipe EOF).
+        // 7. Parent-death detection + graceful shutdown command: read the
+        // control pipe until EOF or a `engine.wait` command. Either path
+        // clears `running` and wakes the main loop so the streams, listener
+        // and shared state tear down in order and the process exits 0.
         if let Some(cp) = args.control_pipe.clone() {
-            let sh = sh.clone();
+            let running = running.clone();
             thread::spawn(move || {
-                if let Err(e) = read_control_pipe(&cp) {
-                    eprintln!("pedal-engine: control pipe {:?}: {e}", cp);
+                eprintln!("engine: watcher connecting to {:?}", cp);
+                let r = read_control_pipe(&cp, &running, &(*sh_watcher).shutdown);
+                if r.is_ok() {
+                    eprintln!("engine: control pipe closed (parent died); starting teardown");
                 }
-                // The shell is gone (EOF or unreachable): same teardown as
-                // `engine.wait`.
-                sh.running.store(false, Ordering::Relaxed);
-                sh.shutdown.notify_one();
+                eprintln!("engine: watcher read_control_pipe returned {:?}", r);
             });
         }
 
@@ -353,15 +368,15 @@ impl Engine {
         let tuner = crate::tuner::spawn(tuner_ring, setup.sample_rate, sh.handle.meters.clone());
 
         Ok(Self {
-            sh,
-            running,
-            streams,
-            listener: Some(listener),
-            tuner: Some(tuner),
-            stopped: AtomicBool::new(false),
             instance,
             port,
+            streams,
+            listener: Some(listener),
+            running,
+            stopped: AtomicBool::new(false),
             headless: headless_device,
+            sh,
+            tuner: Some(tuner),
         })
     }
 
@@ -391,7 +406,7 @@ impl Engine {
     /// The main loop: serve clients until the listener is dropped or the
     /// shutdown signal fires, then tear everything down and return.
     pub async fn run(&mut self) -> Result<(), String> {
-        let listener = self.listener.take().expect("listener set in new()");
+        let listener = self.listener.as_ref().expect("listener set in new()");
         // `serve_listener` runs the accept loop. When the shutdown signal fires
         // we drop the listener, which makes `accept()` return and the loop
         // unwind, releasing the port and clients.
@@ -435,17 +450,41 @@ pub fn write_pidfile(path: &Path, pid: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Wait for the parent to die: returns when the control pipe is closed (EOF)
-/// or an error occurs. Called in a background thread.
-pub fn read_control_pipe(path: &Path) -> std::io::Result<()> {
-    let mut stream = std::os::unix::net::UnixStream::connect(path)?;
-    let mut buf = [0u8; 1];
+/// Read commands over the control pipe until EOF or a command.
+///
+/// The control pipe is a unix-domain stream socket: the shell holds one end
+/// (a [`UnixListener`] it bound) and the engine holds the other (the connected
+/// [`UnixStream`] the engine established). The shell writes one command per
+/// line. The only command today is `engine.wait`, which asks the engine to
+/// start its graceful shutdown: `running` is cleared and the main loop is
+/// woken, so the audio callback returns, the streams and listener are dropped,
+/// and `main` returns 0.
+///
+/// EOF (`Ok(0)`) means the shell closed its write end: a normal quit sent
+/// `engine.wait` and then closed the write end, or the shell died. Either way
+/// the engine tears itself down.
+pub fn read_control_pipe(path: &Path, running: &AtomicBool, shutdown: &Notify) -> std::io::Result<()> {
+    let mut stream = UnixStream::connect(path)?;
+    let mut buf = [0u8; 4096];
+    let mut line_buf = Vec::new();
     loop {
-        match stream.read(&mut buf) {
-            Ok(0) => return Ok(()), // EOF: the shell closed its write end
-            Ok(_) => continue,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
+        let n = stream.read(&mut buf)?;
+        if n == 0 {
+            // EOF: the shell closed its write end. Clear `running` and wake the
+            // main loop so the teardown proceeds to exit 0.
+            running.store(false, Ordering::Relaxed);
+            shutdown.notify_one();
+            return Ok(());
+        }
+        line_buf.extend_from_slice(&buf[..n]);
+        while let Some(pos) = line_buf.iter().position(|&b| b == b'\n') {
+            let line = std::str::from_utf8(&line_buf[..pos]).unwrap_or_default();
+            let cmd = line.trim();
+            if !cmd.is_empty() && cmd.eq_ignore_ascii_case("engine.wait") {
+                running.store(false, Ordering::Relaxed);
+                shutdown.notify_one();
+            }
+            line_buf.drain(..pos + 1);
         }
     }
 }
