@@ -7,9 +7,9 @@ import { Format, ALL_PARAMS, activeBandIds, type ParamId } from "../params";
 import {
   LocalParamSource,
   useMultibandParams,
-  LocalMetersSource,
-  useMultibandMeters,
+  useMultibandMetersSource,
 } from "../hooks/useParams";
+import { MultibandMeter } from "./MultibandMeter";
 
 /** Format a value by its schema unit (shared by the global knobs). */
 function formatByUnit(unit: string, v: number): string {
@@ -66,9 +66,9 @@ export function MultibandCompressorEditor({
     }
     return p;
   }, [block]);
+  const meters = useMultibandMetersSource();
   const source = useMemo(() => new LocalParamSource(params), [params]);
   const { values, setValue } = useMultibandParams(source, block);
-  const meters = useMultibandMeters(new LocalMetersSource());
 
   const g = (id: ParamId): number => values[id];
 
@@ -149,14 +149,14 @@ export function MultibandCompressorEditor({
         ))}
       </div>
 
-      {/* Per-band gain-reduction meter region (placeholder). */}
+      {/* Per-band gain-reduction meter region. */}
       <div class="meters">
         <div class="flex items-center justify-between">
           <span class={`${ctrlName} ctrlName`}>Gain reduction (GR)</span>
         </div>
         <div class="meter-grid grid grid-cols-2 gap-3 sm:grid-cols-4">
           {meters.bands.map((m) => (
-            <MeterMark key={m.band} band={m.band} grDb={m.gr_db} />
+            <MultibandMeter key={m.band} band={m.band} grDb={m.gr_db} />
           ))}
           {meters.bands.length === 0 && (
             <div class={`${emptyNote} editor-empty emptyNote`}>
@@ -224,30 +224,6 @@ function ParamKnob({
         format={(v) => formatByUnit(p.unit, v)}
         onChange={onChange}
       />
-    </div>
-  );
-}
-
-/** A horizontal gain-reduction scale: 0 dB at centre, red below −3 dB. */
-function MeterMark({ band, grDb }: { band: string; grDb: number }) {
-  const pct = Math.max(0, Math.min(100, (grDb / -3) * 100));
-  return (
-    <div class="meter flex flex-col items-center gap-1">
-      <span class="text-[10px] font-mono text-muted">{band}</span>
-      <div
-        class="meter-track h-[8px] min-w-0 flex-1 rounded-full bg-well overflow-hidden border border-line-soft"
-        role="progressbar"
-        aria-valuenow={Math.round(pct)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label={`${band} gain reduction`}
-      >
-        <div
-          class="h-full rounded-full bg-red-500 transition-width duration-100"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span class="text-[9px] font-mono text-muted">{Format.db(grDb)}</span>
     </div>
   );
 }

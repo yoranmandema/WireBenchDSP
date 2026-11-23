@@ -16,9 +16,11 @@
 import { useMemo } from "preact/hooks";
 import type { ParamId } from "../params";
 import type { Block } from "../protocol";
-
-/** Every parameter id the multiband compressor exposes. */
+import type { Meters } from "../protocol";
+import { isMeters } from "../protocol";
 import { ALL_PARAMS } from "../params";
+import { bridge, state } from "../state";
+import type { Bridge } from "../bridge";
 
 /** A read/write source of parameter values. The UI never talks to the engine
  *  directly; it goes through a source. Swapping the source is the only change
@@ -133,17 +135,40 @@ export interface MultibandMeters {
   bands: ReadonlyArray<MultibandMeter>;
 }
 
+/** A source of multiband metering values. The UI never talks to the engine's
+ *  meter atoms directly; it goes through a source. The engine card (t_*_eng_2)
+ *  writes the engine's `Meters` payload (with `bands`) into this source through
+ *  `setMeters` from its `event: meters` subscription (see
+ *  docs/design/multiband-compressor.md §7). When no engine is present the UI
+ *  falls back to the `LocalMetersSource` stub, so the panel keeps rendering and
+ *  the meters still respond to injected values. */
+export interface MultibandMetersSource {
+  /** Apply a fresh `event: meters` payload (the extended `Meters`). */
+  setMeters(m: MultibandMeters): void;
+  /** Reset to the fresh-rig state. */
+  reset(): void;
+}
+
 /** Local, engine-less source of per-band meter values.
  *
  * Starts flat (no gain reduction yet) and is independent of the audio thread, so
  * the panel can render placeholder GR meters in the skeleton.
  */
-export class LocalMetersSource implements MultibandMeters {
+export class LocalMetersSource implements MultibandMeters, MultibandMetersSource {
   in = 0.42;
   out = 0.38;
   cpu = 0;
   xruns = 0;
   bands: readonly MultibandMeter[] = [];
+
+  /** Apply a fresh `event: meters` payload (e.g. injected by a test). */
+  setMeters(m: MultibandMeters): void {
+    this.in = m.in;
+    this.out = m.out;
+    this.cpu = m.cpu;
+    this.xruns = m.xruns;
+    this.bands = m.bands ?? [];
+  }
 
   /** Reset to the fresh-rig state. */
   reset(): void {
@@ -158,4 +183,74 @@ export class LocalMetersSource implements MultibandMeters {
 /** Resolve the per-band GR meters the panel renders. */
 export function useMultibandMeters(meters: MultibandMeters): MultibandMeters {
   return meters;
+}
+
+// --- Engine metering subscription -------------------------------------------
+
+/** Engine metering subscription: listens to the `event: meters` broadcast on
+ *  the bridge and applies each payload into this object's fields (including the
+ *  per-band `bands`). The UI panel swaps to this source when the engine is
+ *  reachable; when no engine is present the panel falls back to
+ *  `LocalMetersSource` (a stub). */
+export class EngineMetersSource implements MultibandMeters, MultibandMetersSource {
+  in = 0;
+  out = 0;
+  cpu = 0;
+  xruns = 0;
+  bands: readonly MultibandMeter[] = [];
+  private unsubscribe?: () => void;
+
+  private bridge: Bridge;
+
+  constructor(defaultBridge: Bridge = bridge) {
+    this.bridge = defaultBridge;
+    this.unsubscribe = this.bridge.subscribe((msg) => {
+      if (isMeters(msg)) this.setMeters(msg.payload);
+    });
+  }
+
+  /** Apply a fresh `event: meters` payload (the engine's extended `Meters`).
+   *
+   *  The wire `Meters` is extended with per-band GR (`bands`) once the engine
+   *  card lands; until then this stays empty. `MultibandMeter` is the band
+   *  shape referenced by the design doc (§7). */
+  setMeters(m: Meters & { bands?: ReadonlyArray<MultibandMeter> }): void {
+    this.in = m.in;
+    this.out = m.out;
+    this.cpu = m.cpu;
+    this.xruns = m.xruns;
+    this.bands = m.bands ?? [];
+  }
+
+  /** Reset to the fresh-rig state (and re-subscribe to the next engine
+   *  connection). */
+  reset(): void {
+    this.in = 0;
+    this.out = 0;
+    this.cpu = 0;
+    this.xruns = 0;
+    this.bands = [];
+    this.unsubscribe?.();
+    this.unsubscribe = this.bridge.subscribe((msg) => {
+      if (isMeters(msg)) this.setMeters(msg.payload);
+    });
+  }
+}
+
+/**
+ * Meter source for the multiband panel.
+ *
+ * Returns an engine metering subscription when the engine is reachable (a
+ * `state` snapshot has been applied), otherwise the engine-less stub. The stub
+ * still drives the panel, so the meters keep rendering and responding to
+ * injected values with no engine running.
+ */
+export function useMultibandMetersSource(
+  defaultBridge: Bridge = bridge,
+): MultibandMeters {
+  const isEngineUp = state.value !== null;
+  return useMemo(() => {
+    const bridgeToUse = isEngineUp ? defaultBridge : bridge;
+    return isEngineUp ? new EngineMetersSource(bridgeToUse) : new LocalMetersSource();
+  }, [defaultBridge, isEngineUp]);
 }
