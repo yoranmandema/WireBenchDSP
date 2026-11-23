@@ -370,6 +370,8 @@ impl Block for PrecisionDrive {
             let e = (self.ef.process(x.abs()) / 0.5).clamp(0.0, 1.0);
             drive_eff = gain * (1.0 - tightness * e);
             self.shaper.set_drive(drive_eff);
+            self.shaper.set_mix(1.0);
+            self.shaper.set_level(1.0);
             x = self.shaper.process(x);
             x = self.tone.process(x);
             output[i] = x * pedal_dsp::util::db_to_lin(volume);
@@ -770,6 +772,7 @@ impl Block for Chorus {
         }
     }
 }
+
 /// The graph's input node. The executor writes the raw input into this node's
 /// output buffer before running the steps.
 #[derive(Default)]
@@ -2378,9 +2381,191 @@ impl Block for Tremolo {
         self.lfo.reset();
     }
 }
+        pub struct Looper {
+            inner: Option<LooperInner>,
+        }
+
+        struct LoopBuffer<const N: usize> {
+            buf: [f32; N],
+            cursor: usize,
+            read: usize,
+        }
+
+        impl<const N: usize> LoopBuffer<N> {
+            pub fn new() -> Self {
+                Self { buf: [0.0; N], cursor: 0, read: 0 }
+            }
+
+            fn w(&self, i: usize) -> usize {
+                if i >= N {
+                    i % N
+                } else {
+                    i
+                }
+            }
+
+            pub fn write(&mut self, sample: f32) {
+                self.buf[self.cursor] = sample;
+                self.cursor = self.w(self.cursor + 1);
+            }
+
+            pub fn read(&self, pos: usize) -> f32 {
+                self.buf[self.w(pos)]
+            }
+
+            pub fn reset(&mut self) {
+                self.buf = [0.0; N];
+                self.cursor = 0;
+                self.read = 0;
+            }
+        }
+
+        const LOOP_MAX_SAMPLES: usize = 480_000;
+        const LOOP_HALF: usize = LOOP_MAX_SAMPLES / 2;
+
+        #[derive(Clone, Copy, PartialEq)]
+        enum State {
+            Idle,
+            Recording,
+            Playing,
+            Overdubbing,
+            Stopped,
+        }
+
+        struct LooperInner {
+            buf: LoopBuffer<{ LOOP_MAX_SAMPLES }>,
+            cursor: usize,
+            read: usize,
+            delay: usize,
+            state: State,
+            gate_held: [bool; 5],
+            take_start: u64,
+            sample_count: u64,
+            cleared: bool,
+        }
+
+        impl LooperInner {
+            fn reset(&mut self) {
+                self.buf.reset();
+                self.cursor = 0;
+                self.read = 0;
+                self.delay = 0;
+                self.state = State::Idle;
+                self.gate_held = [false; 5];
+                self.take_start = 0;
+                self.sample_count = 0;
+                self.cleared = false;
+            }
+        }
+
+        impl Default for LooperInner {
+            fn default() -> Self {
+                Self {
+                    buf: LoopBuffer::new(),
+                    cursor: 0,
+                    read: 0,
+                    delay: 0,
+                    state: State::Idle,
+                    gate_held: [false; 5],
+                    take_start: 0,
+                    sample_count: 0,
+                    cleared: false,
+                }
+            }
+        }
+
+        impl Looper {
+            fn inner(&mut self) -> &mut LooperInner {
+                self.inner.get_or_insert_with(LooperInner::default)
+            }
+        }
+
+pub struct GraphicEq {
+    bands: [Biquad; 10],
+    gains: [f32; 10],
+}
+
+impl Default for GraphicEq {
+    fn default() -> Self {
+        Self {
+            bands: [Biquad::identity(); 10],
+            gains: [0.0; 10],
+        }
+    }
+}
+
+impl Block for GraphicEq {
+    fn spec(&self) -> BlockSpec {
+        BlockSpec {
+            id: "tone.graphic_eq",
+            name: "Graphic EQ",
+            category: Category::Tone,
+            inputs: vec![PortSpec::audio("in")],
+            outputs: vec![PortSpec::audio("out")],
+            params: vec![
+                ParamSpec { id: "gain0", name: "Band 1", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain1", name: "Band 2", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain2", name: "Band 3", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain3", name: "Band 4", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain4", name: "Band 5", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain5", name: "Band 6", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain6", name: "Band 7", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain7", name: "Band 8", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain8", name: "Band 9", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+                ParamSpec { id: "gain9", name: "Band 10", unit: Unit::Decibels, min: -12.0, max: 12.0, default: 0.0, curve: Curve::AmpGain },
+            ],
+            controls_in: vec![],
+            controls_out: vec![],
+        }
+    }
+
+    fn prepare(&mut self, sr: f32, _max: usize) -> Result<(), BlockError> {
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            // 0 dB is identity: design() with gain 0 yields the exact
+            // pass-through coefficients (b1/b2 = 0, a1/a2 = 0).
+            band.design(BiquadKind::Peak, sr, G_EQ_CENTRES_HZ[i], 1.0, 0.0);
+        }
+        Ok(())
+    }
+
+    fn process(&mut self, ctx: &mut BlockCtx<'_>) -> Result<(), BlockError> {
+        // Snapshot the live gains, then bake each into the biquad
+        // coefficients for this sample — exactly like `ToneStack`.
+        // 0 dB is a per-band identity, so the cascade at 0 dB is
+        // sample-exact.
+        for (i, db) in self.gains.iter_mut().enumerate() {
+            *db = ctx.param(i);
+        }
+        for (i, band) in self.bands.iter_mut().enumerate() {
+            band.design(BiquadKind::Peak, ctx.sample_rate, G_EQ_CENTRES_HZ[i], 1.0, self.gains[i]);
+        }
+        let input = ctx.inputs[0];
+        let output = &mut ctx.outputs[0][..];
+        for i in 0..ctx.n {
+            let mut s = input[i];
+            for band in self.bands.iter_mut() {
+                s = band.process(s);
+            }
+            output[i] = s;
+        }
+        Ok(())
+    }
+
+    fn reset(&mut self) {
+        for band in &mut self.bands {
+            band.reset();
+        }
+    }
+}
+
+/// ISO 1/1-octave centre frequencies (Hz) for the 10-band graphic EQ.
+const G_EQ_CENTRES_HZ: [f32; 10] = [
+    31.5, 63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+];
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
+    r.add::<GraphicEq>();
     r.add::<IoOutput>();
     r.add::<Gain>();
     r.add::<MixSum>();

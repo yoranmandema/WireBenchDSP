@@ -19,6 +19,7 @@
 //! attack and slow release.
 
 /// Per-sample one-pole filter.
+#[derive(Clone, Copy)]
 pub struct OnePole {
     /// `1 - exp(-1 / (tau * fs))`, normally in `(0, 1)`.
     coef: f32,
@@ -69,6 +70,7 @@ impl OnePole {
 /// This produces a classic peak envelope: the pump rises quickly on a
 /// transient and decays slowly, which is exactly the "Punch" behaviour the
 /// Precision Drive needs (design §2.2).
+#[derive(Clone, Copy)]
 pub struct EnvelopeFollower {
     attack: OnePole,
     pump: OnePole,
