@@ -847,10 +847,10 @@ async fn meters_loop(sh: Arc<Shared>) {
         let cpu = read_f32(&m.callback_s) / (crate::audio::MAX_BLOCK as f32 / sh.handle.sample_rate) * 100.0;
         let xruns = m.xruns.load(Ordering::Relaxed);
         // Per-band gain reduction / output level of the multiband compressor.
-        let bands: Vec<_> = dsp_graph::blocks::multiband_meters()
+        let bands: Vec<_> = m
+            .bands()
             .iter()
-            .enumerate()
-            .map(|(i, (gr, o))| json!({"band": format!("band_{}", i + 1), "gr_db": gr, "out_db": o}))
+            .map(|b| json!({"band": b.band, "gr_db": b.gr_db, "out_db": b.out_db}))
             .collect();
         let text = json!({
             "type":"event","event":"meters",
