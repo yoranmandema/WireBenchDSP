@@ -124,7 +124,7 @@ async fn the_ipc_surface_cannot_add_or_remove_a_channel() {
     handle.preset_dir = store.dir.clone();
 
     let sh = Arc::new(Shared::new(handle, registry, source, store,
-        Arc::new(AtomicBool::new(true))));
+        Arc::new(AtomicBool::new(true)), Arc::new(pedal_engine::models::Models::new())));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().unwrap().port();
     let sh_task = sh.clone();
@@ -181,7 +181,7 @@ async fn an_empty_rig_runs_the_bypass_and_resumes_on_the_first_block() {
     handle.preset_dir = store.dir.clone();
 
     let sh = Arc::new(Shared::new(handle, registry, source, store,
-        Arc::new(AtomicBool::new(true))));
+        Arc::new(AtomicBool::new(true)), Arc::new(pedal_engine::models::Models::new())));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().unwrap().port();
     let sh_task = sh.clone();
@@ -246,7 +246,7 @@ async fn engine_wait_and_status_are_the_shutdown_api() {
     handle.preset_dir = store.dir.clone();
 
     let sh = Arc::new(Shared::new(handle, registry, source, store,
-        Arc::new(AtomicBool::new(true))));
+        Arc::new(AtomicBool::new(true)), Arc::new(pedal_engine::models::Models::new())));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().unwrap().port();
     let sh_task = sh.clone();

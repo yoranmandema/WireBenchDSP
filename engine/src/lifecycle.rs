@@ -328,8 +328,9 @@ impl Engine {
 
         // 5. IPC shared state.
         let running_flag = running.clone();
-        let sh = Arc::new(Shared::new(handle, registry, source, store, running_flag));
+        let sh = Arc::new(Shared::new(handle, registry, source, store, running_flag, Arc::new(crate::models::Models::new())));
         // Record the rig name so the UI's snapshot shows it.
+        *sh.rig.lock().unwrap() = rig;
         *sh.preset.lock().unwrap() = args.rig.clone();
         let sh_watcher = sh.clone();
         // `self.running` keeps the flag; `sh.running` mirrors it so the server

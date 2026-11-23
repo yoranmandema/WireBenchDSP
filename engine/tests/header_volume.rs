@@ -119,7 +119,7 @@ async fn the_ipc_commands_report_and_clamp() {
     handle.preset_dir = store.dir.clone();
 
     let sh = Arc::new(Shared::new(handle, registry, source, store,
-        Arc::new(AtomicBool::new(true))));
+        Arc::new(AtomicBool::new(true)), Arc::new(pedal_engine::models::Models::new())));
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");

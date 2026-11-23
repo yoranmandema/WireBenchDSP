@@ -62,8 +62,14 @@ export class WebSocketBridge implements Bridge {
       const entry = this.pending.get(msg.id);
       if (!entry) return;
       this.pending.delete(msg.id);
-      if (msg.ok) entry.resolve(msg.payload);
-      else entry.reject(new Error(msg.error ?? "request failed"));
+      if (msg.ok) {
+        entry.resolve(msg.payload);
+      } else {
+        const e = new Error(msg.error ?? "request failed");
+        entry.reject(e);
+        // eslint-disable-next-line no-console
+        console.error("[bridge] rejected", msg.id, msg.error);
+      }
       return;
     }
     for (const cb of this.listeners) cb(msg);
