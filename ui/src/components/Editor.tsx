@@ -1,11 +1,16 @@
 import type { JSX } from "preact";
 import { Knob } from "./Knob";
+import { LooperEditor } from "./LooperEditor";
 import { catStyle } from "../theme";
-import { selected, setBypass, setParam, state, addBlockFor } from "../state";
+import { selected, setBypass, setParam, setGraphicEqBand, state, addBlockFor } from "../state";
 import { useState } from "preact/hooks";
 import type { BlockSpec, ParamSpec } from "../protocol";
 import { ctrlName, emptyNote } from "../ui";
 import { AddBlockPicker } from "./AddBlockModal";
+import { GraphicEqEditor } from "./GraphicEqEditor";
+import { MultibandCompressorEditor } from "./MultibandCompressorEditor";
+import { ParametricEQ } from "./ParametricEQ";
+import { MultibandCompressorPanel } from "./MultibandCompressorPanel";
 
 /** Format a parameter value with the unit the engine declares. */
 function formatParam(p: ParamSpec, v: number): string {
@@ -14,11 +19,9 @@ function formatParam(p: ParamSpec, v: number): string {
   return `${v.toFixed(decimals)}${p.unit ? ` ${p.unit}` : ""}`;
 }
 
-/**
- * A `choice` parameter. A knob is the wrong control for a small set of named
- * options, so these render as a segmented row (or a dropdown when there are
- * too many to lay out).
- */
+/** A `choice` parameter. A knob is the wrong control for a small set of named
+ *  options, so these render as a segmented row (or a dropdown when there are
+ *  too many to lay out). */
 function ChoiceControl({
   p,
   value,
@@ -37,7 +40,11 @@ function ChoiceControl({
     return (
       <label class="select-unit grid items-center justify-items-center gap-1 w-full col-span-2">
         <span class={`${ctrlName} ctrlName`}>{p.name}</span>
-        <select class="select textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3" value={current} onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}>
+        <select
+          class="select textField min-h-[var(--ui-touch)] min-w-[var(--ui-touch)] px-3"
+          value={current}
+          onChange={(e) => onChange(Number((e.target as HTMLSelectElement).value))}
+        >
           {choices.map((c, i) => (
             <option key={c} value={i}>{c}</option>
           ))}
@@ -141,7 +148,7 @@ export function Editor() {
 
   if (!sel) {
     return (
-      <footer class="editor row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">
+      <footer class="editor row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 max-h-[62vh] portrait:max-h-[32vh] overflow-y-auto overscroll-contain desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">
         <div class={`${emptyNote} editor-empty emptyNote`}>Select a block in the chain to edit it.</div>
       </footer>
     );
@@ -151,12 +158,13 @@ export function Editor() {
   const block = channel?.blocks.find((b) => b.id === sel.block);
   if (!block) {
     return (
-      <footer class="editor row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">
+      <footer class="editor row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 max-h-[62vh] portrait:max-h-[32vh] overflow-y-auto overscroll-contain desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start">
         <div class={`${emptyNote} editor-empty emptyNote`}>That block is gone.</div>
       </footer>
     );
   }
 
+  const isGraphicEq = block.type === "tone.graphic_eq";
   const spec: BlockSpec | undefined = s.registry[block.type];
   const params = spec?.params ?? [];
   const knobs = params.filter((p) => p.kind !== "choice");
@@ -178,11 +186,19 @@ export function Editor() {
     setGate(engaged ? 1 : 0);
   };
 
+  if (block.type === "time.looper") {
+    return <LooperEditor />;
+  }
+
   const resetAll = (): void => {
     for (const p of params) void setParam(sel.channel, sel.block, p.id, p.default);
   };
 
-  const body: JSX.Element = (
+  let body: JSX.Element;
+  if (spec?.name === "Multiband Compressor") {
+    body = <MultibandCompressorEditor channel={sel.channel} block={block} spec={spec} />;
+  } else {
+    body = (
     <>
       <div class="editor-id cat-scope grid grid-cols-[minmax(0,1fr)] items-center justify-items-start gap-1 pl-3 min-h-0 phone:flex phone:flex-wrap phone:items-center phone:gap-x-3 phone:gap-y-1 phone:px-2 phone:py-2" style={spec ? catStyle(spec.category) : undefined}>
         <div class="editor-name flex items-center gap-2 min-w-0 max-w-full">
@@ -200,22 +216,39 @@ export function Editor() {
       </div>
 
       <div class="editor-controls grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4 min-w-0 w-full max-w-[var(--ui-ctrl-row)] mx-auto">
-        {params.length === 0 && <div class={`${emptyNote} editor-empty emptyNote`}>This block has no parameters.</div>}
-        {choices.map((p) => (
-          <ChoiceControl key={p.id} p={p} value={block.params[p.id] ?? p.default} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
-        ))}
-        {knobs.map((p) => (
-          <Knob key={p.id} name={p.name} value={block.params[p.id] ?? p.default} min={p.min} max={p.max} defaultValue={p.default} unit={p.unit} format={(v) => formatParam(p, v)} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
-        ))}
-        <FootswitchControl active={sweepGate > 0} onChange={toggleFootswitch} />
+        {block.type === "tone.eq" ? (
+          <ParametricEQ />
+        ) : isGraphicEq ? (
+          <GraphicEqEditor
+            channel={sel.channel}
+            block={block}
+            onChange={(param: string, db: number) => {
+              const band = parseInt(param.replace("gain", ""), 10);
+              void setGraphicEqBand(sel.channel, band, db);
+            }}
+          />
+        ) : block.type === "dynamics.multiband_compressor" ? (
+          <MultibandCompressorPanel channel={sel.channel} block={sel.block} />
+        ) : (
+          <>
+            {params.length === 0 && <div class={`${emptyNote} editor-empty emptyNote`}>This block has no parameters.</div>}
+            {choices.map((p) => (
+              <ChoiceControl key={p.id} p={p} value={block.params[p.id] ?? p.default} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
+            ))}
+            {knobs.map((p) => (
+              <Knob key={p.id} name={p.name} value={block.params[p.id] ?? p.default} min={p.min} max={p.max} defaultValue={p.default} unit={p.unit} format={(v) => formatParam(p, v)} onChange={(v) => void setParam(sel.channel, sel.block, p.id, v)} />
+            ))}
+            <FootswitchControl active={sweepGate > 0} onChange={toggleFootswitch} />
+          </>
+        )}
       </div>
       <ExpressionControl value={sweepGate} onChange={setSweepGate} />
     </>
   );
-
+}
   return (
     <footer
-      class="editor relative row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 min-h-0 max-h-[62vh] overflow-y-auto desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start"
+      class="editor relative row-start-3 col-start-1 grid grid-cols-[minmax(0,var(--ui-id-w))_minmax(0,1fr)] items-center gap-3 border-t border-line bg-linear-to-b from-[#1a1b21] to-[#14151a] p-4 min-h-0 max-h-[62vh] portrait:max-h-[32vh] overflow-y-auto overscroll-contain desk:h-[var(--ui-bar)] desk:min-h-[var(--ui-bar)] desk:max-h-none desk:overflow-visible phone:grid-cols-1 phone:items-start"
     >
       {sel.block ? body : (
         <div class={`${emptyNote} editor-empty emptyNote`}>Select a block in the chain to edit it.</div>
