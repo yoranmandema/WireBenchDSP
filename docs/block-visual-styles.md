@@ -14,10 +14,8 @@ Theme mechanism — CSS variables, Tailwind tokens, SVG linework, control layout
 constraints. (5) The full block-type list with a one-line style concept per
 type. (6) Follow-up implementation cards.
 
-Related docs: `docs/ARCHITECTURE.md`, `docs/UI-ARCHITECTURE.md`,
-`docs/IPC-PROTOCOL.md`, `docs/notes/ui-survey.md`,
-`docs/notes/block-type-inventory.md`, `docs/design/overdrive-arch.md` (the
-engine-side `BlockSpec` lives here).
+Related docs: `docs/ARCHITECTURE.md`, `docs/IPC-PROTOCOL.md`,
+`docs/notes/ui-survey.md`, `docs/notes/block-type-inventory.md`.
 
 ---
 
@@ -45,6 +43,8 @@ export interface BlockPalette {
   base: string;
   /** Recessed surfaces inside the artwork (grilles, valve bodies, rear panel). */
   surface: string;
+  /** Solid inset behind every control so chrome has a predictable 3:1 target. */
+  bg: string;
   /** Primary linework — a block's edge, grilles, jack markers. */
   line: string;
   /** Secondary linework — mounting screws, trace, inner detail. */
@@ -79,7 +79,7 @@ export interface BlockAnchor {
 /** The theme for one block type. */
 export interface BlockTheme {
   palette: BlockPalette;
-  /** Inline SVG artwork as a data URL. `null` = use a structural default
+  /** Inline SVG artwork as a data URL. `undefined` = use a structural default
    *  (a plain rounded-rect plate with the category hatch) derived from
    *  `material` + `palette`. */
   artwork?: string;
@@ -117,8 +117,8 @@ export interface BlockThemeRegistry {
 /** The single entry point: given a block type id, return the theme to paint
  *  with. Lookup order: exact `type` → category theme → unknown-type fallback.
  *  The engine never sees this; it only reads state.registry / params. */
-export function blockTheme(type: string): BlockTheme {
-  return registry.get(type) ?? registry.byCategory(hueOfType(type)) ?? registry.fallback(type, hueOfType(type));
+export function blockTheme(type: string, category: Category): BlockTheme {
+  return registry.get(type) ?? registry.byCategory(category) ?? registry.fallback(type, category);
 }
 ```
 
@@ -133,23 +133,22 @@ export function blockTheme(type: string): BlockTheme {
 - **Unknown-type fallback.** Any type that is not in the registry — plugin,
   third-party, or a typo'd registry key — resolves to the **unknown-type
   fallback theme**, which is *derived from the block's category*, never a
-  hard-coded grey. Concretely:
+  hard-coded grey. Concretely, the fallback derives the hue from the passed
+  `Category` and builds a readable palette around it:
   ```ts
-  export const FALLBACK_THEME: BlockTheme = {
-    palette: {
-      base: "#1c1e26", surface: "#171921", line: "#2e333f", lineSoft: "#24272f",
-      lineHi: "#3c424d", accent: "#6b7cbc", accentSoft: "#4a5266",
-      text: "#e8eaef", textMuted: "#9aa3b0", control: "#6b7cbc", controlOff: "#3a3f4a",
-      material: "metal",
-    },
-    artwork: null, // structural default
-    vars: { "--block-h": "222" },
-  };
+  export function fallbackTheme(type: string, category: Category): BlockTheme {
+    const hue = categoryHue(category);
+    return {
+      palette: buildPalette(hue),
+      artwork: undefined,
+      vars: { "--block-h": String(hue) },
+    };
+  }
   ```
-  Because the fallback derives `--block-h` from the **unknown type's category
-  hue**, a plugin block that lands in, say, `Category::Dynamics` reads the
-  green accent family and is at least *readable* — and it can never clash with
-  a built-in hue.
+  The `buildPalette(hue)` helper produces a coherent dark palette (see §2.1
+  for the palette fields) from a single hue, so a plugin block that lands in,
+  say, `Category::Dynamics` reads the green accent family and is at least
+  *readable* — and it can never clash with a built-in hue.
 
 ### 1.2 Per-type entry shape
 
@@ -159,7 +158,7 @@ material and linework motif. Example (`amp.basic`):
 ```ts
 ampBasic: {
   palette: {
-    base: "#241a12", surface: "#1a120c", line: "#d8b46b", lineSoft: "#a88352",
+    base: "#241a12", surface: "#1a120c", bg: "#151008", line: "#d8b46b", lineSoft: "#a88352",
     lineHi: "#f0c886", accent: "#e8a33d", accentSoft: "#8a5f2a",
     text: "#1a120c", textMuted: "#d8b46b", control: "#f0c886", controlOff: "#5a3a1c",
     material: "metal",
@@ -204,7 +203,7 @@ ampBasic: {
 ### 2.1 CSS variables & naming conventions
 
 Naming is the contract between `themes.ts` and `tailwind.css`. Every variable
-is a single token, written `--block-<word>`.
+is a single token, written `--block-<kebab-field>`.
 
 | Variable | Set by | Read by | Meaning |
 |---|---|---|---|
@@ -212,6 +211,18 @@ is a single token, written `--block-<word>`.
 | `--block-material` | `themes.ts` | CSS | `metal` \| `wood` \| `plastic` \| `glass` \| `paper`; drives the structural default. |
 | `--block-state` | `BlockEditorFrame` (bypass) | CSS + artwork | `"on"` \| `"off"` \| `"dim"`; switches the artwork to its `artworkState.off` data URL / muted stroke tone. |
 | `--block-palette` | `themes.ts` (rare) | CSS | JSON-serialised palette, for any CSS that must read a colour programmatically. |
+| `--block-base` | `themes.ts` | CSS + artwork | Faceplate / artwork background (raised plate). |
+| `--block-surface` | `themes.ts` | CSS + artwork | Recessed surfaces inside the artwork (grilles, valve bodies, rear panel). |
+| `--block-line` | `themes.ts` | CSS + artwork | Primary linework — edge, grilles, jack markers. |
+| `--block-line-soft` | `themes.ts` | CSS + artwork | Secondary linework — mounting screws, trace, inner detail. |
+| `--block-line-hi` | `themes.ts` | CSS + artwork | Highlight linework — edge highlight, lit state. |
+| `--block-accent` | `themes.ts` | CSS + artwork | The category/hue accent (e.g. the violet of the amp). |
+| `--block-accent-soft` | `themes.ts` | CSS + artwork | Tint of `accent` for disabled/ghosted accents. |
+| `--block-text` | `themes.ts` | CSS + controls | Text on dark artwork (labels, values). |
+| `--block-text-muted` | `themes.ts` | CSS + controls | Secondary text (labels, muted readouts). |
+| `--block-control` | `themes.ts` | CSS + controls | The knob / slider / footswitch chrome colour. |
+| `--block-control-off` | `themes.ts` | CSS + controls | The "bypassed / off" variant of the chrome. |
+| `--block-bg` | `themes.ts` | CSS + controls | Solid inset behind every control so chrome has a predictable 3:1 target. |
 | `--cat-h` | `theme.ts` (existing, inline) | existing `catScope` | Category hue; the **fallback** for `--block-h` and the *category* accent only. |
 | `--cat` / `--cat-soft` | `tailwind.css` `@theme inline` | existing elements | Derived from `--cat-h`; the *category* accent and soft tint only. |
 | `--color-*` | `tailwind.css` `@theme` | app chrome (background, panel, line, text, amber, danger…) | The app chrome, **not** the block artwork. |
@@ -225,7 +236,7 @@ Rules:
 - No existing `--color-*` token is repurposed by a block theme. A block's
   artwork reads `--block-*` only.
 - Knobs inherit theme variables, they are never hard-coded to amber: the
-  `Knob` component root sets `style={{ "--block-control": var(--block-control) }}`
+  `Knob` component root sets `style={{ "--knob-color": "var(--block-control)" }}`
   (or reads it from an ancestor), so the knob chrome is whatever the theme
   declares — e.g. the amp plate's brass `line-hi` or the cab's silver
   `control`. The same variable drives the artwork's accent highlight ridge,
@@ -286,12 +297,12 @@ that rule, with one rule added:
     **decorative only** (§4).
   - `viewBox="0 0 100 100"` is the fixed plane; controls anchor to it (§2.4).
   - The artwork's primary `stroke` is `var(--block-line)` and its primary
-    `fill` is `var(--block-palette.base)`; accent details use
+    `fill` is `var(--block-base)`; accent details use
     `var(--block-accent)`.
   - For the `off` state, the frame sets `style={{ "--block-state": "off" }}`
     and the artwork switches to its `artworkState.off` data URL (or a muted
-    `lineSoft` stroke tone) so a bypassed amp reads as "off", not "on but
-    greyed".
+    `var(--block-line-soft)` stroke tone) so a bypassed amp reads as "off",
+    not "on but greyed".
 - **Categories inherit through CSS, not files.** The category hatch on the
   structural default is drawn with `currentColor` so it reads the block hue
   from `--block-h`, and the category accent (`--cat`) keeps drawing the rack
@@ -305,13 +316,19 @@ non-artwork controls tile around it.
 1. **In-work-artwork knobs** (amp knobs on the faceplate, cab knobs on the
    speaker cloth). The theme declares `anchors` mapping a param id →
    `{ x, y, anchor }` (0–100 plane, top-left origin). The frame positions each
-   knob at:
-   ```
-   left   = calc(x% * 100% of the artwork)     // the artwork fills .block-frame
-   from     = anchor === "bottom-right" ? bottom : top
-   offset   = anchor === "bottom-right" ? "0" : "auto"
-   transform= anchor === "centre" ? "translate(-50%,-50%)"
-                                     : "translate(0,-50%)"   // x fixed by anchor
+   knob absolutely inside `.block-frame` (which fills the cell) using:
+   ```ts
+   const style: React.CSSProperties = {
+     position: "absolute",
+     left:   `${x}%`,
+     top:    `${y}%`,
+     transform:
+       anchor === "centre"        ? "translate(-50%, -50%)" :
+       anchor === "bottom-right"  ? "translate(-100%, -50%)" :
+       anchor === "bottom-left"   ? "translate(0, -50%)" :
+       anchor === "top-right"     ? "translate(-100%, 0)" :
+                                    "translate(0, 0)",           // top-left
+   };
    ```
    The knob is a whole `var(--ui-knob)` cell, so it snaps to the artwork's
    grid and never overlaps its edges. Two knobs on the same artwork never
@@ -437,22 +454,27 @@ Rendering contract:
 - The frame resolves the spec from `state.registry[block.type]` (it reads the
   same store as `Editor.tsx`, so it needs no new props for the spec).
 - For each param the frame calls `children({ param, value, onChange })`. The
-  *existing per-block editors* (GraphicEq, MultibandCompressor, WaveShaper,
-  WaveShaperGraph) bind their existing_controls to the matching param ids and
-  return the frame's `defaultControl` for everything else.
+  *existing per-block editors* (`GraphicEqEditor`, `MultibandCompressorEditor`,
+  `WaveShaperEditor`, `LooperEditor`) bind their existing controls to the
+  matching param ids and return the frame's `defaultControl` for everything else.
 - `defaultControl` is keyed by **kind**, not by id: `number` → `Knob`,
-  `choice` → `ChoiceControl`, `gate` → `FootswitchControl`,
-  `expression` → `ExpressionControl`. A builder who only wants to add
+  `choice` → `ChoiceControl`. A builder who only wants to add
   artwork to a block that already has controls does not write any control
   code — the default mapping suffices — and only needs to add the artwork
   entry to `themes.ts`.
+- The whammy (`time.pitchdelay`) is the only block that binds special
+  controls: its `mode` param (a `choice`) uses `ChoiceControl`, and its
+  `rate` param (a `number`) can optionally bind an `ExpressionControl`
+  when an expression pedal is mapped via MIDI. These bindings are
+  supplied by the editor's render prop, not by `defaultControl`.
 - Bypass is owned by the frame (`--block-state` → `"off"`), so the artwork and
   controls respond without the editor touching the artwork code.
 
 ### 3.3 Layout contract
 
-- The frame is **square** (`aspect-ratio: 1 / 1` on `desk`, `4 / 3` on `phone`).
-  The parent sizes the bar cell.
+- The frame fills its bar cell. The parent (the rack bar) sizes the cell to
+  `var(--ui-bar)` (128 px on desk, 100% on phone); the frame itself has no
+  fixed width/height and no `aspect-ratio`. It is a **relative** sizing context.
 - `.block-artwork` is `position: absolute; inset: 0; width: 100%; height: 100%`
   and `overflow: hidden`. Artwork anchors are measured against this plane.
 - `.block-controls` is `display: grid; grid-template-columns:
@@ -463,16 +485,17 @@ Rendering contract:
   `defaultControl` (or the child's `aria-label`).
 - The frame never wraps its children in `Fragment` shadow DOM; it renders
   **one** real DOM tree into the bar.
+- For blocks with many params (e.g. `dynamics.multiband_compressor` with 34),
+  the grid overflows into `.block-postartwork` and the parent bar is
+  `overflow-x: auto` so the user can scroll horizontally. The frame never
+  forces a minimum cell width that would break the rack layout.
 
 ### 3.4 Migration recipe (existing block editors)
 
-The current `Editor.tsx` hard-codes the control mapping and, for the whammy,
-spawns `FootswitchControl` / `ExpressionControl` as *always-on* orphaned
-controls outside the artwork. The migration is:
+The current `Editor.tsx` hard-codes the control mapping. The migration is:
 
-1. **Add the defaults.** Add `Knob`, `ChoiceControl`, `FootswitchControl` and
-   `ExpressionControl` (already in the worktree) to the frame's `defaultControl`
-   mapping by param kind.
+1. **Add the defaults.** Add `Knob` and `ChoiceControl` (already in the
+   worktree) to the frame's `defaultControl` mapping by param kind.
 2. **Make the knobs accessible first** (§4) — give `Knob` `role="slider"`,
    `aria-valuenow/min/max`, `aria-label` and arrow-key handling.
 3. **Wrap.** Replace the per-block body in each editor with:
@@ -491,13 +514,16 @@ controls outside the artwork. The migration is:
    where `LegacyControls` binds each of its existing controls to the matching
    param id and returns the frame's `defaultControl` for the rest. No new
    props are introduced; `setParam` already exists.
-4. **Remove the whammy orphans.** The whammy's `FootswitchControl` /
-   `ExpressionControl` become a slot bound to `sweep_gate` (and a third
-   `Footswitch`-style gate param) **only** when `block.type === "time.pitchdelay"`.
-   The frame no longer renders controls for a block type unless a slot binds
-   them. The `isGraphicEq` split becomes a `tone.graphic_eq` slot that returns
-   `<GraphicEqEditor />` (it is an `<svg>` control over the frame, no artwork
-   override needed).
+4. **Remove the whammy special-casing.** The whammy (`time.pitchdelay`)
+   currently spawns `FootswitchControl` / `ExpressionControl` as always-on
+   orphaned controls outside the artwork. After migration, its `mode` param
+   (a `choice`) binds to `ChoiceControl` via the frame's default, and its
+   `rate` param (a `number`, "Sweep rate") binds to an `ExpressionControl`
+   **only when an expression pedal is mapped via MIDI** — the frame does
+   not render expression/footswitch controls unless the editor's render prop
+   explicitly returns them for that param. The `isGraphicEq` split becomes a
+   `tone.graphic_eq` slot that returns `<GraphicEqEditor />` (it is an
+   `<svg>` control over the frame, no artwork override needed).
 5. **Downstream.** `Rack`, `Chain`, `SelectionRing` and the dragging
    interactions are unaffected — they read `state`, not the editor DOM.
 
@@ -505,14 +531,15 @@ controls outside the artwork. The migration is:
 
 ```tsx
 function AmpEditor() {
-  const s = state.value; const sel = selected.value;
+  const s = state.value;
+  const sel = selected.value;
   const spec = s?.registry[sel?.type];
 
   return (
     <BlockEditorFrame
-      type={sel?.type}
-      block={sel?.block}
-      channel={sel?.channel}
+      type={sel?.type ?? ""}
+      block={sel?.block ?? { id: "", type: "", name: "", bypass: false, params: {} }}
+      channel={sel?.channel ?? ""}
       params={spec?.params ?? []}
       value={sel?.block?.params ?? {}}
       onChange={setParam}
@@ -592,8 +619,9 @@ them with the vision tool at 800 px and 1440 px and with the contrast tool.
   custom knob today). `ChoiceControl`, `ExpressionControl` and `FootswitchControl`
   already have their ARIA roles (`radiogroup`/`radio`, `range`, `switch`) and
   are unchanged semantically.
-- `:focus-visible` draws a visible 3px `var(--color-amber)` ring offset 2px on
-  every control, matching the app's existing focus style.
+- `:focus-visible` draws a visible 3px `var(--block-accent)` ring offset 2px on
+  every control, matching the app's existing focus style but using the block's
+  accent colour.
 - The artwork SVG is `focusable="false"` and `aria-hidden="true"`, so it never
   steals focus, contributes to the tab order, or presents a focus ring by
   itself.
@@ -620,11 +648,10 @@ them with the vision tool at 800 px and 1440 px and with the contrast tool.
 ### 4.5 Forced-colors / high-contrast
 
 - In `forced-colors` the artwork paints as a two-tone plate
-  (`--block-base` fill, `--block-line` stroke) and all controls fall back to
-  the UA glyph.
-- Every theme supplies a **forced** palette entry (a monochrome high-contrast
-  pair) and the fallback theme maps all colours to the nearest WCAG-contrast
-  pair, so a Windows high-contrast theme never loses the control affordances.
+  (`var(--block-base)` fill, `var(--block-line)` stroke) and all controls fall
+  back to the UA glyph.
+- The fallback theme maps all colours to the nearest WCAG-contrast pair, so a
+  Windows high-contrast theme never loses the control affordances.
 - The accessibility pass verifies forced-colors mode by simulating it in the
   browser (no OS-level setting needed: the browser applies the UA forced-color
   stylesheet in a force-dark emulation).
@@ -645,7 +672,7 @@ category hue drives the rack chips and the category accent, per §2).
 | `io.input` | Neutral grey metal plate; one `input` chevron + one `output` arrow; the only "dead" channel in the interface, so the plate is a plain bracket with a cut corner. |
 | `io.output` | Neutral grey metal plate; circular output jacks drawn **into** the plate; the plate is a receptacle, not a body. |
 
-**Split / Merge**
+**Split/Merge**
 
 | type | style concept |
 |---|---|
@@ -689,9 +716,13 @@ category hue drives the rack chips and the category accent, per §2).
 | type | style concept |
 |---|---|
 | `time.reverb` | Glass-fronted speaker grille (lossy plate); one knob Mix; linework = a Schroeder comb/allpass motif. |
-| `time.shimmer` | Deep-blue silk; 7 knobs (Mix, Size, Decay, Shimmer, Tone, Pre-delay); linework = a shimmer sparkle glyph. |
-| `time.pitchdelay` | Brass plate; 6 controls (Time, Feedback, Pitch, Sweep rate, Mode, Mix); linework = a delay-tape-clock face where the Sweep-rate marker moves with rate. The footswitch (engage/disengage) sits in the plate's trough. |
+| `time.shimmer` | Deep-blue silk; 7 knobs (Mix, Size, Decay, Shimmer, Interval, Tone, Pre-delay); linework = a shimmer sparkle glyph. |
 | `time.delay` | Slate metal; 3 knobs (Time, Feedback, Mix); linework = a flat-echo "tap" motif. |
+
+**Modulation**
+
+| type | style concept |
+|---|---|
 | `mod.chorus` | Copper-gold; 4 knobs (Rate, Depth, Mix, Feedback); linework = a shimmer-flutter wave. |
 | `mod.tremolo` | Gunmetal; 3 knobs (Rate, Depth, Mix); linework = a louvre/fan blade whose pitch changes with rate. |
 
@@ -699,6 +730,7 @@ category hue drives the rack chips and the category accent, per §2).
 
 | type | style concept |
 |---|---|
+| `time.pitchdelay` | Brass plate; 6 controls (Time, Feedback, Pitch, Sweep rate, Mode, Mix); linework = a delay-tape-clock face where the Sweep-rate marker moves with rate. The footswitch (engage/disengage) sits in the plate's trough. |
 | `pitch.octaver` | Cyan metal; 3 faders (Dry, Oct Down, Oct Up); linework = a sine-up/down trace. |
 
 **Utility**
@@ -711,13 +743,14 @@ category hue drives the rack chips and the category accent, per §2).
 
 **Notes on the inventory**
 
-- The count is **26** in the current `builtin_registry()`. The parent's #872b3bcc
-  snapshot recorded 20 (a point-in-time snapshot); the worktree and `main` both
-  carry 26. Every type above is a real `BlockSpec` in the engine (`id`,
-  `name`, `category`, `params` with real `unit`, `min`, `max`, `default`).
-- `time.pitchdelay` is the "whammy block" referenced by the ui-survey: it is
-  the one type that binds `FootswitchControl`/`ExpressionControl`
-  (`sweep_gate` gating) in addition to its six params.
+- The count is **26** in the current `builtin_registry()`. Every type above is a
+  real `BlockSpec` in the engine (`id`, `name`, `category`, `params` with real
+  `unit`, `min`, `max`, `default`). Categories match the `Category` enum in
+  `graph/src/types.rs` and `ui/src/protocol.ts`.
+- `time.pitchdelay` (category **Pitch**) is the "whammy block" referenced by
+  the ui-survey: its `mode` param (a `choice`) and `rate` param (a `number`)
+  are the only params that may bind special controls via the editor's render
+  prop.
 - The `live` crate in the repo is a *separate engine feature* and does not add
   built-in registry entries to dsp-graph; the UI never sees them here.
 
@@ -726,16 +759,18 @@ category hue drives the rack chips and the category accent, per §2).
 ## 6. Follow-up implementation cards
 
 Small, precisely specified cards for the builders. Each is roughly 1–4 files.
+The first four map onto **already-queued builder cards**; the remaining four are
+new cards to be created.
 
-1. **`theme: blockTheme registry + fallback`**
+1. **`theme: blockTheme registry + fallback`** → **t_1ebbda5e** (pedal-builder)
    - *Scope:* `ui/src/themes.ts` — the `BlockTheme`/`BlockPalette`/`BlockAnchor`
-     types, `blockTheme(type)` lookup (exact → category → fallback), and the
-     unknown-type fallback derived from the category hue.
+     types, `blockTheme(type, category)` lookup (exact → category → fallback),
+     and the unknown-type fallback derived from the category hue.
    - *Acceptance:* registry covers all 26 types with no `undefined` hits;
      a plugin/third-party type resolves to a readable category-derived theme;
      `themes.ts` type-checks under `pnpm run build` (tsc --noEmit).
 
-2. **`theme: BlockEditorFrame component`**
+2. **`theme: BlockEditorFrame component`** → **t_eeff4892** (pedal-ui-builder)
    - *Scope:* `ui/src/components/BlockEditorFrame.tsx` — props above, the
      `.block-identity/.block-artwork/.block-controls/.block-postartwork`
      layout contract, `--block-state` bypass propagation, render-prop binding,
@@ -744,7 +779,7 @@ Small, precisely specified cards for the builders. Each is roughly 1–4 files.
      block renders its theme's artwork + a knob per non-choice param; bypass
      toggles the artwork off-state.
 
-3. **`theme: SVG/CSS infrastructure`**
+3. **`theme: SVG/CSS infrastructure`** → **t_b6f103d2** (pedal-builder)
    - *Scope:* `ui/src/components/BlockArtwork.tsx` + the inlining helper
      (`ui/src/themes-inline.ts`, `ui/src/assets/artwork/`); wire
      `--block-h`/`--block-material`/`--block-state` onto `.block-frame`;
@@ -753,32 +788,31 @@ Small, precisely specified cards for the builders. Each is roughly 1–4 files.
      artwork is `aria-hidden`/`focusable=false`; SVG is a DOM element so
      colours cascade; `pnpm run build` green.
 
-4. **`theme: per-type themes`** (the largest card)
+4. **`theme: per-type themes`** → **t_e25e818e** (pedal-builder)
    - *Scope:* theme entries for all 26 types grouped by category
-     (I/O, Split, Dynamics, Tone, Distortion, Modulation, Pitch, Time,
+     (I/O, Split/Merge, Dynamics, Tone, Distortion, Modulation, Pitch, Time,
      Modelling, Utility), one data-URL artwork each (amp faceplate, cab
      grille, etc.).
    - *Acceptance:* every builtin type renders its artwork; contrast ≥ 4.5:1
      text / ≥ 3:1 control chrome; forced-colors fallback present under #4.5.
 
-5. **`theme: knob & control re-skin`**
-   - *Scope:* rewire `Knob`/`ChoiceControl`/`ExpressionControl`/
-     `FootswitchControl` to inherit `var(--block-*)`; add full accessibility
-     to `Knob` (`role="slider"`, `aria-*`, arrow keys).
+5. **`theme: knob & control re-skin`** (new card — pedal-ui-builder)
+   - *Scope:* rewire `Knob`/`ChoiceControl` to inherit `var(--block-*)`;
+     add full accessibility to `Knob` (`role="slider"`, `aria-*`, arrow keys).
    - *Acceptance:* every block control is keyboard-operable; no control text
      is hard-coded to amber; `prefers-reduced-motion` drops knob sweeps; build
      green.
 
-6. **`ui: migrate existing editors to BlockEditorFrame`**
+6. **`ui: migrate existing editors to BlockEditorFrame`** (new card — pedal-ui-builder)
    - *Scope:* refactor `ui/src/components/Editor.tsx` to wrap each block in
-     `BlockEditorFrame` (choice/knob/gate slots), keep `tone.graphic_eq`
+     `BlockEditorFrame` (choice/knob slots), keep `tone.graphic_eq`
      as a slot, remove the whammy orphaned controls.
    - *Acceptance:* Rainbow / Graphic EQ / Multiband editors still compile and
      edit; no hard-coded `isGraphicEq` branch; the whammy footswitch/
      expression bind through the frame, not as always-on orphans; `pnpm run
      build` green.
 
-7. **`theme: artwork assets`**
+7. **`theme: artwork assets`** (new card — pedal-ui-builder)
    - *Scope:* per-type artwork SVGs (amp, cab, etc.) as data URLs in
      `themes.ts`; a design-time inliner for authoring
      (`scripts/inline-artwork.mjs`).
@@ -786,7 +820,7 @@ Small, precisely specified cards for the builders. Each is roughly 1–4 files.
      without clipping; each artwork is decorative (`aria-hidden`) and
      non-focusable; the amp faceplate's knobs land on the 0–100 plane.
 
-8. **`a11y: contrast & focus audit`**
+8. **`a11y: contrast & focus audit`** (new card — pedal-builder)
    - *Scope:* measure contrast of all 26 artworks' labels/controls via a small
      script that extracts the palette from `themes.ts` and computes ratios;
      fix any ratio < 4.5:1; re-verify focus rings at 800 px and 1440 px.
