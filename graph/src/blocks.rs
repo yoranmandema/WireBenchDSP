@@ -2483,6 +2483,7 @@ impl Block for Tremolo {
 pub fn builtin_registry() -> crate::Registry {
     let mut r = crate::Registry::new();
     r.add::<IoInput>();
+    r.add::<GraphicEq>();
     r.add::<IoOutput>();
     r.add::<Gain>();
     r.add::<MixSum>();
