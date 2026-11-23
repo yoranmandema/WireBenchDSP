@@ -1318,6 +1318,13 @@ pub struct ShimmerReverb {
     wet_hist_l: Vec<f32>,
     wet_hist_r: Vec<f32>,
 
+    /// Per-block scratch buffers (allocated once in `prepare`, reused every
+    /// block — the audio callback never allocates).
+    wet_l: Vec<f32>,
+    wet_r: Vec<f32>,
+    fb_new_l: Vec<f32>,
+    fb_new_r: Vec<f32>,
+
     /// Resampler state, one per channel (cubic, linear-phase, relay with no
     /// phantom gain).
     state_l: [f32; 4],
@@ -1359,6 +1366,10 @@ impl Default for ShimmerReverb {
             fb_write: 0,
             wet_hist_l: vec![0.0; 128],
             wet_hist_r: vec![0.0; 128],
+            wet_l: vec![0.0; 128],
+            wet_r: vec![0.0; 128],
+            fb_new_l: vec![0.0; 128],
+            fb_new_r: vec![0.0; 128],
             state_l: [0.0; 4],
             state_r: [0.0; 4],
             coef: 0.0,
@@ -1376,10 +1387,8 @@ impl ShimmerReverb {
         (self.shimmer_sm / 100.0).clamp(0.0, 0.95)
     }
 
-    /// Per-block RMS energy guard: if the wet RMS exceeds `wet_cap`, the
-    /// feedback is scaled down so the loop stays bounded. Last line of
-    /// defence.
-    /// RMS of a stereo block.
+    /// Per-block RMS of the stereo wet pair, in linear amplitude.  Used by the
+    /// energy guard to keep the feedback loop bounded.
     fn block_rms(wet_l: &[f32], wet_r: &[f32]) -> f32 {
         let mut acc = 0.0f64;
         let n = wet_l.len().min(wet_r.len());
@@ -1490,6 +1499,12 @@ impl Block for ShimmerReverb {
         self.fb_write = 0;
         self.wet_hist_l = vec![0.0; buf];
         self.wet_hist_r = vec![0.0; buf];
+        // Scratch buffers sized to one block; reused every `process` call.
+        let scratch = max_block.max(1);
+        self.wet_l.resize(scratch, 0.0);
+        self.wet_r.resize(scratch, 0.0);
+        self.fb_new_l.resize(scratch, 0.0);
+        self.fb_new_r.resize(scratch, 0.0);
         self.state_l = [0.0; 4];
         self.state_r = [0.0; 4];
         self.coef = smoothing_coef_ms(60.0, sr);
@@ -1597,9 +1612,7 @@ impl Block for ShimmerReverb {
             (self.fb_write.wrapping_sub(n as usize)) % fb_l.len();
 
         // Wet samples, retained to build the pitch-shifted feedback.
-        let mut wet_l = vec![0.0f32; n];
-        let mut wet_r = vec![0.0f32; n];
-
+        // Scratch buffers are pre-allocated struct fields (no per-block alloc).
         for i in 0..n {
             let pd = self.pre_delay.read(input[i], pd_samples);
             let fb_l0 = fb_l[read_idx];
@@ -1608,8 +1621,8 @@ impl Block for ShimmerReverb {
             let tank_in_l = pd + fb_l0;
             let tank_in_r = pd + fb_r0;
             let (wl, wr) = self.tank.process(tank_in_l, tank_in_r);
-            wet_l[i] = wl;
-            wet_r[i] = wr;
+            self.wet_l[i] = wl;
+            self.wet_r[i] = wr;
             out[i] = pedal_dsp::util::mix(
                 input[i],
                 (wl + wr) * 0.5,
@@ -1622,13 +1635,11 @@ impl Block for ShimmerReverb {
         // stream: the octave-up ratio decimates *every* wet sample exactly
         // once (a norm-preserving relay), so no coherent pumping builds on
         // the comb returns and the loop stays provably bounded.
-        let mut fb_new_l = vec![0.0f32; n];
-        let mut fb_new_r = vec![0.0f32; n];
         let h = self.wet_hist_l.len();
         self.wet_hist_l.copy_within(n..h, 0);
         self.wet_hist_r.copy_within(n..h, 0);
-        self.wet_hist_l[n..h].copy_from_slice(&wet_l);
-        self.wet_hist_r[n..h].copy_from_slice(&wet_r);
+        self.wet_hist_l[n..h].copy_from_slice(&self.wet_l[..n]);
+        self.wet_hist_r[n..h].copy_from_slice(&self.wet_r[..n]);
         // Input samples consumed: n * ratio, taken from the end of the
         // window so the newest wet always feeds the pitch shifter.
         let consumed = ((n as f32 * self.ratio) as usize).clamp(1, h);
@@ -1636,8 +1647,18 @@ impl Block for ShimmerReverb {
         // `resample`'s ratio is out/in rate; pitching the wet up by `r`
         // means reading it back `r` times faster, i.e. ratio = 1/r.
         let inv = 1.0 / self.ratio;
-        resample(&self.wet_hist_l[start..], &mut fb_new_l, inv, &mut self.state_l);
-        resample(&self.wet_hist_r[start..], &mut fb_new_r, inv, &mut self.state_r);
+        resample(
+            &self.wet_hist_l[start..],
+            &mut self.fb_new_l[..n],
+            inv,
+            &mut self.state_l,
+        );
+        resample(
+            &self.wet_hist_r[start..],
+            &mut self.fb_new_r[..n],
+            inv,
+            &mut self.state_r,
+        );
 
         // Energy guard: cap wet RMS so the loop stays bounded.  Attack is
         // instantaneous (ratchet down), release is slow (~2 s): the build-up
@@ -1653,10 +1674,10 @@ impl Block for ShimmerReverb {
         // guard misses.
         const FB_CLAMP: f32 = 0.07;
         let shimmer = self.shimmer_lin();
-        let wet_rms = ShimmerReverb::block_rms(&wet_l, &wet_r);
-        let wet_peak = wet_l
+        let wet_rms = ShimmerReverb::block_rms(&self.wet_l[..n], &self.wet_r[..n]);
+        let wet_peak = self.wet_l[..n]
             .iter()
-            .chain(wet_r.iter())
+            .chain(self.wet_r[..n].iter())
             .fold(0.0f32, |m, &v| m.max(v.abs()));
         const WET_CAP: f32 = 0.4;
         // Below this wet level the shimmer contribution is faded out.
@@ -1690,8 +1711,10 @@ impl Block for ShimmerReverb {
         const GATE_FLOOR: f32 = 1e-3;
         let gate = (self.in_env / GATE_FLOOR).min(1.0);
         for i in 0..n {
-            fb_new_l[i] = (fb_new_l[i] * shimmer * guard * gate).clamp(-FB_CLAMP, FB_CLAMP);
-            fb_new_r[i] = (fb_new_r[i] * shimmer * guard * gate).clamp(-FB_CLAMP, FB_CLAMP);
+            self.fb_new_l[i] =
+                (self.fb_new_l[i] * shimmer * guard * gate).clamp(-FB_CLAMP, FB_CLAMP);
+            self.fb_new_r[i] =
+                (self.fb_new_r[i] * shimmer * guard * gate).clamp(-FB_CLAMP, FB_CLAMP);
         }
 
         // Write the feedback into the ring buffer.
@@ -1700,17 +1723,17 @@ impl Block for ShimmerReverb {
             let rem = self.fb_l.len() - w;
             if rem >= n {
                 for i in 0..n {
-                    self.fb_l[w + i] = fb_new_l[i];
-                    self.fb_r[w + i] = fb_new_r[i];
+                    self.fb_l[w + i] = self.fb_new_l[i];
+                    self.fb_r[w + i] = self.fb_new_r[i];
                 }
             } else {
                 for i in 0..rem {
-                    self.fb_l[w + i] = fb_new_l[i];
-                    self.fb_r[w + i] = fb_new_r[i];
+                    self.fb_l[w + i] = self.fb_new_l[i];
+                    self.fb_r[w + i] = self.fb_new_r[i];
                 }
                 for i in 0..(n - rem) {
-                    self.fb_l[i] = fb_new_l[rem + i];
-                    self.fb_r[i] = fb_new_r[rem + i];
+                    self.fb_l[i] = self.fb_new_l[rem + i];
+                    self.fb_r[i] = self.fb_new_r[rem + i];
                 }
             }
             self.fb_write = (w + n) % self.fb_l.len();
@@ -1727,6 +1750,10 @@ impl Block for ShimmerReverb {
         self.fb_write = 0;
         self.wet_hist_l.fill(0.0);
         self.wet_hist_r.fill(0.0);
+        self.wet_l.fill(0.0);
+        self.wet_r.fill(0.0);
+        self.fb_new_l.fill(0.0);
+        self.fb_new_r.fill(0.0);
         self.guard_sm = 1.0;
         self.in_env = 0.0;
         self.state_l = [0.0; 4];
