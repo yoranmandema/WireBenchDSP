@@ -15,9 +15,11 @@
 pub mod audio;
 pub mod channels;
 pub mod headless;
-pub mod health;
 pub mod host;
-pub mod tuner;
+pub mod lifecycle;
+pub mod registry;
+pub mod models;
 pub mod model_index;
+pub mod tuner;
 pub mod server;
 pub mod store;
