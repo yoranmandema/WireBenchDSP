@@ -103,11 +103,11 @@ export function TopBar() {
         {/* Latency readout: one-way IN/OUT and round-trip TOTAL, in ms. */}
         <div class="latency flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-mono tabular-nums bg-[#1a1b21] border border-line rounded-md px-2 py-1.5">
           <span class="text-muted">IN</span>
-          <span class="text-amber">{s.oneWayLatencyMs.toFixed(2)}</span>
+          <span class="text-amber">{Number.isFinite(s.oneWayLatencyMs) ? s.oneWayLatencyMs.toFixed(2) : "—"}</span>
           <span class="text-muted">OUT</span>
-          <span class="text-amber">{s.oneWayLatencyMs.toFixed(2)}</span>
+          <span class="text-amber">{Number.isFinite(s.roundTripLatencyMs) ? s.roundTripLatencyMs.toFixed(2) : "—"}</span>
           <span class="text-muted">TOT</span>
-          <span class="text-amber">{s.roundTripLatencyMs.toFixed(2)}</span>
+          <span class="text-amber">{Number.isFinite(s.roundTripLatencyMs) ? s.roundTripLatencyMs.toFixed(2) : "—"}</span>
           <span class="text-muted">ms</span>
         </div>
         {/* Buffer-size control: a dropdown populated from the engine's supported

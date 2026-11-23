@@ -175,8 +175,12 @@ const mutate = (cmd: string, args?: Record<string, unknown>) =>
       }
     });
 
-export const setParam = (channel: string, block: string, param: string, value: number) =>
+export const setParam = (channel: string, block: string, param: string, value: unknown) =>
   mutate("setParam", { channel, block, param, value });
+
+/** Graphic EQ band change — rides the existing `setParam` command (no new protocol). */
+export const setGraphicEqBand = (channel: string, band: number, db: number) =>
+  setParam(channel, "tone.graphic_eq", `gain${band}`, db);
 
 export const setConfig = (bufferFrames: number) =>
   mutate("setConfig", { buffer_frames: bufferFrames });
