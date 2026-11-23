@@ -105,6 +105,8 @@ pub struct EngineArgs {
     pub headless: bool,
     pub rig: String,
     pub migrate_presets: bool,
+    /// Headless input source: 0 riff (default), 1 live tone, 2 silence.
+    pub source: u8,
 }
 
 impl EngineArgs {
@@ -129,6 +131,11 @@ impl EngineArgs {
             headless: flag("--headless"),
             rig: value("--rig").unwrap_or_else(|| "04-rainbow".into()),
             migrate_presets: flag("--migrate-presets"),
+            source: match value("--source").as_deref() {
+                Some("live") => 1,
+                Some("silence") => 2,
+                _ => 0,
+            },
         }
     }
 
@@ -243,7 +250,7 @@ impl Engine {
         let rig = crate::channels::Rig::from_doc(&doc);
         {
             let resolver = crate::model_index::resolver();
-            let mut g = doc.build_in_with(&handle.registry, &handle.preset_dir, &resolver)
+            let mut g = rig.to_doc().build_in_with(&handle.registry, &handle.preset_dir, &resolver)
                 .unwrap_or_else(|e| {
                     eprintln!("pedal-engine: could not build initial rig: {e}");
                     std::process::exit(1);
@@ -263,7 +270,9 @@ impl Engine {
                 .push(crate::audio::Cmd::Swap(ex, Vec::new()))
                 .unwrap_or_else(|e| eprintln!("pedal-engine: initial swap failed: {e}"));
         }
-        handle.set_source(2); // silence
+        // Silence on a real device (the riff is opt-in); headless defaults to
+        // the riff so a bench measures a real load.
+        handle.set_source(if args.headless { args.source } else { 2 });
 
         // 3. Per-instance log path (the shell also sets PEDAL_ENGINE_LOG).
         let _log = args.log_path();
@@ -278,7 +287,7 @@ impl Engine {
                 trash_tx,
                 running.clone(),
                 handle.meters.clone(),
-                source.clone(),
+                handle.source.clone(),
             );
             tuner_ring = headless.tuner_ring.clone();
             streams = None;
@@ -308,7 +317,8 @@ impl Engine {
 
         // 5. IPC shared state.
         let running_flag = running.clone();
-        let sh = Arc::new(Shared::new(handle, registry, source, store, running_flag));
+        let models = Arc::new(crate::models::Models::new());
+        let sh = Arc::new(Shared::with_running(handle, registry, source, store, models.clone(), running_flag));
         // Install the compiled initial rig (built from the preset named by
         // `--rig`, or the compiled-in default `04-rainbow`). The empty rig
         // `Rig::default()` only supplies slot ids; the shipped presets own

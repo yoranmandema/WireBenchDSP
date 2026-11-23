@@ -18,7 +18,8 @@ use dsp_graph::{Doc, EdgeDoc, Executor, Graph, NodeDoc, Registry, RoutingEndpoin
 
 use crate::audio::{read_f32, Cmd, Handle};
 use crate::channels::{master_id, Rig, OUT_MASTER_ID, IN};
-use crate::host::{self, BLOCK, LATENCY_FRAMES, DEFAULT_IO_BUFFER_FRAMES, IOBUFFER_FALLBACK, one_way_latency_ms, round_trip_latency_ms};
+use crate::host::{DEFAULT_IO_BUFFER_FRAMES, IOBUFFER_FALLBACK, one_way_latency_ms, round_trip_latency_ms};
+use crate::models::Models;
 use crate::store::{slugify, Store};
 
 /// Loopback only. Nothing outside this machine can reach the engine.
@@ -58,10 +59,17 @@ pub struct Shared {
     /// Bumped on every successful rebuild. The UI uses it to ignore a stale
     /// snapshot, so an out-of-order delivery can never roll the UI backwards.
     pub rev: AtomicU64,
+    /// The model-browsing service: the cached index and the `listModels`/
+    /// `getModel`/`refreshIndex`/`downloadModel`/`cancelDownload` commands.
+    pub models: Arc<Models>,
 }
 
 impl Shared {
-    pub fn new(handle: Handle, registry: Arc<Registry>, source: Arc<AtomicU8>, store: Store, running: Arc<AtomicBool>) -> Self {
+    pub fn new(handle: Handle, registry: Arc<Registry>, source: Arc<AtomicU8>, store: Store, models: Arc<Models>) -> Self {
+        Self::with_running(handle, registry, source, store, models, Arc::new(AtomicBool::new(true)))
+    }
+
+    pub fn with_running(handle: Handle, registry: Arc<Registry>, source: Arc<AtomicU8>, store: Store, models: Arc<Models>, running: Arc<AtomicBool>) -> Self {
         Self {
             rig: Mutex::new(Rig::default()),
             store: Mutex::new(store),
@@ -76,6 +84,7 @@ impl Shared {
             shutdown: Notify::new(),
             bypass: Mutex::new(None),
             rev: AtomicU64::new(0),
+            models,
         }
     }
 
@@ -702,6 +711,11 @@ fn apply(sh: &Shared, cmd: &str, args: &Value) -> Result<Value, String> {
             };
             Ok(json!({ "status": status }))
         }
+        "listModels" => sh.models.list_models(&args),
+        "getModel" => sh.models.get_model(&s("id").ok_or_else(|| "id".to_string())?),
+        "refreshIndex" => sh.models.refresh_index(),
+        "downloadModel" => sh.models.download_model(&s("id").ok_or_else(|| "id".to_string())?),
+        "cancelDownload" => sh.models.cancel_download(&s("id").ok_or_else(|| "id".to_string())?),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -732,7 +746,27 @@ async fn handle_client(ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStr
                         let cmd = req.get("cmd").and_then(|v| v.as_str()).unwrap_or("").to_string();
                         let args = req.get("args").cloned().unwrap_or(json!({}));
                         eprintln!("pedal-engine: <- {cmd}");
-                        match apply(&sh, &cmd, &args) {
+                        // A download fetches model bytes over blocking HTTP. Run
+                        // it on tokio's blocking pool instead of this task:
+                        // `reqwest::blocking` starts its own runtime and panics
+                        // if invoked inside an async one, and either way a slow
+                        // transfer must not stall `listModels` for other clients
+                        // beyond the index lock it holds while writing.
+                        let result = if cmd == "downloadModel" {
+                            let models = sh.models.clone();
+                            let id = args
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            match tokio::task::spawn_blocking(move || models.download_model(&id)).await {
+                                Ok(inner) => inner,
+                                Err(e) => Err(format!("download task failed: {e}")),
+                            }
+                        } else {
+                            apply(&sh, &cmd, &args)
+                        };
+                        match result {
                             Ok(payload) => {
                                 if cmd != "getState" {
                                     // Tell everyone, the requester included. The
