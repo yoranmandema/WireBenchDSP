@@ -3,6 +3,7 @@ import type { Block, BlockSpec } from "../protocol";
 import { ctrlName, emptyNote } from "../ui";
 import { Knob } from "./Knob";
 import { BandStrip } from "./BandStrip";
+import { CrossoverAxis } from "./CrossoverAxis";
 import { Format, ALL_PARAMS, activeBandIds, type ParamId } from "../params";
 import {
   LocalParamSource,
@@ -32,10 +33,12 @@ function formatByUnit(unit: string, v: number): string {
 /**
  * The multiband compressor's control panel.
  *
- * A single block in the channel strip. Renders the global controls (bands,
- * crossover frequencies, output gain, dry/wet), one per-band strip (threshold /
- * ratio / attack / release / makeup plus bypass / solo) per active band, and a
- * per-band gain-reduction meter region.
+ * A single block in the channel strip. Assembles the reusable panel sections —
+ * the global controls (`bands`, crossover frequencies, output gain, dry/wet),
+ * the `CrossoverAxis` (draggable, keyboard-controlled log crossover markers),
+ * one `BandStrip` per active band (threshold / ratio / attack / release /
+ * makeup plus bypass / solo), and the per-band gain-reduction (`GR`) meter
+ * region — into one consistent layout.
  *
  * Binding: every control reads from a `ParamSource` and commits through
  * `setValue` — the same seam every other editor uses via `setParam`. With no
@@ -43,6 +46,22 @@ function formatByUnit(unit: string, v: number): string {
  * (in-memory stubs), so it renders and can be tested headless. Connecting the
  * engine is a one-line swap: pass an `EngineParamSource` that reads the rig
  * snapshot and writes the `setParam` command.
+ *
+ * Engine binding (how to connect real parameters & meter values):
+ *   * Parameters: the panel resolves every value from the block's `params`
+ *     map (schema defaults fill gaps until the engine lands) and commits through
+ *     `setValue` → `source.setValue` → `setParam(channel, block, id, v)`.
+ *     The engine card (`t_*_eng_1`) mirrors the schema (`docs/design/multiband-compressor.md
+ *     §3/§4`) so the same `ParamId`s are used on both sides; no engine, the
+ *     stub renders defaults.
+ *   * Meters: `useMultibandMetersSource` returns an `EngineMetersSource` that
+ *     listens to the `event: meters` broadcast on the bridge and applies the
+ *     extended `Meters` payload (`{ in, out, cpu, xruns, bands: [{ band,
+ *     gr_db, out_db }] }`, see `docs/design/multiband-compressor.md §7`). When
+ *     no engine is present it falls back to the `LocalMetersSource` stub
+ *     (`bands` empty → placeholder note). `MultibandMeter` renders the dB
+ *     peak-hold scale; `grDbToPercent` (`meter.ts`) maps the raw dB to a
+ *     0–100% fill.
  */
 export function MultibandCompressorEditor({
   channel,
@@ -71,6 +90,13 @@ export function MultibandCompressorEditor({
   const { values, setValue } = useMultibandParams(source, block);
 
   const g = (id: ParamId): number => values[id];
+
+  // Per-band accent HSL (hue 152°) matched to the CrossoverAxis region
+  // shading; only the lightness varies per band.
+  const bandColor = (band: number): string => {
+    const lightness = 46 + Math.min(band - 1, 3) * 4;
+    return `hsl(152 55% ${lightness}%)`;
+  };
 
   return (
     <div class="multiband-editor flex flex-col w-full min-w-0 gap-3" data-channel={channel}>
@@ -113,39 +139,21 @@ export function MultibandCompressorEditor({
         </div>
       </div>
 
-      {/* Crossover axis: a log-scale axis with the band markers. */}
-      <div class="crossover-axis">
-        <div class="crossover-track relative" style={{ height: 28, padding: "0 2px", overflow: "hidden" }}>
-          {(["crossover_1", "crossover_2", "crossover_3"] as const).map((id) => (
-            <Marker key={id} value={g(id)} label={`${id}: ${Format.hz(g(id))}`} />
-          ))}
-        </div>
-        <div class="crossover-controls editor-controls grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4 min-w-0 w-full">
-          <ParamKnob
-            id="crossover_1"
-            label="Crossover 1"
-            value={g("crossover_1")}
-            onChange={(v) => setValue("crossover_1", v)}
-          />
-          <ParamKnob
-            id="crossover_2"
-            label="Crossover 2"
-            value={g("crossover_2")}
-            onChange={(v) => setValue("crossover_2", v)}
-          />
-          <ParamKnob
-            id="crossover_3"
-            label="Crossover 3"
-            value={g("crossover_3")}
-            onChange={(v) => setValue("crossover_3", v)}
-          />
-        </div>
-      </div>
+      {/* Crossover axis: a log-scale axis with the band markers (drag or
+          keyboard). Bound to the engine's `crossover_1..N` params via
+          `setParam` — the engine stays the source of truth. */}
+      <CrossoverAxis channel={channel} block={block.id} />
 
       {/* Per-band parameter strips. */}
       <div class="bands">
         {activeBands.map((band) => (
-          <BandStrip key={band} band={band} values={values} onParamChange={setValue} />
+          <BandStrip
+            key={band}
+            band={band}
+            values={values}
+            onParamChange={setValue}
+            bandColor={bandColor(band)}
+          />
         ))}
       </div>
 
@@ -224,24 +232,6 @@ function ParamKnob({
         format={(v) => formatByUnit(p.unit, v)}
         onChange={onChange}
       />
-    </div>
-  );
-}
-
-/** A marker on the crossover axis: positioned along a log scale at `value`,
- *  with a label showing the frequency. */
-function Marker({ value, label }: { value: number; label: string }) {
-  // log position of `value` (Hz) in [0, 240] px on a log axis 20 Hz -> 20 kHz.
-  const logPos = (v: number): number => 240 * Math.log(v / 20) / Math.log(20000 / 20);
-  return (
-    <div
-      class="crossover-marker absolute flex flex-col items-center"
-      style={{ left: `${logPos(value)}px`, top: 0, bottom: 0 }}
-    >
-      <span class="crossover-marker-tick w-1.5 h-full min-w-[2px] bg-amber" />
-      <span class="crossover-marker-label text-[9px] font-mono text-amber-ink">
-        {label}
-      </span>
     </div>
   );
 }

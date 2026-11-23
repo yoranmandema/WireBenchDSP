@@ -117,22 +117,30 @@ function BandToggle({
 }
 
 /**
- * One band's control strip: threshold / ratio / attack / release / makeup plus
- * bypass and solo toggles. Rendered once per active band of the multiband
- * compressor panel.
- *
- * All controls bind to the band's parameters through `values` + `onParamChange`,
- * so the strip is driven by a `ParamSource` (see `hooks/useParams.ts`) and needs
- * no direct knowledge of the engine.
- */
+ /** One band's control strip: threshold / ratio / attack / release / makeup plus
+  *  bypass and solo toggles. Rendered once per active band of the multiband
+  *  compressor panel.
+  *
+  * The `bandColor` (an HSL string) is the per-band accent: it colors the header
+  * underline, the toggle chips and the knob-grid background so each band reads
+  * as its own region on the crossover axis. The tone (hue 152°) matches the
+  * CrossoverAxis band-region shading; only the lightness varies per band.
+  *
+  * All controls bind to the band's parameters through `values` + `onParamChange`,
+  * so the strip is driven by a `ParamSource` (see `hooks/useParams.ts`) and needs
+  * no direct knowledge of the engine.
+  */
 export function BandStrip({
   band,
   values,
   onParamChange,
+  bandColor,
 }: {
   band: number;
   values: Readonly<Record<ParamId, number>>;
   onParamChange: (id: ParamId, v: number) => void;
+  /** Per-band accent HSL (hue 152°), used to color-code the strip. */
+  bandColor: string;
 }) {
   const header = (
     <div class="flex items-center justify-between mb-1">
@@ -146,10 +154,13 @@ export function BandStrip({
   );
 
   return (
-    <div class="band-strip editor-controls flex flex-col w-full min-w-0 gap-3">
+    <div
+      class="band-strip editor-controls flex flex-col w-full min-w-0 gap-3"
+      style={{background: `${bandColor}12`, borderTop: `1px solid ${bandColor}33`}}
+    >
       {header}
       {/* Parameter knobs: wrap into a grid on the available width. */}
-      <div class="knob-grid grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4">
+      <div class="knob-grid grid grid-cols-[repeat(auto-fit,minmax(var(--ui-ctrl),1fr))] content-center justify-center gap-x-6 gap-y-4" style={{background: `${bandColor}0d`}}>
         {BAND_KEYS.slice(0, 5).map((key) => (
           <BandParamKnob
             band={band}
